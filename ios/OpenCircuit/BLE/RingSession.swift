@@ -1130,7 +1130,17 @@ final class RingSession: NSObject {
                 // User-measure budget (auto path: userMeasureDeadline is nil). Re-read each
                 // iteration so a re-arm (rearmUserMeasure) extends it (#65).
                 if let deadline = self.userMeasureDeadline, Date() >= deadline {
-                    let locked = self.liveMode == .hr ? self.liveHR != nil : self.liveSpO2 != nil
+                    // SETTLED, matching what the UI shows and what stopLiveMonitoring persists.
+                    // Reading `liveHR` here would call a 3-frame read "locked": no failure banner,
+                    // nothing displayed (the row needs a settled window), nothing persisted — the
+                    // user just watches "measuring…" revert to the old stored value with no reason
+                    // given. On Gen 2 Air that is not hypothetical: its HR byte is out of band
+                    // 0.4-6.7 % of the time against 0.0-0.5 % on Gen 2, so it is the ring most
+                    // likely to under-fill the window. 90 s at a 2 s poll is ~45 frames for a
+                    // 5-frame window, so a settled read that fails here genuinely had no reading.
+                    let locked = self.liveMode == .hr
+                        ? LiveHR.settled(self.liveHRTrend) != nil
+                        : self.liveSpO2 != nil
                     if !locked {
                         // Timed out with NO lock — surface actionable guidance for the banner.
                         self.userMeasureFailed = true
