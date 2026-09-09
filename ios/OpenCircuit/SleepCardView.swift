@@ -633,9 +633,9 @@ struct SleepCardView: View {
             // Only meaningful on a CONTIGUOUS night: if the wall-clock in-bed span far exceeds the
             // summed in-bed there are gaps, so efficiency is an artifact rather than stillness.
             let contiguous: Bool = {
-                guard let s = night.inBedStart, let e = night.inBedEnd, night.summary.inBed > 0
-                else { return true }
-                return e.timeIntervalSince(s) <= night.summary.inBed * 1.15
+                guard let s = night.inBedStart, let e = night.inBedEnd else { return true }
+                return SleepWindowCaption.isContiguous(span: e.timeIntervalSince(s),
+                                                       measuredInBed: night.summary.inBed)
             }()
             let truncated = isLikelyTruncated(night)
             let rows = SleepConfidence.hints(assessment, clock: Self.clock).filter { hint in
@@ -1512,18 +1512,18 @@ struct SleepCardView: View {
     /// unknown. Requires a real onset/wake (NOT a fallback to the in-bed window) — labeling the
     /// whole bedtime "Asleep" would re-assert the very over-count this change removes, so a legacy
     /// stored night (no onset recorded) simply omits the caption.
+    ///
+    /// On a STITCHED night the caption switches to "Asleep between X and Y · nothing was recorded
+    /// across part of that N window" — `SleepWindowCaption` owns both renderings and the contiguity
+    /// test they share with `inBedText` and `coverageHints`. An en-dash between two clock times
+    /// asserts a continuous block, which on a night carrying a multi-hour hole printed an 11 h span
+    /// beside a 4 h total (tester report, build 52).
     private func sleepWindowText(_ night: Night) -> String? {
-        guard let onset = night.onset, let wake = night.wake, wake > onset else { return nil }
-        var parts = ["Asleep \(Self.clock(onset))–\(Self.clock(wake))"]
-        // Sleep latency = time in bed before onset. Shown only when plausibly measured (a positive
-        // gap under ~4 h) so an unknown/legacy window doesn't print a bogus value.
-        if let bed = night.inBedStart {
-            let latency = onset.timeIntervalSince(bed)
-            if latency >= 60, latency < 4 * 3600 {
-                parts.append("\(Int((latency / 60).rounded()))m to fall asleep")
-            }
-        }
-        return parts.joined(separator: " · ")
+        SleepWindowCaption.line(onset: night.onset,
+                                wake: night.wake,
+                                inBedStart: night.inBedStart,
+                                measuredInBed: night.summary.inBed,
+                                clock: Self.clock)
     }
 
     private static func clock(_ d: Date) -> String {
@@ -1538,7 +1538,8 @@ struct SleepCardView: View {
         var text = "\(minutes / 60)h \(minutes % 60)m in bed"
         if let start = night.inBedStart, let end = night.inBedEnd, end > start,
            night.summary.inBed > 0,
-           end.timeIntervalSince(start) <= night.summary.inBed * 1.15 {
+           SleepWindowCaption.isContiguous(span: end.timeIntervalSince(start),
+                                           measuredInBed: night.summary.inBed) {
             text += " · \(Self.clock(start))–\(Self.clock(end))"
         }
         return text
