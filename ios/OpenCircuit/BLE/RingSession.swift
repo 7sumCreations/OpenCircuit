@@ -2104,8 +2104,25 @@ final class RingSession: NSObject {
         // the gate to a count, which measurement showed is nearly a no-op.
         let tempSamples = ((try? store.samples(kind: .temperature, from: start, to: end)) ?? [])
             .map { TemperatureSample(time: $0.start, celsius: $0.value) }
-        let nightlyTemp = SkinTempBaseline.nightlyMean(samples: tempSamples, in: window)
-        if let nightlyTemp { extras.skinTempC = nightlyTemp }
+        // Take the VERDICT, not just the number: a coverage rejection must be able to clear a stale
+        // stored mean, and a `Double?` cannot say whether nil means "didn't look" or "looked and
+        // rejected" (see `SkinTempBaseline.NightlyVerdict` and `LocalStore.applyExtras`).
+        var nightlyTemp: Double?
+        switch SkinTempBaseline.nightlyVerdict(samples: tempSamples, in: window) {
+        case let .published(mean):
+            nightlyTemp = mean
+            extras.skinTempC = mean
+        case .notMeasured:
+            nightlyTemp = nil
+        case let .rejectedCoverage(cov):
+            nightlyTemp = nil
+            extras.skinTempWithheld = true
+            // The IN-WINDOW count — the one the verdict was computed on. `tempSamples` is already
+            // window-scoped by the fetch above so these agree today, but a log line whose only job is
+            // to explain a withhold must name the number the decision actually used.
+            let judged = tempSamples.filter { window.contains($0.time) }.count
+            ringLog.notice("skin-temp: night \(start.timeIntervalSince1970, privacy: .public) withheld — \(judged, privacy: .public) readings covered \(Int((cov * 100).rounded()), privacy: .public)% of the window (floor \(Int((SkinTempBaseline.minNightlyCoverage * 100).rounded()), privacy: .public)%)")
+        }
 
         // Rolling baseline from PRIOR nights (exclude tonight's day), for the composite temp factor.
         // Keyed with `SleepNightKey` because the comparison below is against STORED ROW KEYS —

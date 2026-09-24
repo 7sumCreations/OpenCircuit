@@ -94,9 +94,47 @@ final class SkinTempBaselineTests: XCTestCase {
         XCTAssertEqual(SkinTempBaseline.coverage(samples: samples, in: w), 0.2, accuracy: 1e-9)
         XCTAssertNil(SkinTempBaseline.nightlyMean(samples: samples, in: w,
                      minCoverage: SkinTempBaseline.candidateNightlyCoverage))
-        // …and with the SHIPPED default (gate off) the same night is published — the deliberate
-        // ship-state, pinned so turning the gate on is a visible change rather than a silent one.
-        XCTAssertNotNil(SkinTempBaseline.nightlyMean(samples: samples, in: w))
+        // …and with the SHIPPED default the same night is now WITHHELD too. This assertion is the
+        // tripwire the old comment promised: it used to assert `NotNil` to pin the deliberate
+        // gate-off ship-state, so turning the gate on had to be a visible change rather than a
+        // silent one. It was turned on deliberately on 2026-09-24 against a 39-night coverage
+        // distribution (see `SkinTempBaseline.minNightlyCoverage`), and this is that flip.
+        XCTAssertNil(SkinTempBaseline.nightlyMean(samples: samples, in: w))
+        // The literal, not `candidateNightlyCoverage` — asserting one constant equals the other is a
+        // tautology given the declaration, and would not catch an edit to the value itself.
+        XCTAssertEqual(SkinTempBaseline.minNightlyCoverage, 0.6, accuracy: 1e-9,
+                       "the coverage gate ships ON at 0.6; changing it needs a new measurement")
+    }
+
+    /// 🟢 THE GEN 3 NIGHT THAT FORCED THE GATE ON (tester export, FR05.011, 2026-09-24).
+    ///
+    /// Shape measured from his export, reproduced here as TIMESTAMPS ONLY — which is all `coverage`
+    /// reads, and it keeps a real person's temperature readings out of the repo (CLAUDE.md: commit
+    /// decoded findings, never raw captures). A 12 h 19 m staged window carrying 31 samples in 2 of
+    /// its 13 hour buckets: 24 of them inside ONE 28-minute stretch, the other 7 in a single later
+    /// stretch after he had got up but before `inBedEnd`.
+    ///
+    /// The count floor waves this through — 31 is over `minNightlySamples` — which is precisely why
+    /// the count floor is not the real gate. Unweighted, those samples published **31.39 °C** against
+    /// 33.87 °C for its readings at or above 31 °C, and he reported it as a Gen 3 calibration fault.
+    func testTheClusteredGen3NightIsWithheld() {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let w = DateInterval(start: start, duration: 12 * 3600 + 19 * 60 + 3)
+        // 24 samples across 28 min, starting 2 h 19 m in (one hour bucket).
+        let warm = stride(from: 0.0, to: 24 * 73.0, by: 73).map {
+            TemperatureSample(time: start.addingTimeInterval(2 * 3600 + 19 * 60 + $0), celsius: 34.2)
+        }
+        // 7 samples across 8 min, starting 12 h 09 m in (one much later bucket).
+        let ambient = stride(from: 0.0, to: 7 * 70.0, by: 70).map {
+            TemperatureSample(time: start.addingTimeInterval(12 * 3600 + 9 * 60 + $0), celsius: 28.1)
+        }
+        let samples = warm + ambient
+        XCTAssertEqual(samples.count, 31)
+        XCTAssertGreaterThan(samples.count, SkinTempBaseline.minNightlySamples,
+                             "the count floor alone would publish this night")
+        XCTAssertEqual(SkinTempBaseline.coverage(samples: samples, in: w), 2.0 / 13.0, accuracy: 1e-9)
+        XCTAssertNil(SkinTempBaseline.nightlyMean(samples: samples, in: w),
+                     "a night measured in two short corners must not publish a nightly mean")
     }
 
     /// A night with gaps but readings spread across most of it is still comparable.
@@ -212,4 +250,106 @@ final class SkinTempBaselineTests: XCTestCase {
         XCTAssertNil(thin.offsetC)
         XCTAssertNil(thin.band)
     }
+
+    // MARK: The verdict — "didn't look" vs "looked and rejected"
+
+    /// The distinction `nightlyMean`'s `Double?` cannot carry, and which `LocalStore.applyExtras`
+    /// needs in order to clear a stale stored mean instead of preserving it forever.
+    func testVerdictSeparatesNotMeasuredFromRejected() {
+        let w = night()
+        // Too few readings to judge at all -> preserve whatever is stored.
+        let thin = stride(from: 0.0, to: 5 * 600.0, by: 600).map {
+            TemperatureSample(time: w.start.addingTimeInterval($0), celsius: 34.0)
+        }
+        XCTAssertLessThan(thin.count, SkinTempBaseline.minNightlySamples)
+        XCTAssertEqual(SkinTempBaseline.nightlyVerdict(samples: thin, in: w), .notMeasured)
+
+        // Enough readings to judge, all in one corner -> a real verdict, so the store must CLEAR.
+        let clustered = stride(from: 0.0, to: 2 * 3600, by: 68).map {
+            TemperatureSample(time: w.start.addingTimeInterval($0), celsius: 34.0)
+        }
+        XCTAssertGreaterThanOrEqual(clustered.count, SkinTempBaseline.minNightlySamples)
+        guard case let .rejectedCoverage(cov) =
+                SkinTempBaseline.nightlyVerdict(samples: clustered, in: w) else {
+            return XCTFail("a well-sampled but clustered night is a rejection, not an absence")
+        }
+        XCTAssertEqual(cov, 0.2, accuracy: 1e-9)
+
+        // A good night publishes.
+        let good = stride(from: 0.0, to: w.duration, by: 600).map {
+            TemperatureSample(time: w.start.addingTimeInterval($0), celsius: 35.0)
+        }
+        XCTAssertEqual(SkinTempBaseline.nightlyVerdict(samples: good, in: w), .published(35.0))
+    }
+
+    /// The Gen 3 night is a REJECTION, not an absence — this is what lets the stale 31.39 °C be
+    /// cleared on a re-stage rather than kept because "nothing was computed".
+    func testTheClusteredGen3NightIsRejectedNotMerelyUncomputed() {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let w = DateInterval(start: start, duration: 12 * 3600 + 19 * 60 + 3)
+        let warm = stride(from: 0.0, to: 24 * 73.0, by: 73).map {
+            TemperatureSample(time: start.addingTimeInterval(2 * 3600 + 19 * 60 + $0), celsius: 34.2)
+        }
+        let ambient = stride(from: 0.0, to: 7 * 70.0, by: 70).map {
+            TemperatureSample(time: start.addingTimeInterval(12 * 3600 + 9 * 60 + $0), celsius: 28.1)
+        }
+        guard case let .rejectedCoverage(cov) =
+                SkinTempBaseline.nightlyVerdict(samples: warm + ambient, in: w) else {
+            return XCTFail("31 readings is plenty to judge this night by — it must REJECT, not abstain")
+        }
+        XCTAssertEqual(cov, 2.0 / 13.0, accuracy: 1e-9)
+    }
+
+    /// `nightlyMean` is `nightlyVerdict` keeping only the published case; the two must never disagree
+    /// on whether a night publishes, since one delegates to the other.
+    func testVerdictAndMeanAgreeOnEveryShape() {
+        let w = night()
+        let shapes: [[TemperatureSample]] = [
+            [],
+            stride(from: 0.0, to: 5 * 600.0, by: 600).map { TemperatureSample(time: w.start.addingTimeInterval($0), celsius: 34) },
+            stride(from: 0.0, to: 2 * 3600, by: 68).map { TemperatureSample(time: w.start.addingTimeInterval($0), celsius: 34) },
+            stride(from: 0.0, to: w.duration, by: 600).map { TemperatureSample(time: w.start.addingTimeInterval($0), celsius: 35) },
+            stride(from: 0.0, to: w.duration, by: 68).map { TemperatureSample(time: w.start.addingTimeInterval($0), celsius: 35.5) },
+        ]
+        // Also exercise the documented escape hatches, since the delegation reordered the two checks
+        // (count now runs before coverage) and the kill-switch is the one path that skips coverage.
+        let knobs: [(minSamples: Int, minCoverage: Double)] = [
+            (SkinTempBaseline.minNightlySamples, SkinTempBaseline.minNightlyCoverage),
+            (SkinTempBaseline.minNightlySamples, 0),   // coverage kill-switch
+            (1, SkinTempBaseline.minNightlyCoverage),  // count kill-switch
+            (1, 0),                                    // both off
+            (500, SkinTempBaseline.minNightlyCoverage),
+        ]
+        for samples in shapes {
+          for knob in knobs {
+            let mean = SkinTempBaseline.nightlyMean(samples: samples, in: w,
+                                                    minSamples: knob.minSamples,
+                                                    minCoverage: knob.minCoverage)
+            switch SkinTempBaseline.nightlyVerdict(samples: samples, in: w,
+                                                   minSamples: knob.minSamples,
+                                                   minCoverage: knob.minCoverage) {
+            case let .published(v):
+                XCTAssertEqual(mean, v, "verdict published \(v) but nightlyMean said \(String(describing: mean))")
+            case .notMeasured, .rejectedCoverage:
+                XCTAssertNil(mean, "verdict withheld but nightlyMean published \(String(describing: mean))")
+            }
+          }
+        }
+    }
+
+    /// 🟢 THE PROPERTY THAT MAKES THE CLEARING PATH SAFE, pinned because it rests on the ORDER of the
+    /// two checks. A pass with no in-window readings must be `.notMeasured`, never
+    /// `.rejectedCoverage` — a night with zero readings has coverage 0.0 and would fail a
+    /// coverage-first gate, so if the checks were reversed every empty re-stage would clear a stored
+    /// skin temperature. Count-before-coverage is load-bearing, not cosmetic.
+    func testAnEmptyPassAbstainsRatherThanRejecting() {
+        let w = night()
+        XCTAssertEqual(SkinTempBaseline.nightlyVerdict(samples: [], in: w), .notMeasured)
+        // Readings exist but all OUTSIDE the window — same requirement, since they are filtered first.
+        let outside = [TemperatureSample(time: w.end.addingTimeInterval(3600), celsius: 35)]
+        XCTAssertEqual(SkinTempBaseline.nightlyVerdict(samples: outside, in: w), .notMeasured)
+        XCTAssertEqual(SkinTempBaseline.coverage(samples: [], in: w), 0.0, accuracy: 1e-9,
+                       "an empty night's coverage IS 0 — which is why the count must be checked first")
+    }
+
 }

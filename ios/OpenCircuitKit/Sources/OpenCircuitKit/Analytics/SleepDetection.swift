@@ -86,11 +86,45 @@ public struct ActivityPeriod: Equatable, Sendable {
     /// recovers the captured night's in-bed window). Baseline `01` = still.
     static let motionStillThreshold: Float = 2
 
-    /// Minimum skin temperature for the ring to count as WORN (🟡 heuristic, NOT yet
-    /// ground-truthed — validate against a known charging-night capture). A worn Gen-2
-    /// reads ~30–34 °C; off-wrist / on the charger it falls toward room ambient (~20–24 °C).
-    /// 28 °C is a conservative midpoint. Used ONLY to exclude cold "still" blocks from
-    /// sleep (#41), never to add sleep — so a miss costs at worst an unfiltered charger block.
+    /// Minimum skin temperature for the ring to count as WORN.
+    ///
+    /// 🟢 GROUND-TRUTHED 2026-09-24 against the labelled charger A/B captures
+    /// (`captures/charger66b_20260619`), using descriptor `[2] == 0x04` — the confirmed on-charger
+    /// byte (PROTOCOL.md §5.4) — as the label. Both distributions, in °C:
+    ///
+    ///     WORN    ([2] = 0x02/0x03, n = 856)   p05 28.4  p25 32.1  median 33.5  p75 34.2  max 35.8
+    ///     CHARGER ([2] = 0x04,      n = 70)    p05 26.0  p25 26.3  median 27.4  p75 31.1  max 33.7
+    ///
+    /// (One computation over both 0.1 °C channels `[6:8]`/`[8:10]`, `0x02` and `0x03` merged as worn.)
+    ///
+    /// ⚠️ THIS CORRECTS THE TWO CLAIMS THIS COMMENT USED TO MAKE.
+    ///
+    ///  1. "Off-wrist falls toward room ambient (~20–24 °C), so 28 is a conservative midpoint" is
+    ///     WRONG. Off-finger does not reach ambient — the ring holds body heat and decays slowly,
+    ///     so its p75 is 31.1 °C and its max is 33.7 °C, deep inside the worn band. 28 °C is not a
+    ///     midpoint between two separated populations; it sits at the WORN p05. A Gen 3 tester's
+    ///     export shows the consequence directly: his off-finger run reads a flat 28.00–28.30 °C —
+    ///     and its floor is exactly 28.00, with nothing at all beneath it, because THIS GATE
+    ///     censored everything below it.
+    ///  2. "Used ONLY to exclude cold still blocks from sleep (#41) … a miss costs at worst an
+    ///     unfiltered charger block" is STALE. The same constant also gates what reaches the
+    ///     NIGHTLY temperature path and Apple Health (`RingSession.persist`, "#41's guarantee"),
+    ///     so a miss can also put an off-finger reading into a nightly skin-temperature mean and
+    ///     into HealthKit. The blast radius is larger than this line claimed.
+    ///
+    /// THE VALUE STAYS 28.0 ANYWAY, and that is a measured decision, not inertia. The two
+    /// distributions OVERLAP — a just-donned ring warming up and a just-removed ring cooling down
+    /// both traverse the same band — so no instantaneous threshold separates them. Raising it to
+    /// 30 °C discards 12.7 % of LABELLED-WORN readings while still admitting 31.4 % of charger ones;
+    /// 31 °C discards 13.9 % and still admits 27.1 %. Both are strictly worse on both counts, and the
+    /// worn readings they would throw away include genuinely cold fingers.
+    ///
+    /// ⚠️ SO THE CONTAMINATION THIS CONSTANT CANNOT CATCH IS ONLY HALF-HANDLED. The NIGHTLY-MEAN half
+    /// is handled downstream by `SkinTempBaseline.minNightlyCoverage`, which withholds a night whose
+    /// samples are too clustered to represent it (see its 39-night measurement). The HEALTHKIT half is
+    /// NOT handled anywhere: this constant is the only gate on the per-sample write path, so an
+    /// off-finger reading in the 28–31 °C band still reaches Apple Health as `.bodyTemperature`. That
+    /// gap is open and wants its own ticket — do not read the downstream gate as closing it.
     public static let wornMinTemperatureC: Double = 28.0
 
     /// HR gate (awake-but-still detection). A still `.sleep` block whose MEDIAN heart rate exceeds
