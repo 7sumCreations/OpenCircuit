@@ -95,37 +95,92 @@ public enum SkinTempBaseline {
     /// built the same uneven way manufactures night-to-night swings out of connection luck, which is
     /// exactly the "inconsistent readings" a tester reported (2026-08-12).
     ///
-    /// ⚠️ SHIPPED AT 0 — THE COVERAGE GATE IS OFF. The machinery and its tests stay; only the
-    /// default is neutered, so enabling it later is a one-line change plus the measurement below.
+    /// ⚠️ SHIPPED AT `candidateNightlyCoverage` (0.6) — THE GATE IS ON since 2026-09-24, on the
+    /// measurement this comment used to ask for. It previously shipped at 0 (off) with the machinery
+    /// and tests intact, because 0.6 rested on only two data points — one real well-connected night
+    /// (1.00) and one hypothetical two-hours-of-eight (0.25) — and sat in the gap between them.
     ///
-    /// 0.6 admits the well-connected night measured above (11 of 11 buckets = 1.00) and rejects the
-    /// two-hours-of-eight case (0.25) — but those are the ONLY two data points behind it, one real
-    /// and one hypothetical, and 0.6 sits in the unmeasured gap between them. Release review found
-    /// two reasons that is not good enough to ship:
+    /// ══ THE MEASUREMENT ══
     ///
-    ///  1. CASCADE. Withholding the nightly mean sets `skinTempC = 0`, which every downstream
-    ///     consumer reads as "no temperature this night". Below `minBaselineNights` (3) surviving
-    ///     nights in the window there is no baseline at all — so no deviation is ever shown, the #85
-    ///     skin-temp/fever notification family goes permanently silent, and #183 loses its
-    ///     `skinTempDeviation` feature. The tester who motivated this already had 7 of 14 nights with
-    ///     no temperature; a gate tuned wrong could take her under the floor and turn a partially
-    ///     working feature into a dead one.
-    ///  2. THE DENOMINATOR IS THE WRONG WINDOW. Coverage is normalised over the STAGED in-bed span,
-    ///     but temperature is only ever persisted inside the RECORDING window (the habitual
-    ///     schedule, roughly median onset −1 h to median wake +1.5 h). A night whose bedtime is
-    ///     hours off the habit therefore scores low no matter how well the ring was connected —
-    ///     review pinned a perfectly-connected night at 0.55 — and, in the other direction, a
-    ///     truncated staged window shrinks numerator and denominator together and scores 1.00 while
-    ///     having measured one corner of the curve. Both are exactly the failure this gate exists to
-    ///     prevent.
+    /// Reproducible, not hand arithmetic: `desktop/skin_temp_coverage_measure.py` reimplements
+    /// `coverage` byte-faithfully and prints everything below. Run it against a set of exports to
+    /// re-derive or refute any figure here. Basis: **39 distinct nights carrying in-window
+    /// temperature samples, across 6 rings** — Gen 2 FR02.018 (4 nights, 1 ring), Gen 2 Air FR04.009
+    /// (13 nights, 2 rings), Gen 3 FR05.011 (1 night), and 21 nights on 3 rings whose exports predate
+    /// schema 3 and so record no model or firmware. Rings are attributed from
+    /// `historySyncEvidence[].ringID`, which the export's own schema note calls "the only per-capture
+    /// ring attribution in this file" (`meta.ring*` names merely the last ring the app connected to);
+    /// one of the unlabelled rings is the same `40CFFE2E` that a schema-3 export identifies as a Gen 2
+    /// Air FR04.009. A further **5 nights held no in-window readings at all** and are excluded: they
+    /// are `.notMeasured` before and after, so they cannot move the delta — 44 nights in total.
     ///
-    /// To enable: run `coverage` over ~14 real stored nights per tester to get the actual
-    /// distribution, pick the threshold from it, and normalise over the intersection of the staged
-    /// window and the recording window rather than the staged window alone.
-    public static let minNightlyCoverage = 0.0
+    /// ⚠️ This is a MULTI-TESTER, MULTI-GENERATION pool, not one person's clean history, and the Gen 2
+    /// Air in it is the generation with the 16/32/88 % hole shares. Note what the per-ring
+    /// decomposition shows: the ring contributing 3 of the 4 sub-gap nights ALSO contributes 4 clean
+    /// published ones, so the failure mode is intermittent WITHIN a ring rather than a bad unit.
+    ///
+    /// The distribution is BIMODAL WITH AN EMPTY GAP:
+    ///
+    ///     0.1111  0.1429  0.1429  0.1538 │ ←—— gap ——→ │ 0.7500  0.8182  0.8462 … 1.0000
+    ///     └──── 4 nights, n = 4…31 ──────┘             └──── 35 nights, n = 53…440 ─────┘
+    ///
+    /// NOTHING lands between 0.1538 and 0.7500. 0.6 is therefore not a tuned number — it is any
+    /// point in an empty interval separating two populations that do not touch.
+    ///
+    /// ══ THE MARGINAL EFFECT: ONE NIGHT IN 39 (2.6 %) ══
+    ///
+    /// The honest cost of turning this on, and much smaller than the raw count of sub-gap nights
+    /// suggests: of the 4 nights below 0.6, **3 were ALREADY withheld** by `minNightlySamples` (they
+    /// hold 4, 6 and 7 readings). This gate newly withholds **exactly one** night in the whole pool.
+    ///
+    /// THAT NIGHT (Gen 3 tester, FR05.011, 2026-09-24): 31 samples over a 12 h 19 m staged window,
+    /// 2 of its 13 hour buckets, coverage 0.1538. They arrive as two clusters — 24 readings inside one
+    /// 28-minute stretch, whose second half is a 10.7-minute monotone decay from 34.50 °C to 28.55 °C
+    /// (the ring coming off the finger), and 7 readings ten hours later in one 8-minute stretch at a
+    /// flat 28.10–28.25 °C, after the wearer had got up but before `inBedEnd`. The unweighted mean
+    /// published **31.39 °C**; that night's readings at or above 31 °C alone average 33.87 °C. The
+    /// tester reported it as a Gen 3 calibration fault, comparing it against 34.75–34.81 °C on his
+    /// own earlier Gen 2 nights (his figure, from data we do not hold — treat it as his report, not
+    /// as a measurement of ours). It is not a calibration fault: a scaling error shifts every sample
+    /// uniformly and cannot produce a decay curve.
+    ///
+    /// ══ THE TWO OBJECTIONS THAT HELD THIS AT 0, ANSWERED ══
+    ///
+    ///  1. CASCADE — ANSWERED, and it is the per-RING answer that matters. Withholding sets
+    ///     `skinTempC = 0`, which every consumer reads as "no temperature this night"; below
+    ///     `minBaselineNights` (3) surviving nights there is no baseline at all, #85 goes silent and
+    ///     #183 loses `skinTempDeviation`. The baseline is read from ONE phone's store, so a pooled
+    ///     total is the wrong unit. MEASURED PER RING, surviving nights before → after this change:
+    ///     `9B3084A4` 17→17, `B40741BB` 9→9, `6F627CA0` 4→4, `40CFFE2E` 4→4 (of 7 nights; the other 3
+    ///     were already withheld by the count floor), `4580443C` 1→1, and the Gen 3 `672AC297` 1→0.
+    ///     **Every delta is 0 except the Gen 3 ring, which held a single night and was therefore
+    ///     already below the floor of 3 before this change.** Two rings sit below the floor either
+    ///     way, both because they hold 1 night. The gate creates no new cascade anywhere in the pool.
+    ///  2. THE DENOMINATOR IS THE WRONG WINDOW — STILL TRUE, AND IT CANNOT BITE HERE. Coverage is
+    ///     normalised over the STAGED in-bed span while temperature is only persisted inside the
+    ///     RECORDING window, so a night far off the habitual schedule scores low however well it
+    ///     connected (review once pinned a perfectly-connected night at 0.55). The distribution above
+    ///     was measured with that SAME pessimistic denominator and still left the gap empty.
+    ///     Normalising over the intersection can only SHRINK the denominator and RAISE coverage, so
+    ///     it can only un-withhold a night, never withhold a new one. It remains the right
+    ///     refinement; it is not a precondition, and no night in 39 lands near 0.6 from either side
+    ///     (worst passing 0.7500).
+    ///
+    /// ⚠️ WHAT THIS DOES **NOT** FIX. Two limits, both real:
+    ///   • A withheld night does not clear an ALREADY-STORED value on its own — see
+    ///     `LocalStore.applyExtras`, which needs `SleepNightExtras.skinTempWithheld` to tell
+    ///     "not computed" from "computed and rejected". The reporting tester's stored 31.39 °C
+    ///     predates this change and will not self-correct.
+    ///   • This gate governs the NIGHTLY MEAN only (one production call site,
+    ///     `RingSession.computeSleepExtras`). It does nothing about per-sample HealthKit writes:
+    ///     off-finger readings in the 28–31 °C band still reach `.bodyTemperature`, because that
+    ///     path is gated by `ActivityPeriod.wornMinTemperatureC` (28 °C) instead. That half of the
+    ///     blast radius is OPEN.
+    public static let minNightlyCoverage = candidateNightlyCoverage
 
-    /// The value to enable once the measurement above exists. Referenced by the tests so the
-    /// intended behaviour stays pinned while the default is neutral.
+    /// The threshold itself, kept as its own name because the tests assert against it directly and
+    /// because the value and the DECISION to ship it are separate facts. `minNightlyCoverage` is now
+    /// this value; the two were distinct only while the gate was held off.
     public static let candidateNightlyCoverage = 0.6
 
     /// Fraction of `window`'s hour-long buckets holding ≥1 reading, in 0…1. Pure so the gate and any
@@ -150,6 +205,38 @@ public enum SkinTempBaseline {
         return celsius.reduce(0, +) / Double(celsius.count)
     }
 
+    /// Why a night's mean was or was not published — the distinction `nightlyMean`'s `nil` cannot
+    /// carry, and which the store needs in order to obey "gates only move one way".
+    ///
+    /// `LocalStore.applyExtras` keeps a previously stored `skinTempC` whenever the new pass computes
+    /// nothing, so that a quick daytime re-stage with no temperature coverage cannot wipe a good
+    /// night. That rule is right for `.notMeasured` and WRONG for `.rejectedCoverage`: without this
+    /// split, a night whose stored mean was computed from an unrepresentative window keeps it forever,
+    /// because every later, better-judged pass returns the same `nil` as "we didn't look".
+    public enum NightlyVerdict: Equatable, Sendable {
+        /// Enough readings, spread widely enough to represent the night.
+        case published(Double)
+        /// Too few readings to judge the night at all (`minSamples`). The caller must PRESERVE any
+        /// stored value — this is "we barely looked", not a verdict on the night.
+        case notMeasured
+        /// Enough readings to judge (≥ `minSamples`) but too clustered to represent the night
+        /// (`minCoverage`). Carries the coverage that failed. The caller must CLEAR any stored value:
+        /// this IS a verdict, and the stored number is the thing being rejected.
+        case rejectedCoverage(Double)
+    }
+
+    /// Classify a night's temperature readings without publishing a number — see `NightlyVerdict`.
+    /// `nightlyMean(samples:in:)` is this function keeping only the published case.
+    public static func nightlyVerdict(samples: [TemperatureSample], in window: DateInterval,
+                                     minSamples: Int = minNightlySamples,
+                                     minCoverage: Double = minNightlyCoverage) -> NightlyVerdict {
+        let inWindow = samples.filter { window.contains($0.time) }
+        guard inWindow.count >= max(1, minSamples) else { return .notMeasured }
+        let cov = coverage(samples: inWindow, in: window)
+        guard minCoverage <= 0 || cov >= minCoverage else { return .rejectedCoverage(cov) }
+        return .published(inWindow.map(\.celsius).reduce(0, +) / Double(inWindow.count))
+    }
+
     /// The night's mean, scoped to `[start, end]` (inclusive) and gated on COVERAGE as well as
     /// count. THIS is the overload production should use — the array-only one above cannot see the
     /// timestamps and therefore cannot tell a well-sampled night from a well-connected hour.
@@ -158,10 +245,14 @@ public enum SkinTempBaseline {
     public static func nightlyMean(samples: [TemperatureSample], in window: DateInterval,
                                    minSamples: Int = minNightlySamples,
                                    minCoverage: Double = minNightlyCoverage) -> Double? {
-        let inWindow = samples.filter { window.contains($0.time) }
-        guard minCoverage <= 0 || coverage(samples: inWindow, in: window) >= minCoverage
+        // One implementation: this is `nightlyVerdict` keeping only the published case. Both nil
+        // cases collapse here — `notMeasured` and `rejectedCoverage` are indistinguishable through
+        // a `Double?`, which is exactly why the store must call `nightlyVerdict` instead.
+        guard case let .published(mean) = nightlyVerdict(samples: samples, in: window,
+                                                        minSamples: minSamples,
+                                                        minCoverage: minCoverage)
         else { return nil }
-        return nightlyMean(inWindow.map(\.celsius), minSamples: minSamples)
+        return mean
     }
 
     /// Rolling baseline = mean of the most recent `windowNights` PRIOR nightly means. The

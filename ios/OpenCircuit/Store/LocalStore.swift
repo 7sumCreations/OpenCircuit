@@ -1449,6 +1449,12 @@ struct LocalStore {
     /// IS preserved across re-syncs since it's user-entered, not derived.
     struct SleepNightExtras {
         var skinTempC: Double = 0
+        /// Set when the night HAD enough temperature readings to judge but they were too clustered to
+        /// represent it (`SkinTempBaseline.NightlyVerdict.rejectedCoverage`). This is the difference
+        /// between "not computed" and "computed and REJECTED", and `applyExtras`'s keep-if-zero rule
+        /// needs it: without it a stored mean taken from an unrepresentative window survives forever,
+        /// because every later, better-judged pass looks identical to "we didn't look".
+        var skinTempWithheld: Bool = false
         var sleepScore: Int = 0
         var stressScore: Int = 0
         var hrByStage: [SleepStage: Int] = [:]
@@ -1849,7 +1855,30 @@ struct LocalStore {
     private func applyExtras(_ extras: SleepNightExtras, to row: StoredSleepSummary) {
         // 0 = "not computed this pass" — keep any previously stored value rather than wiping it
         // (a quick daytime live-read might re-stage the night with no temp/HRV coverage).
-        if extras.skinTempC > 0 { row.skinTempC = extras.skinTempC }
+        //
+        // ⚠️ EXCEPT when the night was judged and REJECTED. `skinTempWithheld` means there were
+        // enough readings to decide and they were too clustered to represent the night, so the stored
+        // number is the thing being rejected and keeping it would make the gate one-directional: a
+        // narrow stage can score full coverage and lock in an unrepresentative mean that no later,
+        // wider, correctly-withheld pass could ever replace. Clearing is the symmetric counterpart
+        // this gate needs. A thin-coverage pass (`.notMeasured`) still preserves, as above.
+        //
+        // ⚠️ WHY THIS CANNOT DESTROY A GOOD NIGHT — an invariant OUTSIDE this function, so state it
+        // here rather than leave the next reader to re-derive it. A less-informed pass never reaches
+        // `applyExtras` at all: `SleepSummaryMerge.shouldReplace` returns `.keptFullerStoredNight`
+        // (and `.keptManualEdit`) before it, so a thinner re-stage cannot clear a fuller stored mean.
+        // Two further independent guards: a NARROWER window scores HIGHER coverage, not lower (it
+        // drops buckets faster than it drops hit buckets), and `applySleepEdit` writes the edit
+        // columns directly and never routes through here, so a user edit can never clear a
+        // temperature. ⚠️ `shouldReplace` has already been relaxed once (the `sameCoverage`
+        // reclassification escape); if it is relaxed again, re-check THIS branch — a clustered
+        // fragment with ≥ `minNightlySamples` readings is exactly the shape that would wipe a good
+        // night if that guard stopped holding.
+        if extras.skinTempC > 0 {
+            row.skinTempC = extras.skinTempC
+        } else if extras.skinTempWithheld, row.skinTempC > 0 {
+            row.skinTempC = 0
+        }
         if extras.sleepScore > 0 { row.sleepScore = extras.sleepScore }
         if extras.stressScore > 0 { row.stressScore = extras.stressScore }
         if let v = extras.hrByStage[.asleepDeep] { row.hrDeep = v }
