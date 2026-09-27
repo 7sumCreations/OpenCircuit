@@ -90,15 +90,66 @@ final class RingEventLogTests: XCTestCase {
     func testLedgerKeepsOnlyActivityMarkersDedupesAndPrunes() throws {
         var ledger = RingActivityEventLedger()
         let now = utc("2026-09-27T15:30:00Z")
-        let events = try XCTUnwrap(RingEventLog.decode(walkFrame))
-        ledger.merge(events, now: now)
-        ledger.merge(events, now: now)
-        ledger.merge(try XCTUnwrap(RingEventLog.decode(eveningFrame)), now: now)
-        XCTAssertEqual(ledger.events.count, 6, "2 walk + 4 evening activity markers; 0x15 dropped; resend deduped")
-        ledger.merge([], now: now.addingTimeInterval(RingActivityEventLedger.retention - 60 * 60))
-        XCTAssertEqual(ledger.events.count, 2, "evening markers aged out, the walk's kept")
+        let walk = try XCTUnwrap(RingEventLog.decodeFrame(walkFrame))
+        ledger.merge(walk, ring: "A", now: now)
+        ledger.merge(walk, ring: "A", now: now)
+        ledger.merge(try XCTUnwrap(RingEventLog.decodeFrame(eveningFrame)), ring: "A", now: now)
+        XCTAssertEqual(ledger.events["A"]?.count, 6, "2 walk + 4 evening activity markers; 0x15 dropped; resend deduped")
+        XCTAssertEqual(ledger.sessions(now: now).count, 3)
+        ledger.merge(RingEventLog.Frame(hiddenCount: 0, events: []), ring: "A",
+                     now: now.addingTimeInterval(RingActivityEventLedger.retention - 60 * 60))
+        XCTAssertEqual(ledger.events["A"]?.count, 2, "evening markers aged out, the walk's kept")
         let blob = try JSONEncoder().encode(ledger)
         XCTAssertEqual(try JSONDecoder().decode(RingActivityEventLedger.self, from: blob), ledger)
+    }
+
+    // MARK: review findings (2026-09-27)
+
+    /// An OVERFLOWED log (§5.5.1): `[2]` counts entries not shown and the frame carries the OLDEST
+    /// 40. Seen on both corpus rings (e.g. `50 00 0f` + 40 entries, 243 B). The visible entries are
+    /// still decoded, and the overflow is recorded so diagnostics can say the gate is blind.
+    func testOverflowedFrameDecodesAndIsRecorded() throws {
+        var bytes: [UInt8] = [0x50, 0x00, 0x0f]
+        for i in 0 ..< 40 { bytes += [0x10, i.isMultiple(of: 2) ? 0x0f : 0x0a, 0x0c, 0xad, UInt8(i), 0x00] }
+        XCTAssertEqual(bytes.count, 243)
+        let frame = try XCTUnwrap(RingEventLog.decodeFrame(bytes))
+        XCTAssertEqual(frame.hiddenCount, 15)
+        XCTAssertEqual(frame.events.count, 40)
+        var ledger = RingActivityEventLedger()
+        let now = frame.events.last!.date.addingTimeInterval(60)
+        ledger.merge(frame, ring: "A", now: now)
+        XCTAssertEqual(ledger.overflow["A"]?.hidden, 15)
+        ledger.merge(try XCTUnwrap(RingEventLog.decodeFrame(walkFrame)), ring: "A", now: now)
+        XCTAssertNil(ledger.overflow["A"], "a cleared log clears the flag")
+    }
+
+    /// A start whose end was lost, followed by a later complete pair, must NOT merge into one
+    /// 10 h session that silences both HR rules — the first closes at the second start, capped.
+    func testRepeatedStartClosesTheEarlierSessionAndEverySessionIsCapped() {
+        let t: UInt32 = 0x0cad_0000
+        let sessions = RingEventLog.activitySessions(
+            [ev(0x0f, t), ev(0x0f, t + 10 * 3600), ev(0x0a, t + 10 * 3600 + 20 * 60)], now: Date())
+        XCTAssertEqual(sessions.count, 2)
+        for (a, b) in sessions {
+            XCTAssertLessThanOrEqual(b.timeIntervalSince(a), RingEventLog.openSessionCap)
+        }
+        XCTAssertEqual(sessions[1].0, ev(0x0f, t + 10 * 3600).date)
+        // A CLOSED but absurdly long pair is capped too.
+        let long = RingEventLog.activitySessions([ev(0x0f, t), ev(0x0a, t + 20 * 3600)], now: Date())
+        XCTAssertEqual(long.first.map { $0.1.timeIntervalSince($0.0) }, RingEventLog.openSessionCap)
+    }
+
+    /// Two rings' markers never pair with each other.
+    func testMarkersArePairedPerRing() {
+        let t: UInt32 = 0x0cad_0000
+        var ledger = RingActivityEventLedger()
+        let now = ev(0x0a, t + 7200).date
+        ledger.merge(.init(hiddenCount: 0, events: [ev(0x0f, t)]), ring: "A", now: now)            // A still active
+        ledger.merge(.init(hiddenCount: 0, events: [ev(0x0f, t + 600), ev(0x0a, t + 1200)]), ring: "B", now: now)
+        let sessions = ledger.sessions(now: now)
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertTrue(sessions.contains { $0.0 == ev(0x0f, t).date && $0.1 == now }, "A runs open to now")
+        XCTAssertTrue(sessions.contains { $0.0 == ev(0x0f, t + 600).date && $0.1 == ev(0x0a, t + 1200).date })
     }
 
     // MARK: the alert gate (synthetic HR)

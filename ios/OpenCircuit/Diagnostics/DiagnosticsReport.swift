@@ -197,11 +197,15 @@ enum DiagnosticsReport {
         s.append("# Ring activity sessions (0x50 markers, last 48 h)")
         let sessions = ringActivity.sessions(now: now)
         if sessions.isEmpty { s.append("  (none)") }
+        let ends = Set(ringActivity.events.values.flatMap { $0 }
+            .filter { $0.value == RingEventLog.activityEnd }.map(\.date))
         for (start, end) in sessions {
-            let closed = ringActivity.events.contains {
-                $0.value == RingEventLog.activityEnd && $0.date == end
-            }
-            s.append("  \(t(start)) → \(t(end))\(closed ? "" : "  (open — no end marker yet)")")
+            s.append("  \(t(start)) → \(t(end))\(ends.contains(end) ? "" : "  (no end marker — open or capped)")")
+        }
+        // An overflowed log shows only its OLDEST 40 entries — newer sessions are invisible, so an
+        // empty list above does NOT mean the ring saw no activity (§5.5.1).
+        for (ring, o) in ringActivity.overflow.sorted(by: { $0.key < $1.key }) {
+            s.append("  ⚠️ ring …\(ring.suffix(4)): event log OVERFLOWED (\(o.hidden) hidden, seen \(t(o.seenAt))) — newer sessions not visible, alert gate blind for this ring")
         }
         s.append("")
 

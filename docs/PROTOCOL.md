@@ -907,16 +907,27 @@ synced range, e.g. `50 00 00 | 15 12 0c22aae4 | 15 12 0c22acb5`. A 21-byte varia
 is undecoded 🔴.
 
 > ⚠️ **2026-09-27: the "from/to pair" reading is too narrow — the entries are an EVENT LOG
-> (§5.5.1).** It fit the early two-entry `15`-type frames, but the same frame carries up to 8
+> (§5.5.1).** It fit the early two-entry `15`-type frames, but the same frame carries up to 40
 > entries of several types whose cursors bracket wearer activity, not the synced range. The
 > end-of-history ROLE (arrives after the last page; `EpochSyncSession` / `parseEndOfHistory`) is
 > unchanged and nothing here alters how the app finalizes a drain.
 
 #### 5.5.1 `0x50` entries = the ring's event log 🟢 layout / 🟡 meaning
-**Layout 🟢:** after `50 00 00`, a whole number of 6-byte entries `[type][value][cursor:4 BE]`,
-cursor in `syncEpoch` seconds, no trailer. Measured: all 69 distinct `0x50` frames (65 multi-entry) across 29
-diagnostics bundles (2 rings, FR02.018 Gen 2 + Gen 2 Air, 2026-06-26 → 09-27) divide exactly — 314
-distinct entries, zero remainders. The ring re-sends a rolling tail of the log on every drain.
+**Layout 🟢:** `50 00 <hidden>` then a whole number of 6-byte entries `[type][value][cursor:4 BE]`,
+cursor in `syncEpoch` seconds, no trailer. Measured: all 69 distinct `0x50` frames (65 multi-entry,
+found in 18 of 29 diagnostics bundles; 2 rings, FR02.018 Gen 2 + Gen 2 Air, 2026-06-26 → 09-27) divide
+exactly — 314 distinct entries, zero remainders.
+
+**Capacity + overflow 🟡 (both rings, adversarial review 2026-09-27):** a frame shows **at most 40
+entries, OLDEST FIRST**, and the ring re-sends that same window on every drain — it is NOT a rolling
+tail. Once the log holds more, every frame is 243 B with `[2]` = the number of entries **not shown**
+(seen `06`…`3b`), and the window stays frozen on the oldest 40: in the Gen 2 Air 08-04 bundle the
+last shown entry stays 08-03 04:55Z while `[2]` climbs `13`→`16`→`19` over 7 h, and the AD ring sat at
+`0f`–`13` from 08-08 to 08-09. So while overflowed, **new activity markers are not on the wire at
+all.** The log fills in days (the `07`/`08` pairs alone can add dozens a night) and is cleared from
+time to time — 6 of 11 observed AD clears had charging frames in the gap (e.g. 09-27 01:28Z, right
+after the `0x15`/`31` charge event), the other 5 had none captured; **what clears it is 🔴 unknown**
+(charging? the official app?).
 
 | type | values | meaning | tag / source |
 |---|---|---|---|
@@ -936,7 +947,9 @@ reminder, libapp.so strings) is consistent with gating on exactly this verdict.
 
 **Consumed by:** `RingEventLog` / `RingActivityEventLedger` (Kit) → the elevated-HR alert gate
 (`HealthAlertEvaluator.ringActivityIntervals`, widened back by the ≥ 10-min recognition lag). Only
-`0x10` `0f`/`0a` is consumed.
+`0x10` `0f`/`0a` is consumed, paired per ring, every session capped at 4 h. An overflowed frame's
+visible entries are still banked and the overflow is surfaced in the diagnostics bundle ("alert gate
+blind") — during an overflow a walk can still false-alarm.
 
 ### 5.6 `0x02` sync cursor — TIMESTAMP 🟢 CONFIRMED (issue #3 + #5 closed)
 Host write `02 00 <cursor:4 BE> <flag:1> 01 00` → `82 00 00 82`.

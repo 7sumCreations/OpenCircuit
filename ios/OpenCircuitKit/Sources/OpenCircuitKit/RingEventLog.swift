@@ -54,67 +54,96 @@ public enum RingEventLog {
     /// while capping what a lost end marker can suppress.
     public static let openSessionCap: TimeInterval = 4 * 3600
 
-    /// Decode every event entry of a `0x50` frame, or nil when the frame is not an event list.
-    /// The frame has NO XOR trailer (§5.5): the payload after `50 00 00` must be a whole number of
-    /// 6-byte entries. Of the legacy shapes `EpochRecord.parseEndOfHistory` handles, the 8- and
-    /// 12-byte ones are not whole entries and return nil here; the 9-byte `15 <sub> <cursor>` one IS
-    /// a single entry and decodes as one (type `0x15`), which no consumer below reads.
-    public static func decode(_ frame: [UInt8]) -> [RingEvent]? {
-        guard frame.count >= 3 + entryLength,
-              frame[0] == opcode, frame[1] == 0x00, frame[2] == 0x00 else { return nil }
+    /// One decoded `0x50` event frame.
+    public struct Frame: Equatable, Sendable {
+        /// Entries the ring holds but did NOT show (`[2]`, 🟡). Non-zero means the log has
+        /// overflowed the 40-entry frame: what is shown is the OLDEST 40, so every newer marker —
+        /// including the activity session that just ended — is not on the wire at all.
+        public let hiddenCount: Int
+        public let events: [RingEvent]
+    }
+
+    /// Decode a `0x50` event frame, or nil when it is not one. NO XOR trailer (§5.5): after
+    /// `50 00 <hidden>` the payload must be a whole number of 6-byte entries. Of the legacy shapes
+    /// `EpochRecord.parseEndOfHistory` handles, the 8- and 12-byte ones are not whole entries and
+    /// return nil here; the 9-byte `15 <sub> <cursor>` one IS a single entry and decodes as one
+    /// (type `0x15`), which no consumer below reads.
+    public static func decodeFrame(_ frame: [UInt8]) -> Frame? {
+        guard frame.count >= 3 + entryLength, frame[0] == opcode, frame[1] == 0x00 else { return nil }
         let payload = frame[3...]
         guard payload.count % entryLength == 0 else { return nil }
-        return stride(from: payload.startIndex, to: payload.endIndex, by: entryLength).map { o in
+        let events = stride(from: payload.startIndex, to: payload.endIndex, by: entryLength).map { o in
             RingEvent(type: frame[o], value: frame[o + 1],
                       cursor: UInt32(frame[o + 2]) << 24 | UInt32(frame[o + 3]) << 16
                           | UInt32(frame[o + 4]) << 8 | UInt32(frame[o + 5]))
         }
+        return Frame(hiddenCount: Int(frame[2]), events: events)
     }
 
-    /// The ring's activity sessions as `[start, end]` intervals, from `0x10` start/end markers.
+    /// The entries of a `0x50` event frame (see `decodeFrame`).
+    public static func decode(_ frame: [UInt8]) -> [RingEvent]? { decodeFrame(frame)?.events }
+
+    /// The ring's activity sessions as `[start, end]` intervals, from `0x10` start/end markers of
+    /// ONE ring (pair per ring — interleaving two rings' markers would pair A's start with B's end).
     ///
-    /// A start with no later end is an activity still in progress: it runs to `now`, but never
-    /// longer than `openSessionCap` — so a LOST end marker can silence the inactive-HR rule for a
-    /// bounded time, not for the ledger's whole retention. An end with
-    /// no preceding start (its start fell off the ring's rolling log) is DROPPED — its start cannot
-    /// be bounded, and inventing one would suppress alerts on a guess. Duplicate entries (the ring
-    /// re-sends its log on every drain) collapse. Only ever used to SUPPRESS, so an unpaired or
-    /// unknown marker costs at most a missed suppression, never a missed alert.
+    /// EVERY session is capped at `openSessionCap`, closed or not — so a LOST end marker can
+    /// silence the HR rules for a bounded time, never for the ledger's whole retention. A start
+    /// followed by another start means the first one's end was lost: the first is closed at the
+    /// second (still capped). A start with no later end is in progress and runs to `now` (capped).
+    /// An end with no open start is DROPPED — its start cannot be bounded, and inventing one would
+    /// suppress alerts on a guess. Duplicates (the ring re-sends its log) collapse. Only ever used
+    /// to SUPPRESS, so an unpaired or unknown marker costs at most a missed suppression.
     public static func activitySessions(_ events: [RingEvent], now: Date) -> [(Date, Date)] {
         let markers = Set(events.filter { $0.type == activityType
                 && ($0.value == activityStart || $0.value == activityEnd) })
             .sorted { $0.cursor < $1.cursor }
         var sessions: [(Date, Date)] = []
+        func close(_ s: Date, at e: Date) {
+            sessions.append((s, min(e, s.addingTimeInterval(openSessionCap))))
+        }
         var open: Date?
         for m in markers {
             if m.value == activityStart {
-                if open == nil { open = m.date }       // a repeated start keeps the earliest
+                if let s = open { close(s, at: m.date) }
+                open = m.date
             } else if let s = open {
-                sessions.append((s, m.date))
+                close(s, at: m.date)
                 open = nil
             }
         }
-        if let s = open, s <= now { sessions.append((s, min(now, s.addingTimeInterval(openSessionCap)))) }
+        if let s = open, s <= now { close(s, at: now) }
         return sessions
     }
 }
 
-/// Persisted, de-duplicated activity markers across drains (the ring's log is rolling, and one
-/// `0x50` only shows its recent tail). Codable so the app can keep it in UserDefaults — no
-/// SwiftData schema change.
+/// Persisted, de-duplicated activity markers across drains, per ring. One `0x50` shows at most 40
+/// entries and the log is cleared from time to time (§5.5.1), so markers are banked as they are
+/// seen. Codable so the app can keep it in UserDefaults — no SwiftData schema change.
 public struct RingActivityEventLedger: Codable, Equatable, Sendable {
-    public private(set) var events: [RingEvent]
+    /// Activity markers keyed by ring identifier.
+    public private(set) var events: [String: [RingEvent]]
+    /// The latest overflow state seen per ring: `hidden` > 0 means newer markers are not visible
+    /// (§5.5.1) and the ring-activity gate is blind for that ring until the log clears.
+    public private(set) var overflow: [String: Overflow]
+
+    public struct Overflow: Codable, Equatable, Sendable {
+        public let hidden: Int
+        public let seenAt: Date
+    }
 
     /// How long a marker is kept. The alert engine looks back at most ~24 h
     /// (`HealthNotificationCenter.instantLookback`), so 48 h keeps every marker it can ask about
     /// with a day of margin, and bounds the blob.
     public static let retention: TimeInterval = 48 * 3600
 
-    public init(events: [RingEvent] = []) { self.events = events }
+    public init(events: [String: [RingEvent]] = [:], overflow: [String: Overflow] = [:]) {
+        self.events = events
+        self.overflow = overflow
+    }
 
-    /// One ledger for the whole app, not per ring: the alert gate asks "was the WEARER active",
-    /// and a marker from any ring they wore answers it.
-    public static let defaultsKey = "ring.activityEvents.v1"
+    /// One ledger for the whole app; the gate asks "was the WEARER active", so sessions from every
+    /// ring count, but each ring's markers are paired only with its own.
+    public static let defaultsKey = "ring.activityEvents.v2"
 
     /// The stored ledger, or an empty one when absent or unreadable (an unreadable blob can only
     /// cost a missed suppression — the alert still fires — so it is not worth surfacing).
@@ -128,21 +157,22 @@ public struct RingActivityEventLedger: Codable, Equatable, Sendable {
         if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.defaultsKey) }
     }
 
-    /// The ring's activity sessions currently on record (`RingEventLog.activitySessions`).
-    public func sessions(now: Date) -> [(Date, Date)] {
-        RingEventLog.activitySessions(events, now: now)
-    }
-
-    /// Merge the activity markers from one decoded frame, dropping duplicates and anything older
-    /// than `retention` (or implausibly in the future — the log also carries entries with
-    /// nonsensical cursors, e.g. type `0x17` years off, which are filtered by type anyway).
-    public mutating func merge(_ incoming: [RingEvent], now: Date) {
-        let keep = incoming.filter { $0.type == RingEventLog.activityType
+    /// Bank one decoded frame from `ring`: its activity markers (dropping duplicates and anything
+    /// older than `retention` or implausibly in the future — the log also carries type-`0x17`
+    /// entries with cursors years off, filtered by type anyway) and its overflow state.
+    public mutating func merge(_ frame: RingEventLog.Frame, ring: String, now: Date) {
+        let keep = frame.events.filter { $0.type == RingEventLog.activityType
             && ($0.value == RingEventLog.activityStart || $0.value == RingEventLog.activityEnd) }
         let lo = now.addingTimeInterval(-Self.retention)
         let hi = now.addingTimeInterval(3600)
-        events = Array(Set(events + keep))
+        events[ring] = Array(Set((events[ring] ?? []) + keep))
             .filter { $0.date >= lo && $0.date <= hi }
             .sorted { $0.cursor < $1.cursor }
+        overflow[ring] = frame.hiddenCount > 0 ? Overflow(hidden: frame.hiddenCount, seenAt: now) : nil
+    }
+
+    /// Every ring's activity sessions currently on record, each ring paired on its own.
+    public func sessions(now: Date) -> [(Date, Date)] {
+        events.keys.sorted().flatMap { RingEventLog.activitySessions(events[$0] ?? [], now: now) }
     }
 }
