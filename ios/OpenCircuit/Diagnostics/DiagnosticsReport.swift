@@ -189,6 +189,26 @@ enum DiagnosticsReport {
         s.append(headacheSection(store: store, defaults: defaults, timeZone: timeZone, now: now))
         s.append("")
 
+        // 5b) The ring's OWN activity sessions (`0x50` markers, PROTOCOL.md §5.5.1). While one is
+        // open the ring stops pushing to the phone with the link still UP, so a daytime frame hole
+        // that lines up with a session here is the ring being active — not a disconnect. These are
+        // also what the elevated-HR-while-inactive alert treats as exercise.
+        let ringActivity = RingActivityEventLedger.load(defaults)
+        s.append("# Ring activity sessions (0x50 markers, last 48 h)")
+        let sessions = ringActivity.sessions(now: now)
+        if sessions.isEmpty { s.append("  (none)") }
+        let ends = Set(ringActivity.events.values.flatMap { $0 }
+            .filter { $0.value == RingEventLog.activityEnd }.map(\.date))
+        for (start, end) in sessions {
+            s.append("  \(t(start)) → \(t(end))\(ends.contains(end) ? "" : "  (no end marker — open or capped)")")
+        }
+        // An overflowed log shows only its OLDEST 40 entries — newer sessions are invisible, so an
+        // empty list above does NOT mean the ring saw no activity (§5.5.1).
+        for (ring, o) in ringActivity.overflow.sorted(by: { $0.key < $1.key }) {
+            s.append("  ⚠️ ring …\(ring.suffix(4)): event log OVERFLOWED (\(o.hidden) hidden, seen \(t(o.seenAt))) — newer sessions not visible, alert gate blind for this ring")
+        }
+        s.append("")
+
         // 6) Raw-frame capture — only present if the tester enabled it (protocol RE).
         if session.diagnosticsFrameCount > 0 {
             s.append("# Raw-frame capture")

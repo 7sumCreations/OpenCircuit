@@ -949,9 +949,10 @@ struct ContentView: View {
         lastHealthWriteAt = observability.lastHealthWrite
     }
 
-    /// A foreground history sync just finished — record its outcome so "Last successful sync"
-    /// reflects manual/auto foreground refreshes too, not only background runs. Success = the
-    /// session actually received frames on this connection.
+    /// A history sync just finished — record its outcome so "Last successful sync" reflects
+    /// manual/auto refreshes too, not only BGTask runs. Success = the session actually received
+    /// frames on this connection. Labelled by where the app WAS when it finished (this runs from a
+    /// SwiftUI `onChange`, which also fires while backgrounded).
     private func recordForegroundSync() {
         // Read the DRAIN TRACES, not live session state (#188). The old test was
         // `session?.lastFrameAt != nil`, and `lastFrameAt` is stamped by EVERY inbound frame and
@@ -986,7 +987,9 @@ struct ContentView: View {
         if let anomalies = session?.lastSyncAnomalies, !anomalies.isEmpty {
             detail += " — anomaly: \(anomalies.map(\.rawValue).joined(separator: ", "))"
         }
-        observability.recordSyncOutcome(kind: .foreground, success: ranADrain, detail: detail)
+        let kind: TaskRecord.Kind = UIApplication.shared.applicationState == .active
+            ? .foreground : .backgroundSync
+        observability.recordSyncOutcome(kind: kind, success: ranADrain, detail: detail)
         refreshObservability()
     }
 

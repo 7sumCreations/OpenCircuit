@@ -17,6 +17,11 @@ struct TaskRecord: Codable, Identifiable, Equatable {
         case foreground   // a sync the user triggered / a foreground auto-refresh
         case cbWake       // a drain triggered by a BLE event while suspended (0x11 wake, #119)
         case sleepFocus   // a bounded sync when the configured Sleep Focus turns off
+        /// A history drain that FINISHED while the app was not foreground-active — the periodic /
+        /// keepalive drain run on a BLE wake. It used to be logged `foreground` (the logger is a
+        /// SwiftUI `onChange`, which also runs while backgrounded), which mislabelled the
+        /// 2026-09-27 post-walk drain the phone's own log shows ran NotVisible.
+        case backgroundSync
     }
     var id = UUID()
     var date: Date

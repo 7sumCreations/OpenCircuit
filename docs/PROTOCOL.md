@@ -906,6 +906,51 @@ is the low byte of the final cursor). `[0:3]`=`50 00 00`, then 6-byte entries
 synced range, e.g. `50 00 00 | 15 12 0c22aae4 | 15 12 0c22acb5`. A 21-byte variant
 is undecoded 🔴.
 
+> ⚠️ **2026-09-27: the "from/to pair" reading is too narrow — the entries are an EVENT LOG
+> (§5.5.1).** It fit the early two-entry `15`-type frames, but the same frame carries up to 40
+> entries of several types whose cursors bracket wearer activity, not the synced range. The
+> end-of-history ROLE (arrives after the last page; `EpochSyncSession` / `parseEndOfHistory`) is
+> unchanged and nothing here alters how the app finalizes a drain.
+
+#### 5.5.1 `0x50` entries = the ring's event log 🟢 layout / 🟡 meaning
+**Layout 🟢:** `50 00 <hidden>` then a whole number of 6-byte entries `[type][value][cursor:4 BE]`,
+cursor in `syncEpoch` seconds, no trailer. Measured: all 69 distinct `0x50` frames (65 multi-entry,
+found in 18 of 29 diagnostics bundles; 2 rings, FR02.018 Gen 2 + Gen 2 Air, 2026-06-26 → 09-27) divide
+exactly — 314 distinct entries, zero remainders.
+
+**Capacity + overflow 🟡 (both rings, adversarial review 2026-09-27):** a frame shows **at most 40
+entries, OLDEST FIRST**, and the ring re-sends that same window on every drain — it is NOT a rolling
+tail. Once the log holds more, every frame is 243 B with `[2]` = the number of entries **not shown**
+(seen `06`…`3b`), and the window stays frozen on the oldest 40: in the Gen 2 Air 08-04 bundle the
+last shown entry stays 08-03 04:55Z while `[2]` climbs `13`→`16`→`19` over 7 h, and the AD ring sat at
+`0f`–`13` from 08-08 to 08-09. So while overflowed, **new activity markers are not on the wire at
+all.** The log fills in days (the `07`/`08` pairs alone can add dozens a night) and is cleared from
+time to time — 6 of 11 observed AD clears had charging frames in the gap (e.g. 09-27 01:28Z, right
+after the `0x15`/`31` charge event), the other 5 had none captured; **what clears it is 🔴 unknown**
+(charging? the official app?).
+
+| type | values | meaning | tag / source |
+|---|---|---|---|
+| `0x10` | `0f` → `0a` | **activity session start → end** (the ring's own "exercising" verdict) | 🟡 — 09-27 AD bundle + iPhone system log: `0f` 10:52:05 → `0a` 11:23:55 brackets a user-reported 10:40–11:15 walk, and the ring resumed its unsolicited pushes 8 s after the `0a`; 09-26 pair 18:01:40 → 18:22:20 ended a silent gap 1 s after the `0a`. All 7 AD pairs are daytime (TZ known) |
+| `0x10` | `07` → `08` | overnight pairs on AD (e.g. 00:09 → 08:34) | 🔴 guess: sleep markers — NOT consumed |
+| `0x15` | `21`/`31`/`12` | mode transitions; `31` at 09-26 21:28:45 matches descriptor `[2]=01` (charging) and `12` at 21:39:50 the return to worn | 🟡 |
+| `0x17` | `03`–`06`, `83`–`86` | cursors land years away from the capture date | 🔴 undecoded |
+| `0x16` | `ef` | one sighting | 🔴 |
+
+**Behavioural consequence 🟢 (phone-log-proven 2026-09-27):** while an activity session is open the
+ring **stops its ~2.5-min unsolicited pushes with the BLE link still up** — no disconnect, no
+supervision timeout, the app's process never dies; iOS simply never wakes the suspended app. Epochs
+keep recording and drain afterwards. So during every ring-recognised activity a backgrounded app sees
+no live steps and no live HR. The official app's "HR exceeds the set maximum for a continuous 10
+minutes while in a **non-exercising state**" reminder (and its separate `autoSportOverloadHr`
+reminder, libapp.so strings) is consistent with gating on exactly this verdict.
+
+**Consumed by:** `RingEventLog` / `RingActivityEventLedger` (Kit) → the elevated-HR alert gate
+(`HealthAlertEvaluator.ringActivityIntervals`, widened back by the ≥ 10-min recognition lag). Only
+`0x10` `0f`/`0a` is consumed, paired per ring, every session capped at 4 h. An overflowed frame's
+visible entries are still banked and the overflow is surfaced in the diagnostics bundle ("alert gate
+blind") — during an overflow a walk can still false-alarm.
+
 ### 5.6 `0x02` sync cursor — TIMESTAMP 🟢 CONFIRMED (issue #3 + #5 closed)
 Host write `02 00 <cursor:4 BE> <flag:1> 01 00` → `82 00 00 82`.
 **cursor = 4-byte BE seconds since epoch `1577793600` (2019-12-31 12:00:00 UTC)** —
