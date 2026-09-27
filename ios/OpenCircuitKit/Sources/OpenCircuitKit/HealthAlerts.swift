@@ -368,6 +368,27 @@ public enum HealthAlertEvaluator {
              .map { ($0.start, $0.end) }
     }
 
+    /// How far BEFORE the ring's own activity-start marker its session is treated as exercise.
+    /// The ring stamps the start when it has RECOGNISED the activity, not when it began: the
+    /// official 4.2.1 UI requires ≥ 10 min of continuous activity before a workout is recognised
+    /// (see `AutomaticWorkoutDetection.swift`), and 🟡 the one labelled bout we have — a walk that
+    /// began 10:40 — was stamped 10:52:05. Without this lead, a bout whose HR is elevated from its
+    /// first minute leaves up to that lag un-gated — itself a "sustained ≥ 10 min" elevated run.
+    public static let ringActivityLead: TimeInterval = 10 * 60
+
+    /// The ring's own activity sessions (`RingEventLog.activitySessions`) as activity intervals
+    /// for `nonExercising`, each widened back by `lead`. The trailing recovery tail is added by
+    /// `nonExercising`'s own `pad`, exactly as for step windows.
+    ///
+    /// WHY THE STEP GATE ALONE CANNOT DO THIS (2026-09-27, phone-log-proven): while the ring
+    /// considers the wearer active it stops pushing to the phone with the link still up, so a
+    /// suspended app records NO steps for the bout and receives its HR only afterwards as history.
+    /// The step gate then has no positive evidence and every such walk alarms.
+    public static func ringActivityIntervals(_ sessions: [(Date, Date)],
+                                             lead: TimeInterval = ringActivityLead) -> [(Date, Date)] {
+        sessions.map { ($0.0.addingTimeInterval(-lead), $0.1) }
+    }
+
     /// Drop HR samples that overlap concurrent step activity (or its `pad`-long recovery tail), so
     /// exercise heart rate can't trip the resting high-HR / elevated-while-inactive alarms (#144).
     /// A sample is EXCLUDED when its device timestamp `start` lies inside any `activeIntervals`

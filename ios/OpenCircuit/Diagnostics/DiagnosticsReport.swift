@@ -189,6 +189,22 @@ enum DiagnosticsReport {
         s.append(headacheSection(store: store, defaults: defaults, timeZone: timeZone, now: now))
         s.append("")
 
+        // 5b) The ring's OWN activity sessions (`0x50` markers, PROTOCOL.md §5.5.1). While one is
+        // open the ring stops pushing to the phone with the link still UP, so a daytime frame hole
+        // that lines up with a session here is the ring being active — not a disconnect. These are
+        // also what the elevated-HR-while-inactive alert treats as exercise.
+        let ringActivity = RingActivityEventLedger.load(defaults)
+        s.append("# Ring activity sessions (0x50 markers, last 48 h)")
+        let sessions = ringActivity.sessions(now: now)
+        if sessions.isEmpty { s.append("  (none)") }
+        for (start, end) in sessions {
+            let closed = ringActivity.events.contains {
+                $0.value == RingEventLog.activityEnd && $0.date == end
+            }
+            s.append("  \(t(start)) → \(t(end))\(closed ? "" : "  (open — no end marker yet)")")
+        }
+        s.append("")
+
         // 6) Raw-frame capture — only present if the tester enabled it (protocol RE).
         if session.diagnosticsFrameCount > 0 {
             s.append("# Raw-frame capture")

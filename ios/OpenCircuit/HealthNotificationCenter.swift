@@ -309,7 +309,15 @@ struct HealthNotificationCenter {
         let stepWindows = ((try? localStore.stepSamples(from: instantSince, to: now)) ?? [])
             .map { StepWindow(start: $0.start, end: $0.end, delta: $0.delta) }
         let stepIntervals = HealthAlertEvaluator.activeStepIntervals(stepWindows)
-        let nonExercisingHR = HealthAlertEvaluator.nonExercising(hr, activeIntervals: stepIntervals)
+        // …and the RING'S OWN activity sessions (`0x50` markers, §5.5.1). While the ring considers
+        // the wearer active it stops pushing to the phone with the link still up, so a suspended
+        // app observes NO steps for the bout and gets its HR afterwards as history — the step gate
+        // alone has no evidence and every such walk alarmed (2026-09-27). This is the same
+        // "non-exercising state" verdict the official app gates its reminder on. Positive evidence
+        // only, like the step windows: no markers → nothing added.
+        let ringIntervals = HealthAlertEvaluator.ringActivityIntervals(
+            RingActivityEventLedger.load().sessions(now: now))
+        let nonExercisingHR = HealthAlertEvaluator.nonExercising(hr, activeIntervals: stepIntervals + ringIntervals)
 
         // Both the instantaneous high-HR and the sustained-while-inactive rule read the non-exercising
         // series over the same wide window; the evaluator's own `lastFired` filter gives once-per-event

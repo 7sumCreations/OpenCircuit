@@ -5085,6 +5085,7 @@ extension RingSession: CBPeripheralDelegate {
                 if self.syncing { self.syncDone = true }
                 ringLog.notice("← 0x50 END-OF-HISTORY (records=\(self.bulkRecords.count)) raw=\(self.lastFrame ?? "", privacy: .public)")
                 self.handleEndOfHistory(data)   // finalize epoch session, gated persist (#24)
+                self.recordRingActivityEvents(bytes)
                 return
             case 0x11:
                 // Ring heartbeat (unsolicited keepalive, ~2.5 min idle). The official app answers
@@ -5262,6 +5263,19 @@ extension RingSession: CBPeripheralDelegate {
             + "range \(lo)–\(hi), mean \(String(format: "%.0f", mean))"
         self.lastPPGTrendSummary = summary
         ringLog.debug("0x47 optical-trend (diagnostic): \(summary, privacy: .public)")
+    }
+
+    /// Bank the ring's own activity start/stop markers from a `0x50` event list (§5.5.1) for the
+    /// elevated-HR-while-inactive gate. Read-only with respect to the ring — no write, no ack —
+    /// and runs AFTER the end-of-history handling above, which it does not touch.
+    private func recordRingActivityEvents(_ bytes: [UInt8]) {
+        guard let events = RingEventLog.decode(bytes) else { return }
+        let stored = RingActivityEventLedger.load()
+        var ledger = stored
+        ledger.merge(events, now: Date())
+        guard ledger != stored else { return }
+        ledger.save()
+        ringLog.notice("ring-activity: \(ledger.events.count) marker(s) on record (was \(stored.events.count))")
     }
 
     private func handleEndOfHistory(_ data: Data) {
