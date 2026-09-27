@@ -168,7 +168,21 @@ public struct RingActivityEventLedger: Codable, Equatable, Sendable {
         events[ring] = Array(Set((events[ring] ?? []) + keep))
             .filter { $0.date >= lo && $0.date <= hi }
             .sorted { $0.cursor < $1.cursor }
-        overflow[ring] = frame.hiddenCount > 0 ? Overflow(hidden: frame.hiddenCount, seenAt: now) : nil
+        // Re-stamp only when the hidden count CHANGES: while overflowed the ring answers every
+        // keepalive with the same frozen frame (~every 3 min), and re-stamping would re-save and
+        // re-log "gate blind" on each one.
+        if frame.hiddenCount == 0 {
+            overflow[ring] = nil
+        } else if overflow[ring]?.hidden != frame.hiddenCount {
+            overflow[ring] = Overflow(hidden: frame.hiddenCount, seenAt: now)
+        }
+        // Other rings are only pruned here, so a retired ring's markers and "gate blind" flag
+        // would otherwise live forever.
+        for other in events.keys where other != ring {
+            events[other] = events[other]?.filter { $0.date >= lo }
+            if events[other]?.isEmpty == true { events[other] = nil }
+        }
+        for (other, o) in overflow where other != ring && o.seenAt < lo { overflow[other] = nil }
     }
 
     /// Every ring's activity sessions currently on record, each ring paired on its own.

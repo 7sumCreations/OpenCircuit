@@ -139,6 +139,22 @@ final class RingEventLogTests: XCTestCase {
         XCTAssertEqual(long.first.map { $0.1.timeIntervalSince($0.0) }, RingEventLog.openSessionCap)
     }
 
+    /// While overflowed the same frozen frame arrives every few minutes: it must not rewrite the
+    /// ledger each time. And a ring that never reports again ages out.
+    func testRepeatedOverflowIsStableAndRetiredRingsAgeOut() {
+        let t: UInt32 = 0x0cad_0000
+        let now = ev(0x0f, t).date
+        var ledger = RingActivityEventLedger()
+        ledger.merge(.init(hiddenCount: 15, events: [ev(0x0f, t)]), ring: "A", now: now)
+        let once = ledger
+        ledger.merge(.init(hiddenCount: 15, events: [ev(0x0f, t)]), ring: "A", now: now.addingTimeInterval(180))
+        XCTAssertEqual(ledger, once)
+        ledger.merge(.init(hiddenCount: 0, events: []), ring: "B",
+                     now: now.addingTimeInterval(RingActivityEventLedger.retention + 60))
+        XCTAssertNil(ledger.events["A"])
+        XCTAssertNil(ledger.overflow["A"])
+    }
+
     /// Two rings' markers never pair with each other.
     func testMarkersArePairedPerRing() {
         let t: UInt32 = 0x0cad_0000
