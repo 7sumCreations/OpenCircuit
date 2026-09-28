@@ -493,3 +493,54 @@ public enum WorkoutHRBackfill {
         return byStart.values.sorted { $0.start < $1.start }
     }
 }
+
+// MARK: - Buffered ring sport records → a manual workout (tester report 2026-09-27)
+
+/// Fill a MANUAL workout's live-HR gaps from the ring's own buffered 10-second sport records.
+///
+/// WHY. A manual workout records HR only from the LIVE `0x4e` stream, so with the phone out of range
+/// it records nothing — yet the ring keeps measuring and hands the 10-s records (`0x4d`,
+/// `HistoricalSportFrame`) over on reconnect. They were routed only to automatic-workout detection,
+/// so a tester's pickleball session stayed in zone 0 (43 background readings over 90 min) while
+/// ~42 min of the ring's own HR/steps for that very window were offered back as a "detected walk".
+///
+/// THE RULE. A buffered record is used only where live data is ABSENT: if any captured sample ends
+/// inside the record's 10-s interval (± `liveOverlapSlack`), live wins and the record is skipped, so
+/// nothing is double-counted. Records outside `window`, or without a valid HR, contribute no HR (a
+/// record's steps still count if its interval is uncovered and inside the window). Never
+/// interpolates (#45) — every value returned is one the ring measured.
+public enum WorkoutBufferedSportFill {
+    /// Slack when testing live coverage of a 10-s record: the live snapshot stamps a ~2-s window at
+    /// its capture time and the `0x4e` cadence is ~10 s, so a record whose interval is within one
+    /// snapshot of a live reading is treated as covered.
+    public static let liveOverlapSlack: TimeInterval = 2
+
+    public struct Fill: Equatable, Sendable {
+        public let hrSamples: [HRSample]
+        public let steps: Int
+        /// Cursors consumed (HR or steps), so a caller merging repeatedly never adds one twice.
+        public let cursors: Set<UInt32>
+    }
+
+    public static func fill(captured: [HRSample],
+                            buffered: [HistoricalSportFrame.Sample],
+                            window: DateInterval,
+                            alreadyMerged: Set<UInt32> = []) -> Fill {
+        var hr: [HRSample] = []
+        var steps = 0
+        var used: Set<UInt32> = []
+        let interval = HistoricalSportFrame.intervalSeconds
+        for record in buffered where !alreadyMerged.contains(record.cursor) {
+            let end = record.endDate
+            let start = end.addingTimeInterval(-interval)
+            guard start >= window.start, end <= window.end else { continue }
+            let lo = start.addingTimeInterval(-liveOverlapSlack)
+            let hi = end.addingTimeInterval(liveOverlapSlack)
+            if captured.contains(where: { $0.end >= lo && $0.end <= hi }) { continue }
+            if let bpm = record.heartRate { hr.append(HRSample(bpm: bpm, start: start, end: end)) }
+            steps += record.steps
+            used.insert(record.cursor)
+        }
+        return Fill(hrSamples: hr.sorted { $0.start < $1.start }, steps: steps, cursors: used)
+    }
+}

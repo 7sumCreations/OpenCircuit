@@ -102,6 +102,18 @@ public struct CursorSpan: Codable, Equatable, Sendable {
     public func overlaps(_ other: CursorSpan) -> Bool {
         start <= other.end && other.start <= end
     }
+
+    /// The ring-cursor span of a wall-clock window — e.g. a MANUAL workout, so the ring's buffered
+    /// sport records for it are never offered back as an automatically detected workout
+    /// (tester report 2026-09-27). Clamped at the epoch; `end < start` collapses to a point.
+    public init(window: DateInterval) {
+        func cursor(_ d: Date) -> UInt32 {
+            let s = d.timeIntervalSince1970 - TimeInterval(Command.syncEpoch)
+            return UInt32(clamping: Int64(max(s, 0).rounded(.down)))
+        }
+        let a = cursor(window.start), b = cursor(window.end)
+        self.init(start: a, end: max(a, b))
+    }
 }
 
 public extension [CursorSpan] {

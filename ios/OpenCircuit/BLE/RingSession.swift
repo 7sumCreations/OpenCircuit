@@ -329,6 +329,13 @@ final class RingSession: NSObject {
     /// Surfacing/confirmation and durable persistence are deliberately separate from the decoder.
     private(set) var automaticWorkoutCandidates: [AutomaticWorkoutDetector.Candidate] = []
     private var historicalSportSamples: [HistoricalSportFrame.Sample] = []
+    /// The ring's buffered 10-s sport records (`0x4d`), read by a running MANUAL workout to fill the
+    /// HR it could not stream live while the phone was out of range (`WorkoutBufferedSportFill`).
+    var bufferedSportSamples: [HistoricalSportFrame.Sample] { historicalSportSamples }
+    /// Start of the manual workout currently recording, if any. While set, the ring's buffered
+    /// records from that window are the workout's own data — never an "automatically detected"
+    /// workout (tester report 2026-09-27: his pickleball session popped up as a detected walk).
+    private var activeManualWorkoutStart: Date?
     /// User-controlled ring-side automatic recognition state. Persisted per ring because the command
     /// changes firmware state and survives a BLE reconnect; we cannot query it yet from a status frame.
     private(set) var automaticWorkoutDetectionEnabled = false
@@ -3169,7 +3176,7 @@ final class RingSession: NSObject {
         let rebuilt = AutomaticWorkoutInbox.rebuild(
             existing: historicalSportSamples,
             incoming: incoming,
-            resolvedSpans: resolvedAutomaticWorkoutSpans
+            resolvedSpans: resolvedAutomaticWorkoutSpans + activeManualWorkoutSpans()
         )
         historicalSportSamples = rebuilt.samples
         automaticWorkoutCandidates = rebuilt.candidates
@@ -3257,6 +3264,36 @@ final class RingSession: NSObject {
         } catch {
             return false
         }
+    }
+
+    /// The running manual workout's window as a cursor span (start → now), or nothing.
+    private func activeManualWorkoutSpans(now: Date = Date()) -> [CursorSpan] {
+        guard let start = activeManualWorkoutStart, start <= now else { return [] }
+        return [CursorSpan(window: DateInterval(start: start, end: now))]
+    }
+
+    /// A manual workout started (or was re-adopted after a reconnect) at `start`: its window is the
+    /// user's own session, so auto-detection must not offer it back. Drops any candidate already
+    /// built over it.
+    func noteManualWorkout(startedAt start: Date) {
+        activeManualWorkoutStart = start
+        let spans = activeManualWorkoutSpans()
+        automaticWorkoutCandidates.removeAll { c in spans.contains { $0.overlaps(c.cursorSpan) } }
+    }
+
+    /// The manual workout ended and was SAVED: remember its window permanently (same bookkeeping as
+    /// a reviewed candidate), so records the ring hands over later for that window stay suppressed.
+    func resolveManualWorkout(window: DateInterval) {
+        activeManualWorkoutStart = nil
+        let span = CursorSpan(window: window)
+        resolvedAutomaticWorkoutSpans.append(span)
+        automaticWorkoutCandidates.removeAll { $0.cursorSpan.overlaps(span) }
+        persistAutomaticWorkoutSpans(resolvedAutomaticWorkoutSpans, key: resolvedAutomaticWorkoutSpansKey)
+    }
+
+    /// The manual workout was discarded: its records may be offered as a detected workout again.
+    func clearManualWorkout() {
+        activeManualWorkoutStart = nil
     }
 
     /// Permanently remove a reviewed candidate from the two-day inbox. Saving and dismissing share
