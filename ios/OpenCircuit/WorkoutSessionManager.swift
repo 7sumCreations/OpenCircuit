@@ -98,6 +98,17 @@ final class WorkoutSessionManager: NSObject {
     /// Capture time of the last HR sample we actually recorded — the dedupe key that stops a held
     /// latch from being re-recorded every poll (the "stuck at 98" climbing-counter bug, #45).
     private var lastRecordedHRAt: Date?
+    /// Ring-buffered sport records already folded into this workout, their steps, and the buffer
+    /// size last examined (`mergeBufferedSportRecords`).
+    private var mergedBufferedCursors: Set<UInt32> = []
+    private var bufferedSteps = 0
+    private var lastBufferedRecordCount = -1
+    /// Live `0x4e` steps and frame cursors from sessions this workout has ALREADY left behind
+    /// (a reconnect replaces the `RingSession`, whose counters start again at zero).
+    private var carriedSportSteps = 0
+    private var carriedSportFrameCursors: Set<UInt32> = []
+    /// HR samples recorded while the ring was on the `0x95` live-poll FALLBACK (no ring cursor).
+    private var fallbackCapturedSamples: [HRSample] = []
 
     private var hrPollTask: Task<Void, Never>?
     private var timerTask: Task<Void, Never>?
@@ -343,6 +354,13 @@ final class WorkoutSessionManager: NSObject {
         // workout HR path (and the only source of per-workout step counts), replacing the generic
         // live-HR poll for the session's duration.
         session.beginSportSession(typeByte: selectedSport.firmwareByte)
+        session.noteManualWorkout(startedAt: start)
+        mergedBufferedCursors = []
+        bufferedSteps = 0
+        lastBufferedRecordCount = -1
+        carriedSportSteps = 0
+        carriedSportFrameCursors = []
+        fallbackCapturedSamples = []
 
         // Keep the screen awake while a workout is foregrounded so it doesn't auto-dim → lock →
         // suspend (which would stall the poll loops). Background tracking is handled by the
@@ -365,7 +383,10 @@ final class WorkoutSessionManager: NSObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self else { break }   // self-terminate if the manager went away
-                await MainActor.run { self.collectHRSnapshot() }
+                await MainActor.run {
+                    self.collectHRSnapshot()
+                    self.mergeBufferedSportRecords(until: Date())
+                }
             }
         }
         // Elapsed-time ticker (1 s resolution). Also refreshes the Live Activity's calories/BPM on a
@@ -409,7 +430,16 @@ final class WorkoutSessionManager: NSObject {
     func adoptReconnectedSession(_ newSession: RingSession) {
         switch recordingState { case .starting, .active: break; default: return }
         guard newSession !== session else { return }
+        // Keep what the outgoing session counted: its live steps (lost before this — review
+        // 2026-09-28) and its frame cursors (so buffered records it covered stay covered).
+        if let old = session {
+            // Read from the torn-down session: valid because teardown does not reset `sportSteps`
+            // (only `beginSportSession` does). If that ever changes, snapshot it at teardown instead.
+            carriedSportSteps += old.sportSteps
+            carriedSportFrameCursors.formUnion(old.sportFrameCursors)
+        }
         session = newSession
+        if let start = sessionStart { newSession.noteManualWorkout(startedAt: start) }
         reconnectResumeTask?.cancel()
         reconnectResumeTask = Task { [weak self] in
             // The fresh link starts un-authed; wait until it's `ready` before SportStart (a `06 03` into
@@ -446,6 +476,24 @@ final class WorkoutSessionManager: NSObject {
         // `session.workoutHolding` false (which fires ContentView's re-arm). Clearing here covers
         // BOTH the normal completion below AND the `guard let agg` error-return, so no end path can
         // leave the flag set and suppress the morning drain forever (#119 lane).
+        // Resolve the workout's window OPTIMISTICALLY before the flag below is cleared: from that
+        // moment auto-detection no longer honours the running workout, and the drain that
+        // `endSportSession` re-arms can land a `0x4d` page during the HealthKit awaits (review
+        // 2026-09-28). Applied to the current scanner session too, in case a reconnect replaced ours.
+        // Undone below if the workout is not saved.
+        let workoutWindow = sessionStart.map { DateInterval(start: $0, end: max($0, Date())) }
+        let resolveTargets = [session, RingScanner.shared.session].compactMap { $0 }
+            .reduce(into: [RingSession]()) { acc, s in if !acc.contains(where: { $0 === s }) { acc.append(s) } }
+        if let workoutWindow { for target in resolveTargets { target.resolveManualWorkout(window: workoutWindow) } }
+        func unresolve() {
+            guard let workoutWindow else { return }
+            let span = CursorSpan(window: workoutWindow)
+            var targets = resolveTargets
+            if let current = RingScanner.shared.session, !targets.contains(where: { $0 === current }) {
+                targets.append(current)
+            }
+            for target in targets { target.unresolveManualWorkout(span) }
+        }
         Self.setWorkoutInProgressPersisted(false)
         // The session is ending under user control, so there is nothing to recover: drop the
         // crash-recovery snapshot here rather than letting the next launch offer to re-save a
@@ -464,7 +512,11 @@ final class WorkoutSessionManager: NSObject {
         // End the ring's native sport mode (SportStop) and capture the ring-counted step total (#90).
         // Flipping `session.workoutHolding` false here is what re-arms the T6-suppressed drain
         // (ContentView observes it) so the deferred morning night still drains after the workout.
-        let sportSteps = session?.endSportSession() ?? 0
+        // Last chance to fold in what the ring buffered while the phone was away (records that
+        // arrive after this are still suppressed from auto-detection by `resolveManualWorkout`).
+        mergeBufferedSportRecords(until: Date(), force: true)
+        let liveSportSteps = carriedSportSteps + (session?.endSportSession() ?? 0)
+        let sportSteps = liveSportSteps + bufferedSteps
         session = nil
 
         // Stop the location session (route or keep-alive) and let the screen sleep again.
@@ -478,6 +530,7 @@ final class WorkoutSessionManager: NSObject {
         let profile = HealthKitWriter.storedUserProfile()
 
         guard let agg = aggregator else {
+            unresolve()
             recordingState = .error("No session data")
             return
         }
@@ -505,9 +558,10 @@ final class WorkoutSessionManager: NSObject {
             hrIsStale: true))
 
         // Write to HealthKit (best-effort; gracefully silent on failure).
-        _ = await writeWorkout(summary: summary,
-                               hrSamples: agg.collectedSamples,
-                               routeLocations: hasRoute ? routeLocations : [])
+        let saved = await writeWorkout(summary: summary,
+                                       hrSamples: agg.collectedSamples,
+                                       routeLocations: hasRoute ? routeLocations : [])
+        if !saved { unresolve() }   // not in Health → let its records be reviewed as detected
 
         // Persist this workout's continuous HR into LocalStore — same store the ring's history
         // sync writes to. These samples carry REAL start/end spans (unlike the zero-duration point
@@ -608,6 +662,7 @@ final class WorkoutSessionManager: NSObject {
         let finalState = currentLiveActivityState()
         Task { await liveActivity.end(final: finalState) }
         session?.endSportSession()   // SportStop — discarded session, nothing persisted
+        session?.clearManualWorkout()   // discarded: its records may be offered as detected again
         session = nil
         store = nil   // discarded session — nothing to persist
         locationManager?.stopUpdatingLocation()
@@ -647,6 +702,32 @@ final class WorkoutSessionManager: NSObject {
 
     // MARK: - HR collection
 
+    /// Fill the live-HR gaps with the ring's own buffered 10-s sport records (`0x4d`), delivered on
+    /// reconnect after the phone was out of range (`WorkoutBufferedSportFill`). Live readings always
+    /// win; each record is merged at most once. Cheap no-op unless the buffer changed.
+    private func mergeBufferedSportRecords(until end: Date, force: Bool = false) {
+        guard let session, let agg = aggregator, let start = sessionStart, end > start else { return }
+        let buffered = session.bufferedSportSamples
+        guard force || buffered.count != lastBufferedRecordCount else { return }
+        lastBufferedRecordCount = buffered.count
+        // HR-sample coverage only for readings from the cursor-less 0x95 fallback: a 0x4e sample is
+        // stamped with the PHONE's arrival time, which would wrongly cover the next record at the
+        // start of every gap (review 2026-09-28). 0x4e coverage is by ring cursor (`liveFrameCursors`).
+        let fill = WorkoutBufferedSportFill.fill(captured: fallbackCapturedSamples, buffered: buffered,
+                                                 window: DateInterval(start: start, end: end),
+                                                 alreadyMerged: mergedBufferedCursors,
+                                                 liveFrameCursors: carriedSportFrameCursors.union(session.sportFrameCursors))
+        guard !fill.cursors.isEmpty else { return }
+        mergedBufferedCursors.formUnion(fill.cursors)
+        bufferedSteps += fill.steps
+        for s in fill.hrSamples { agg.add(sample: s) }
+        hrSampleCount += fill.hrSamples.count
+        let maxHR = max(220 - HealthKitWriter.storedUserProfile().age, 1)
+        liveZoneBreakdown = HRZoneClassifier.timeInZonesHeld(
+            hrSamples: agg.collectedSamples, maxHR: maxHR, sessionEnd: end)
+    }
+
+
     /// Snapshot the ring's live HR — but record a sample ONLY for a genuinely fresh lock, never
     /// the value the ring holds in `liveHR` between polls. `RingSession.liveHR` is a latch that is
     /// never cleared while monitoring, so the old "record it every poll" logic re-emitted one early
@@ -676,6 +757,7 @@ final class WorkoutSessionManager: NSObject {
         // Attribute the ~2 s window leading up to the lock's true capture time (not "now").
         let sample = HRSample(bpm: bpm, start: at.addingTimeInterval(-2), end: at)
         aggregator?.add(sample: sample)
+        if session.sportUsingLivePollFallback { fallbackCapturedSamples.append(sample) }
         hrSampleCount += 1
         currentHR = bpm
         currentHRAt = at

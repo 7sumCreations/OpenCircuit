@@ -329,6 +329,13 @@ final class RingSession: NSObject {
     /// Surfacing/confirmation and durable persistence are deliberately separate from the decoder.
     private(set) var automaticWorkoutCandidates: [AutomaticWorkoutDetector.Candidate] = []
     private var historicalSportSamples: [HistoricalSportFrame.Sample] = []
+    /// The ring's buffered 10-s sport records (`0x4d`), read by a running MANUAL workout to fill the
+    /// HR it could not stream live while the phone was out of range (`WorkoutBufferedSportFill`).
+    var bufferedSportSamples: [HistoricalSportFrame.Sample] { historicalSportSamples }
+    /// Start of the manual workout currently recording, if any. While set, the ring's buffered
+    /// records from that window are the workout's own data — never an "automatically detected"
+    /// workout (tester report 2026-09-27: his pickleball session popped up as a detected walk).
+    private var activeManualWorkoutStart: Date?
     /// User-controlled ring-side automatic recognition state. Persisted per ring because the command
     /// changes firmware state and survives a BLE reconnect; we cannot query it yet from a status frame.
     private(set) var automaticWorkoutDetectionEnabled = false
@@ -904,6 +911,15 @@ final class RingSession: NSObject {
             key: resolvedAutomaticWorkoutSpansKey, legacyKey: legacyResolvedAutomaticWorkoutCursorsKey)
         notifiedAutomaticWorkoutSpans = loadAutomaticWorkoutSpans(
             key: notifiedAutomaticWorkoutSpansKey, legacyKey: legacyNotifiedAutomaticWorkoutCursorsKey)
+        // A workout already recording (this session replaces one that dropped mid-workout) must be
+        // known BEFORE the init-time rebuild below, or that rebuild builds and ANNOUNCES the
+        // workout's own buffered records as a "detected walk" before `adoptReconnectedSession` can
+        // call `noteManualWorkout` (review 2026-09-28 — the exact reconnect the tester hit).
+        if UserDefaults.standard.bool(forKey: WorkoutSessionManager.workoutInProgressKey),
+           let snapshot = WorkoutSessionSnapshot.decoded(
+               from: UserDefaults.standard.data(forKey: WorkoutSessionManager.sessionSnapshotKey)) {
+            activeManualWorkoutStart = snapshot.startDate
+        }
         if let data = UserDefaults.standard.data(forKey: automaticWorkoutSamplesKey),
            let saved = try? JSONDecoder().decode([HistoricalSportFrame.Sample].self, from: data) {
             mergeHistoricalSportSamples(saved)
@@ -2323,6 +2339,10 @@ final class RingSession: NSObject {
     private(set) var sportSessionActive = false
     /// Ring-counted steps during the current/last native workout (Σ of `0x4e` byte[6], #90).
     private(set) var sportSteps = 0
+    /// Ring cursors of every `0x4e` frame this session received in the current sport session — the
+    /// live frames whose steps `sportSteps` already summed. A manual workout uses them to decide which
+    /// buffered `0x4d` records it may still add (`WorkoutBufferedSportFill`, review 2026-09-28).
+    private(set) var sportFrameCursors: Set<UInt32> = []
     /// True for the WHOLE workout (`beginSportSession`..`endSportSession`), whether HR is coming from
     /// the native `0x4e` sport stream OR the `0x15` live-poll fallback below. `collectHRSnapshot`
     /// gates on THIS (not `sportSessionActive`) so the workout keeps recording HR after a fallback.
@@ -2332,7 +2352,7 @@ final class RingSession: NSObject {
     private var sportGotFirstFrame = false
     /// True once the ring proved it won't stream `0x4e` and we switched the workout to the `0x95`
     /// live-HR poll. `endSportSession` tears that poll down.
-    private var sportUsingLivePollFallback = false
+    private(set) var sportUsingLivePollFallback = false
     /// Timestamp of the most recent `0x4e` sport frame (any frame, even a warm-up one). The
     /// whole-session watchdog falls back to the live-HR poll if the stream STALLS after starting —
     /// the ring streaming one frame then going silent must not leave the workout HR-less (#90).
@@ -2446,6 +2466,7 @@ final class RingSession: NSObject {
         // hold directly and only start the poll if the fallback below fires.
         workoutHolding = true
         sportSteps = 0
+        sportFrameCursors = []
         liveHR = nil
         liveHRAt = nil
         sportGotFirstFrame = false
@@ -3172,7 +3193,7 @@ final class RingSession: NSObject {
         let rebuilt = AutomaticWorkoutInbox.rebuild(
             existing: historicalSportSamples,
             incoming: incoming,
-            resolvedSpans: resolvedAutomaticWorkoutSpans
+            resolvedSpans: resolvedAutomaticWorkoutSpans + activeManualWorkoutSpans()
         )
         historicalSportSamples = rebuilt.samples
         automaticWorkoutCandidates = rebuilt.candidates
@@ -3260,6 +3281,58 @@ final class RingSession: NSObject {
         } catch {
             return false
         }
+    }
+
+    /// The running manual workout's window as a cursor span (start → now), or nothing.
+    private func activeManualWorkoutSpans(now: Date = Date()) -> [CursorSpan] {
+        // Honoured only while the durable in-progress flag is set, so a crashed / ended workout can
+        // never keep suppressing real detections for the rest of a session's life.
+        guard UserDefaults.standard.bool(forKey: WorkoutSessionManager.workoutInProgressKey) else {
+            activeManualWorkoutStart = nil   // never revive a stale start for a later workout
+            return []
+        }
+        guard let start = activeManualWorkoutStart, start <= now else { return [] }
+        return [CursorSpan(window: DateInterval(start: start, end: now))]
+    }
+
+    /// A manual workout started (or was re-adopted after a reconnect) at `start`: its window is the
+    /// user's own session, so auto-detection must not offer it back. Drops any candidate already
+    /// built over it.
+    func noteManualWorkout(startedAt start: Date) {
+        activeManualWorkoutStart = start
+        let spans = activeManualWorkoutSpans()
+        automaticWorkoutCandidates.removeAll { c in spans.contains { $0.overlaps(c.cursorSpan) } }
+    }
+
+    /// The manual workout ended and was SAVED: remember its window permanently (same bookkeeping as
+    /// a reviewed candidate), so records the ring hands over later for that window stay suppressed.
+    ///
+    /// Called OPTIMISTICALLY at Stop, before the durable in-progress flag is cleared and before the
+    /// HealthKit write (review 2026-09-28): clearing the flag first left the ~1–2 s of awaits
+    /// unprotected, and the drain `endSportSession` re-arms can land a `0x4d` page that re-announces
+    /// the whole workout. Persisted immediately, so a session built by a reconnect in that window
+    /// loads it. `unresolveManualWorkout` takes it back if the workout is not saved.
+    @discardableResult
+    func resolveManualWorkout(window: DateInterval) -> CursorSpan {
+        activeManualWorkoutStart = nil
+        let span = CursorSpan(window: window)
+        if !resolvedAutomaticWorkoutSpans.contains(span) { resolvedAutomaticWorkoutSpans.append(span) }
+        automaticWorkoutCandidates.removeAll { $0.cursorSpan.overlaps(span) }
+        persistAutomaticWorkoutSpans(resolvedAutomaticWorkoutSpans, key: resolvedAutomaticWorkoutSpansKey)
+        return span
+    }
+
+    /// Undo an optimistic `resolveManualWorkout` for a workout that was NOT saved, so its records can
+    /// be reviewed as a detected workout instead of vanishing. Removes only that exact span.
+    func unresolveManualWorkout(_ span: CursorSpan) {
+        activeManualWorkoutStart = nil
+        resolvedAutomaticWorkoutSpans.removeAll { $0 == span }
+        persistAutomaticWorkoutSpans(resolvedAutomaticWorkoutSpans, key: resolvedAutomaticWorkoutSpansKey)
+    }
+
+    /// The manual workout was discarded: its records may be offered as a detected workout again.
+    func clearManualWorkout() {
+        activeManualWorkoutStart = nil
     }
 
     /// Permanently remove a reviewed candidate from the two-day inbox. Saving and dismissing share
@@ -5196,6 +5269,7 @@ extension RingSession: CBPeripheralDelegate {
                     self.write(Command.sportStreamAck)
                     if let sample = SportFrame.decode(bytes) {
                         self.sportSteps += sample.steps
+                        self.sportFrameCursors.insert(sample.cursor)
                         if let hr = sample.hr {
                             self.liveHR = hr
                             self.liveHRAt = Date()   // true capture time (drives the workout dedup gate)

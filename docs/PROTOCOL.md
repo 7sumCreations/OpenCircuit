@@ -824,6 +824,15 @@ fell **31.4→26.6 °C**; against that ground truth:
   returns a fresh descriptor carrying this byte even mid-session, so it is pollable — the sport-enter
   "reach idle" fast path watches `[2]` for `0x02`/`0x03` before `06 03`. Surfaced as
   `RingSession.lastDescriptorMode`.
+- **A sport session keeps recording while the phone is away, and hands the gap over as `0x4d`** 🟡
+  (Gen 3 FR05.011 tester, 2026-09-27 pickleball): with the phone repeatedly out of range, later drains
+  delivered `0x4d` 10-s HR+steps records (94 / 72 / 251 of them) for the session's window. The app
+  fills a manual workout's live gaps from them (`WorkoutBufferedSportFill`), skipping any record whose
+  interval `(end − 10, end]` holds a received `0x4e` frame's cursor. That rule assumes the live `0x4e`
+  cursors and the buffered `0x4d` cursors of ONE session are interval-END seconds on the same ~10-s
+  grid — 🟡 **unproven on the wire**: the two committed fixtures come from different captures and sit at
+  different phases. If `0x4e` jitters off 10 s, a record's steps can occasionally count twice. One
+  btsnoop holding a session's live `0x4e` cursors AND its later `0x4d` cursors settles it.
 
 **`[6:8]` / `[8:10]` = skin temperature in 0.1 °C** 🟢 (ground-truthed 2026-06-15,
 `captures/morning_temp_20260615`). Two near-equal 16-bit BE values (e.g. `01 64 01 65` =
