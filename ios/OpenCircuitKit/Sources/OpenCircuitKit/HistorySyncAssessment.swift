@@ -101,6 +101,12 @@ public struct HistoryChannelTrace: Equatable, Codable, Sendable {
     /// and silently wipe the user's whole diagnostics history on upgrade. An Optional decodes via
     /// `decodeIfPresent` and simply reads back `nil` for traces written before this field existed.
     public var openWriteFailed: Bool?
+    /// `07 00 00` re-asks sent at this channel's quiet exit because pages had arrived but no `0x50`
+    /// (`DrainContinuation`). Optional for the same decode-compat reason as `openWriteFailed`.
+    public var fetchNudges: Int?
+    /// 0 for a channel's first open in a sync, n for its n-th immediate reopen (`DrainContinuation`).
+    /// Optional for the same decode-compat reason as `openWriteFailed`.
+    public var reopenRound: Int?
     public var page4CCount = 0
     public var page47Count = 0
     /// `0x4d` pages seen on this channel — the per-epoch SPORT record (#179). The sport channel

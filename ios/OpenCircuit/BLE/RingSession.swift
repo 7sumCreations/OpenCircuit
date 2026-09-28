@@ -410,6 +410,9 @@ final class RingSession: NSObject {
     /// flush have no BLE traffic — without this, iOS can suspend us mid-commit.
     private var drainAssertion: UIBackgroundTaskIdentifier = .invalid
     private var drainTraces: [HistoryChannelTrace] = []
+    /// Sleep-vitals records THIS drain pulled on a non-sleep channel — a night handed to the all-day
+    /// channel (Gen 3 FR05.011, 2026-09-28). Feeds `HistoryCommitGate`'s grow-only restage.
+    private var nightRecordsOnOtherChannels = 0
     /// This pass's channel traces, read-only. `performHistoryDrain` clears them at the head and
     /// `finalizeSync` flips `syncing` at the tail, so an observer watching `syncing` go false sees
     /// exactly this drain's traces (#188).
@@ -3597,6 +3600,7 @@ final class RingSession: NSObject {
         bulkFinalized = false                    // fresh capture — uncommitted until finalizeSync
         historySamples.removeAll()
         drainTraces.removeAll()
+        nightRecordsOnOtherChannels = 0
         activeDrainTrace = nil
         // Do NOT wipe the staged sleep here. A periodic drain often returns EMPTY (nothing un-synced),
         // and `finalizeSync`'s empty branch deliberately doesn't re-stage; wiping first would blank
@@ -3661,7 +3665,42 @@ final class RingSession: NSObject {
             resumeHint: hint)
         for step in plan {
             if Task.isCancelled { break }
-            await drainChannel(channel: step.channel, label: step.label)
+            // HALF-NIGHT SYNC (2026-09-28): a channel that goes quiet with no `0x50` after adding
+            // records is reopened while each round keeps yielding NEW records (`DrainContinuation`),
+            // so the whole backlog lands in THIS sync and the night is staged once, complete —
+            // instead of being staged from its first few minutes and trickling in over hours.
+            // Progress is counted in UNIQUE record counters: `bulkRecords` is append-only, so a
+            // ring re-sending pages would otherwise read as progress. Never for the sport channel
+            // (its yield is `historicalSportSamples`, and its review data is not time-critical).
+            // The workout-start prime (`allDayOnly`) gets NO continuation: its short budget exists to
+            // put the ring into measuring mode, and overrunning it degrades the workout to live-poll.
+            let continuationAllowed = !allDayOnly && step.channel != Command.syncChannelSport
+            var round = 0
+            while true {
+                let uniqueBefore = Set(bulkRecords.map(\.counter)).count
+                let countBefore = bulkRecords.count
+                await drainChannel(channel: step.channel, label: step.label, reopenRound: round,
+                                   allowContinuation: continuationAllowed)
+                // Only NIGHT records earn the restage — the all-day channel's routine daytime SpO₂
+                // shares the layout (`HistoryCommitGate.isNightRecord`). Not for the workout prime.
+                if !allDayOnly, step.channel != Command.syncChannelSleep, bulkRecords.count > countBefore {
+                    let window = nightWindow
+                    nightRecordsOnOtherChannels += bulkRecords[countBefore...].filter {
+                        $0.layout == .sleepVitals
+                            && HistoryCommitGate.isNightRecord($0.date(epoch: Command.syncEpoch), window: window)
+                    }.count
+                }
+                if Task.isCancelled || !continuationAllowed { break }
+                let gained = Set(bulkRecords.map(\.counter)).count - uniqueBefore
+                let backgrounded = UIApplication.shared.applicationState == .background
+                guard DrainContinuation.shouldReopen(
+                    exitReason: drainTraces.last?.exitReason, recordsAdded: gained, round: round,
+                    inBackground: backgrounded,
+                    backgroundSecondsRemaining: backgrounded ? UIApplication.shared.backgroundTimeRemaining : 0)
+                else { break }
+                round += 1
+                ringLog.notice("sync: ch=\(step.label, privacy: .public) quiet without 0x50 after +\(gained) new records — reopening (round \(round))")
+            }
         }
         let sportSummary = automaticWorkoutDetectionEnabled
             ? " · sport \(drainCountsByLabel["sport"] ?? 0) samples"
@@ -3793,7 +3832,8 @@ final class RingSession: NSObject {
     /// backstop — which EXTENDS while pages are still streaming (see the loop), so
     /// nothing can hang the sync. `syncDone`/`syncQuietTicks` reset per channel so each channel's
     /// end-marker is awaited independently.
-    private func drainChannel(channel: UInt8, label: String) async {
+    private func drainChannel(channel: UInt8, label: String, reopenRound: Int = 0,
+                              allowContinuation: Bool = false) async {
         syncDone = false
         syncQuietTicks = 0
         activeDrainPageCount = 0
@@ -3802,6 +3842,7 @@ final class RingSession: NSObject {
         let open = Command.syncUpToNow(channel: channel)
         var trace = HistoryChannelTrace(label: label, channel: channel)
         trace.recordsAtStart = recordsAtStart
+        trace.reopenRound = reopenRound
         activeDrainTrace = trace
         if captureRawFrames {
             rawCaptureLog.append("# --- history drain channel \(label) (0x\(String(format: "%02X", channel))) ---")
@@ -3838,7 +3879,7 @@ final class RingSession: NSObject {
             ringLog.notice("sync: ch=\(label, privacy: .public) ABORT — link unusable, open never sent")
             print("[OC] sync ABORT ch=\(label) link-down")
             finishActiveDrainTrace(.linkUnusable)
-            drainCountsByLabel[label] = 0
+            drainCountsByLabel[label, default: 0] += 0
             return
         }
         var firstPageTick: Int? = nil
@@ -3860,6 +3901,11 @@ final class RingSession: NSObject {
         // ⚠️ Do NOT re-narrow this into a mid-stream cut; that is the known data-loss bug.
         var cap = Self.drainTickCap
         var tick = 0
+        // Quiet-without-0x50 re-asks (`DrainContinuation.shouldNudge`), counted against progress in
+        // UNIQUE record counters so a re-sent page cannot keep a finished channel alive.
+        var nudgesWithoutProgress = 0
+        var nudgesThisRound = 0
+        var uniqueAtLastNudge = -1
         while tick < cap {
             try? await Task.sleep(for: .seconds(1))
             if Task.isCancelled {
@@ -3910,7 +3956,34 @@ final class RingSession: NSObject {
                 finishActiveDrainTrace(.quietNoPages)
                 break
             }
-            if syncDone || (sawPages && syncQuietTicks >= 3) || (ackedEmpty && syncQuietTicks >= 3) {
+            // A nudge must NOT `continue` past the budget-extension step at the bottom of this loop:
+            // reaching `cap` right after one would fall out as `.hardTimeout` → `.partial` → the
+            // night banked but never staged. So it only suppresses THIS tick's exit check.
+            var nudged = false
+            if !syncDone, sawPages, syncQuietTicks >= 3 {
+                let unique = Set(bulkRecords.map(\.counter)).count
+                if uniqueAtLastNudge >= 0, unique > uniqueAtLastNudge { nudgesWithoutProgress = 0 }
+                let backgrounded = UIApplication.shared.applicationState == .background
+                if DrainContinuation.shouldNudge(
+                    sawPages: true, sawEndMarker: false,
+                    nudgesWithoutProgress: nudgesWithoutProgress, nudgesThisRound: nudgesThisRound,
+                    tick: tick, ceiling: Self.drainTickCeiling,
+                    inBackground: backgrounded,
+                    backgroundSecondsRemaining: backgrounded ? UIApplication.shared.backgroundTimeRemaining : 0,
+                    allowed: allowContinuation),
+                   write(Command.fetch) {
+                    // Pages arrived, the ring went quiet, and it never said it was done: ask once
+                    // more before calling the channel finished (half-night sync, 2026-09-28).
+                    nudgesWithoutProgress += 1
+                    nudgesThisRound += 1
+                    uniqueAtLastNudge = unique
+                    syncQuietTicks = 0
+                    activeDrainTrace?.fetchNudges = (activeDrainTrace?.fetchNudges ?? 0) + 1
+                    ringLog.notice("sync: ch=\(label, privacy: .public) quiet without 0x50 at \(tick)s — fetch nudge")
+                    nudged = true
+                }
+            }
+            if !nudged, syncDone || (sawPages && syncQuietTicks >= 3) || (ackedEmpty && syncQuietTicks >= 3) {
                 let added = channel == Command.syncChannelSport
                     ? self.historicalSportSamples.count - sportSamplesAtStart
                     : self.bulkRecords.count - recordsAtStart
@@ -3944,7 +4017,8 @@ final class RingSession: NSObject {
             let sawPages = activeDrainPageCount > 0
             finishActiveDrainTrace(sawPages ? .hardTimeout : .quietNoPages)
         }
-        drainCountsByLabel[label] = channel == Command.syncChannelSport
+        // Accumulated, not assigned: a reopened channel (`DrainContinuation`) runs this once per round.
+        drainCountsByLabel[label, default: 0] += channel == Command.syncChannelSport
             ? historicalSportSamples.count - sportSamplesAtStart
             : bulkRecords.count - recordsAtStart
     }
@@ -4010,7 +4084,8 @@ final class RingSession: NSObject {
         let commitDecision = HistoryCommitGate.decide(
             outcome: sleepOutcome,
             recordsAdded: sleepTrace?.recordsAdded ?? 0,
-            adoptedRecordCount: adoptedRecordCount)
+            adoptedRecordCount: adoptedRecordCount,
+            nightRecordsOnOtherChannels: nightRecordsOnOtherChannels)
         // TEMP DIAGNOSTIC (sleep-empty investigation): pinpoint which stage of the staging pipeline
         // loses the night — archive union size, the night-scoped slice `latestNightRecords` picked,
         // and whether `mainSleep`'s motion-based block detector finds anything at all in that slice.
@@ -4077,7 +4152,7 @@ final class RingSession: NSObject {
                 ringLog.notice("sleep: skip re-stage/persist — \(detail, privacy: .public)")
             }
             if commitDecision == .restageFromArchive {
-                ringLog.notice("sleep: this drain may not stage its own slice, but \(self.adoptedRecordCount) adopted records are in the archive — re-staging from the union (#188)")
+                ringLog.notice("sleep: this drain may not stage its own slice, but \(self.adoptedRecordCount) adopted + \(self.nightRecordsOnOtherChannels) night-on-other-channel records are in the archive — re-staging from the union (#188)")
                 let restaged = restageFromArchive()
                 stagedThisDrain = restaged != nil
                 committedSleep = restaged?.wroteRow ?? false
@@ -4416,7 +4491,7 @@ final class RingSession: NSObject {
         // STRUCTURALLY 0 on the sport channel — do not read it as "the sport drain pulled nothing".
         observability.recordMetricEvent(
             source: "history-drain",
-            detail: "trigger=\(historySyncTrigger) label=\(trace.label) outcome=\(outcome) ack=\(trace.sawSyncAck) 4c=\(trace.page4CCount) 4cBad=\(corruptPage4CCount) 47=\(trace.page47Count) 4d=\(trace.page4DCount ?? 0) sport=\(trace.sportSampleCount ?? 0) 50=\(trace.endMarkerCount) added=\(trace.recordsAdded)"
+            detail: "trigger=\(historySyncTrigger) label=\(trace.label) outcome=\(outcome) ack=\(trace.sawSyncAck) 4c=\(trace.page4CCount) 4cBad=\(corruptPage4CCount) 47=\(trace.page47Count) 4d=\(trace.page4DCount ?? 0) sport=\(trace.sportSampleCount ?? 0) 50=\(trace.endMarkerCount) added=\(trace.recordsAdded) round=\(trace.reopenRound ?? 0) nudges=\(trace.fetchNudges ?? 0)"
         )
         noteDrainForStallEvidence(trace)
         activeDrainTrace = nil

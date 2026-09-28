@@ -912,6 +912,19 @@ is undecoded 🔴.
 > end-of-history ROLE (arrives after the last page; `EpochSyncSession` / `parseEndOfHistory`) is
 > unchanged and nothing here alters how the app finalizes a drain.
 
+> **A channel can go quiet mid-backlog WITHOUT a `0x50` 🟡 (2026-09-28, Gen 3 FR05.011).** One ring
+> held a whole night yet answered four morning opens with 1–2 `0x4c` pages each and no `0x50`
+> (9/3/3/8 records, timestamps marching forward 03:11→04:23 across the opens); another FR05.011
+> ring the same morning streamed 22 pages in 6 s and ended on `0x50`. So "3 s quiet after pages" is
+> not end-of-history on every ring. **And the night came on the ALL-DAY channel (`0x03`) in 3 of those
+> 4 opens** while the sleep channel (`0x00`) ACKed with zero pages — so on FR05.011 a night's epochs
+> are NOT reliably on the sleep channel, and anything keyed on the sleep trace alone (the commit gate)
+> misses them; `HistoryCommitGate` now re-stages from the archive when night-layout records arrive on
+> another channel. The app now re-asks (`07 00 00`) at that quiet exit and reopens
+> the channel while each round yields NEW records (`DrainContinuation`). Whether the ring was waiting
+> for a fetch or only releases a chunk per open is 🔴 unknown — the traces' `nudges` / `round`
+> fields will say which on the next affected bundle.
+
 #### 5.5.1 `0x50` entries = the ring's event log 🟢 layout / 🟡 meaning
 **Layout 🟢:** `50 00 <hidden>` then a whole number of 6-byte entries `[type][value][cursor:4 BE]`,
 cursor in `syncEpoch` seconds, no trailer. Measured: all 69 distinct `0x50` frames (65 multi-entry,
