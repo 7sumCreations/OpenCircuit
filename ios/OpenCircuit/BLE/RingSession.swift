@@ -2349,7 +2349,7 @@ final class RingSession: NSObject {
     private var sportGotFirstFrame = false
     /// True once the ring proved it won't stream `0x4e` and we switched the workout to the `0x95`
     /// live-HR poll. `endSportSession` tears that poll down.
-    private var sportUsingLivePollFallback = false
+    private(set) var sportUsingLivePollFallback = false
     /// Timestamp of the most recent `0x4e` sport frame (any frame, even a warm-up one). The
     /// whole-session watchdog falls back to the live-HR poll if the stream STALLS after starting —
     /// the ring streaming one frame then going silent must not leave the workout HR-less (#90).
@@ -3284,8 +3284,11 @@ final class RingSession: NSObject {
     private func activeManualWorkoutSpans(now: Date = Date()) -> [CursorSpan] {
         // Honoured only while the durable in-progress flag is set, so a crashed / ended workout can
         // never keep suppressing real detections for the rest of a session's life.
-        guard UserDefaults.standard.bool(forKey: WorkoutSessionManager.workoutInProgressKey),
-              let start = activeManualWorkoutStart, start <= now else { return [] }
+        guard UserDefaults.standard.bool(forKey: WorkoutSessionManager.workoutInProgressKey) else {
+            activeManualWorkoutStart = nil   // never revive a stale start for a later workout
+            return []
+        }
+        guard let start = activeManualWorkoutStart, start <= now else { return [] }
         return [CursorSpan(window: DateInterval(start: start, end: now))]
     }
 
@@ -3300,11 +3303,27 @@ final class RingSession: NSObject {
 
     /// The manual workout ended and was SAVED: remember its window permanently (same bookkeeping as
     /// a reviewed candidate), so records the ring hands over later for that window stay suppressed.
-    func resolveManualWorkout(window: DateInterval) {
+    ///
+    /// Called OPTIMISTICALLY at Stop, before the durable in-progress flag is cleared and before the
+    /// HealthKit write (review 2026-09-28): clearing the flag first left the ~1–2 s of awaits
+    /// unprotected, and the drain `endSportSession` re-arms can land a `0x4d` page that re-announces
+    /// the whole workout. Persisted immediately, so a session built by a reconnect in that window
+    /// loads it. `unresolveManualWorkout` takes it back if the workout is not saved.
+    @discardableResult
+    func resolveManualWorkout(window: DateInterval) -> CursorSpan {
         activeManualWorkoutStart = nil
         let span = CursorSpan(window: window)
-        resolvedAutomaticWorkoutSpans.append(span)
+        if !resolvedAutomaticWorkoutSpans.contains(span) { resolvedAutomaticWorkoutSpans.append(span) }
         automaticWorkoutCandidates.removeAll { $0.cursorSpan.overlaps(span) }
+        persistAutomaticWorkoutSpans(resolvedAutomaticWorkoutSpans, key: resolvedAutomaticWorkoutSpansKey)
+        return span
+    }
+
+    /// Undo an optimistic `resolveManualWorkout` for a workout that was NOT saved, so its records can
+    /// be reviewed as a detected workout instead of vanishing. Removes only that exact span.
+    func unresolveManualWorkout(_ span: CursorSpan) {
+        activeManualWorkoutStart = nil
+        resolvedAutomaticWorkoutSpans.removeAll { $0 == span }
         persistAutomaticWorkoutSpans(resolvedAutomaticWorkoutSpans, key: resolvedAutomaticWorkoutSpansKey)
     }
 
