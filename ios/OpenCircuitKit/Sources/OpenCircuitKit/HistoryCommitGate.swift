@@ -57,4 +57,27 @@ public enum HistoryCommitGate {
         if adoptedRecordCount > 0 || nightRecordsOnOtherChannels > 0 { return .restageFromArchive }
         return .skip
     }
+
+    /// Slack after the night window's end within which an off-channel sleep-vitals record still
+    /// counts as night. POLICY (review 2026-09-28): generous enough for a late wake, short enough to
+    /// exclude the all-day channel's routine ~10-min daytime SpO₂ epochs (same layout, §5.6.1).
+    public static let offChannelNightLateMargin: TimeInterval = 2 * 3600
+
+    /// Does an off-channel sleep-vitals record at `date` belong to a NIGHT (and so may earn a
+    /// restage)? `window` is the app's cached night window, which may be last night's or tonight's
+    /// depending on when it was refreshed — so both it and the same window one day earlier are
+    /// tried, each extended by `lateMargin`. Without a window nothing can be ruled out: `true`.
+    ///
+    /// WHY NOT COUNT EVERY SLEEP-VITALS RECORD. The all-day channel carries daytime SpO₂ in the same
+    /// layout, so that would restage on ordinary daytime drains; `SleepSummaryMerge` keeps the
+    /// LARGER asleep total, so any restage that ever inflated a night would win permanently.
+    /// Restaging only for real night records keeps that exposure where it was.
+    public static func isNightRecord(_ date: Date, window: DateInterval?,
+                                     lateMargin: TimeInterval = offChannelNightLateMargin) -> Bool {
+        guard let window else { return true }
+        return [0.0, -86_400].contains { shift in
+            date >= window.start.addingTimeInterval(shift)
+                && date <= window.end.addingTimeInterval(shift + lateMargin)
+        }
+    }
 }

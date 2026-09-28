@@ -65,6 +65,24 @@ final class DrainContinuationTests: XCTestCase {
                        "a complete sleep channel still stages its own slice")
     }
 
+    /// Review follow-up: only night records earn the restage — not the all-day channel's daytime SpO₂.
+    func testOnlyNightRecordsCountAsNightOnAnotherChannel() {
+        let cal = Calendar(identifier: .gregorian)
+        func at(_ d: Int, _ h: Int, _ m: Int = 0) -> Date {
+            var c = DateComponents(year: 2026, month: 9, day: d, hour: h, minute: m)
+            c.timeZone = TimeZone(identifier: "America/New_York")
+            return cal.date(from: c)!
+        }
+        let lastNight = DateInterval(start: at(27, 22, 30), end: at(28, 9, 30))
+        let tonight = DateInterval(start: at(28, 22, 30), end: at(29, 9, 30))
+        for window in [lastNight, tonight] {                  // whichever the app has cached
+            XCTAssertTrue(HistoryCommitGate.isNightRecord(at(28, 3, 11), window: window), "the tester's 03:11 record")
+            XCTAssertTrue(HistoryCommitGate.isNightRecord(at(28, 11, 0), window: window), "a late wake inside the margin")
+            XCTAssertFalse(HistoryCommitGate.isNightRecord(at(28, 14, 0), window: window), "daytime SpO₂")
+        }
+        XCTAssertTrue(HistoryCommitGate.isNightRecord(at(28, 14, 0), window: nil), "no window: cannot rule out")
+    }
+
     /// The tester's four drains each ended `quietAfterPages` with records added — every one would
     /// now have been followed by a reopen in the foreground.
     func testTricklingRoundsReopenInForeground() {

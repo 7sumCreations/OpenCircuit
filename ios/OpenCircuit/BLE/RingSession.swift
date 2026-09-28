@@ -3681,9 +3681,14 @@ final class RingSession: NSObject {
                 let countBefore = bulkRecords.count
                 await drainChannel(channel: step.channel, label: step.label, reopenRound: round,
                                    allowContinuation: continuationAllowed)
-                if step.channel != Command.syncChannelSleep, bulkRecords.count > countBefore {
-                    nightRecordsOnOtherChannels += bulkRecords[countBefore...]
-                        .filter { $0.layout == .sleepVitals }.count
+                // Only NIGHT records earn the restage — the all-day channel's routine daytime SpO₂
+                // shares the layout (`HistoryCommitGate.isNightRecord`). Not for the workout prime.
+                if !allDayOnly, step.channel != Command.syncChannelSleep, bulkRecords.count > countBefore {
+                    let window = nightWindow
+                    nightRecordsOnOtherChannels += bulkRecords[countBefore...].filter {
+                        $0.layout == .sleepVitals
+                            && HistoryCommitGate.isNightRecord($0.date(epoch: Command.syncEpoch), window: window)
+                    }.count
                 }
                 if Task.isCancelled || !continuationAllowed { break }
                 let gained = Set(bulkRecords.map(\.counter)).count - uniqueBefore
