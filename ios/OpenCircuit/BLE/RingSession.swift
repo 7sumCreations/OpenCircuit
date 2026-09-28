@@ -908,6 +908,15 @@ final class RingSession: NSObject {
             key: resolvedAutomaticWorkoutSpansKey, legacyKey: legacyResolvedAutomaticWorkoutCursorsKey)
         notifiedAutomaticWorkoutSpans = loadAutomaticWorkoutSpans(
             key: notifiedAutomaticWorkoutSpansKey, legacyKey: legacyNotifiedAutomaticWorkoutCursorsKey)
+        // A workout already recording (this session replaces one that dropped mid-workout) must be
+        // known BEFORE the init-time rebuild below, or that rebuild builds and ANNOUNCES the
+        // workout's own buffered records as a "detected walk" before `adoptReconnectedSession` can
+        // call `noteManualWorkout` (review 2026-09-28 — the exact reconnect the tester hit).
+        if UserDefaults.standard.bool(forKey: WorkoutSessionManager.workoutInProgressKey),
+           let snapshot = WorkoutSessionSnapshot.decoded(
+               from: UserDefaults.standard.data(forKey: WorkoutSessionManager.sessionSnapshotKey)) {
+            activeManualWorkoutStart = snapshot.startDate
+        }
         if let data = UserDefaults.standard.data(forKey: automaticWorkoutSamplesKey),
            let saved = try? JSONDecoder().decode([HistoricalSportFrame.Sample].self, from: data) {
             mergeHistoricalSportSamples(saved)
@@ -2327,6 +2336,10 @@ final class RingSession: NSObject {
     private(set) var sportSessionActive = false
     /// Ring-counted steps during the current/last native workout (Σ of `0x4e` byte[6], #90).
     private(set) var sportSteps = 0
+    /// Ring cursors of every `0x4e` frame this session received in the current sport session — the
+    /// live frames whose steps `sportSteps` already summed. A manual workout uses them to decide which
+    /// buffered `0x4d` records it may still add (`WorkoutBufferedSportFill`, review 2026-09-28).
+    private(set) var sportFrameCursors: Set<UInt32> = []
     /// True for the WHOLE workout (`beginSportSession`..`endSportSession`), whether HR is coming from
     /// the native `0x4e` sport stream OR the `0x15` live-poll fallback below. `collectHRSnapshot`
     /// gates on THIS (not `sportSessionActive`) so the workout keeps recording HR after a fallback.
@@ -2450,6 +2463,7 @@ final class RingSession: NSObject {
         // hold directly and only start the poll if the fallback below fires.
         workoutHolding = true
         sportSteps = 0
+        sportFrameCursors = []
         liveHR = nil
         liveHRAt = nil
         sportGotFirstFrame = false
@@ -3268,7 +3282,10 @@ final class RingSession: NSObject {
 
     /// The running manual workout's window as a cursor span (start → now), or nothing.
     private func activeManualWorkoutSpans(now: Date = Date()) -> [CursorSpan] {
-        guard let start = activeManualWorkoutStart, start <= now else { return [] }
+        // Honoured only while the durable in-progress flag is set, so a crashed / ended workout can
+        // never keep suppressing real detections for the rest of a session's life.
+        guard UserDefaults.standard.bool(forKey: WorkoutSessionManager.workoutInProgressKey),
+              let start = activeManualWorkoutStart, start <= now else { return [] }
         return [CursorSpan(window: DateInterval(start: start, end: now))]
     }
 
@@ -5158,6 +5175,7 @@ extension RingSession: CBPeripheralDelegate {
                     self.write(Command.sportStreamAck)
                     if let sample = SportFrame.decode(bytes) {
                         self.sportSteps += sample.steps
+                        self.sportFrameCursors.insert(sample.cursor)
                         if let hr = sample.hr {
                             self.liveHR = hr
                             self.liveHRAt = Date()   // true capture time (drives the workout dedup gate)

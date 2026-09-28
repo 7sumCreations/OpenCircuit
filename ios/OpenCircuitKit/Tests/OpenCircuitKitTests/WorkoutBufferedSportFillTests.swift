@@ -37,6 +37,24 @@ final class WorkoutBufferedSportFillTests: XCTestCase {
         XCTAssertFalse(fill.cursors.contains(r[3].cursor))
     }
 
+    /// Review 2026-09-28: live `0x4e` frames that produced NO HR sample (warm-up, dropout, frames the
+    /// 2-s poll missed) still had their steps summed live — their buffered records must be skipped
+    /// entirely, or those steps count twice. Coverage is by the ring's own cursor, any phase offset.
+    func testLiveFramesWithoutHRStillCoverTheirRecords() throws {
+        let r = try records()
+        for phase: UInt32 in [0, 3, 9] {                          // 0x4e cursor offset within the 10 s
+            let liveCursors = Set(r[2...5].map { $0.cursor - phase })
+            let fill = WorkoutBufferedSportFill.fill(captured: [], buffered: r, window: window(r),
+                                                     liveFrameCursors: liveCursors)
+            XCTAssertEqual(fill.cursors.count, r.count - 4, "phase \(phase)")
+            for i in 2...5 { XCTAssertFalse(fill.cursors.contains(r[i].cursor), "phase \(phase) record \(i)") }
+        }
+        // A frame just outside a record's interval does not cover it.
+        let outside = WorkoutBufferedSportFill.fill(captured: [], buffered: r, window: window(r),
+                                                    liveFrameCursors: [r[4].cursor + 1])
+        XCTAssertTrue(outside.cursors.contains(r[4].cursor))
+    }
+
     /// Records outside the workout window never enter it; a second merge adds nothing new.
     func testWindowAndIdempotence() throws {
         let r = try records()

@@ -504,9 +504,13 @@ public enum WorkoutHRBackfill {
 /// so a tester's pickleball session stayed in zone 0 (43 background readings over 90 min) while
 /// ~42 min of the ring's own HR/steps for that very window were offered back as a "detected walk".
 ///
-/// THE RULE. A buffered record is used only where live data is ABSENT: if any captured sample ends
-/// inside the record's 10-s interval (± `liveOverlapSlack`), live wins and the record is skipped, so
-/// nothing is double-counted. Records outside `window`, or without a valid HR, contribute no HR (a
+/// THE RULE. A buffered record is used only where live data is ABSENT. Coverage is decided primarily
+/// by the ring's OWN clock: a live `0x4e` frame whose cursor falls in the record's 10-s interval
+/// `(end − 10, end]` covers it — HR AND steps, because the live path already summed that frame's
+/// steps whether or not it yielded an HR sample (adversarial review 2026-09-28: judging coverage
+/// from HR samples alone double-counted the steps of warm-up / dropout / background-missed frames).
+/// A captured HR sample ending inside the interval (± `liveOverlapSlack`) also covers it — that is
+/// the only signal for the cursor-less `0x95` fallback poll. Records outside `window`, or without a valid HR, contribute no HR (a
 /// record's steps still count if its interval is uncovered and inside the window). Never
 /// interpolates (#45) — every value returned is one the ring measured.
 public enum WorkoutBufferedSportFill {
@@ -525,7 +529,8 @@ public enum WorkoutBufferedSportFill {
     public static func fill(captured: [HRSample],
                             buffered: [HistoricalSportFrame.Sample],
                             window: DateInterval,
-                            alreadyMerged: Set<UInt32> = []) -> Fill {
+                            alreadyMerged: Set<UInt32> = [],
+                            liveFrameCursors: Set<UInt32> = []) -> Fill {
         var hr: [HRSample] = []
         var steps = 0
         var used: Set<UInt32> = []
@@ -534,6 +539,10 @@ public enum WorkoutBufferedSportFill {
             let end = record.endDate
             let start = end.addingTimeInterval(-interval)
             guard start >= window.start, end <= window.end else { continue }
+            let span = UInt32(interval)
+            if (0 ..< span).contains(where: { record.cursor >= $0 && liveFrameCursors.contains(record.cursor - $0) }) {
+                continue
+            }
             let lo = start.addingTimeInterval(-liveOverlapSlack)
             let hi = end.addingTimeInterval(liveOverlapSlack)
             if captured.contains(where: { $0.end >= lo && $0.end <= hi }) { continue }
