@@ -40,14 +40,21 @@ public enum HistoryCommitGate {
     ///   - recordsAdded: records this drain pulled off the wire itself.
     ///   - adoptedRecordCount: records adopted from the unattributed buffer — already ACKed by us,
     ///     already merged into the archive, simply older than this drain's own trace.
+    ///   - nightRecordsOnOtherChannels: sleep-vitals-layout records THIS drain pulled on a channel
+    ///     other than sleep (i.e. all-day). 🟡 A Gen 3 FR05.011 ring handed its night to the all-day
+    ///     channel in 3 of 4 morning drains while the sleep channel came back `.empty` (2026-09-28),
+    ///     so a gate keyed only on the sleep trace skipped a night that was sitting in hand. They take
+    ///     the grow-only `.restageFromArchive` path — never `.stage` — so this can only extend a stored
+    ///     night from the merged union, never shrink a fuller one.
     public static func decide(outcome: HistoryChannelOutcome?,
                               recordsAdded: Int,
-                              adoptedRecordCount: Int) -> Decision {
+                              adoptedRecordCount: Int,
+                              nightRecordsOnOtherChannels: Int = 0) -> Decision {
         let hasFreshRecords = recordsAdded > 0 || adoptedRecordCount > 0
         if outcome?.allowsSleepCommit == true, hasFreshRecords { return .stage }
         // A drain that never ran its sleep channel at all (`outcome == nil`) has no breadcrumb to
         // reason from, but adopted records are self-evidently real — rescue them either way.
-        if adoptedRecordCount > 0 { return .restageFromArchive }
+        if adoptedRecordCount > 0 || nightRecordsOnOtherChannels > 0 { return .restageFromArchive }
         return .skip
     }
 }

@@ -2,12 +2,15 @@
 // finished — the "half-night sync" (tester report 2026-09-28).
 //
 // WHAT HAPPENED. A Gen 3 FR05.011 ring held a whole night, yet each of four morning drains
-// (07:36 → 08:27) exited `quietAfterPages` after 1–2 `0x4c` pages and ZERO `0x50`s, delivering
-// 9 / 3 / 3 / 8 records whose timestamps march forward (03:11–03:31, 03:51–03:56, 03:58–04:03,
-// 04:06–04:23). Every drain classified `.complete`, so the night was staged from what had arrived
-// and the card read "woke at ~4 am". The same morning another FR05.011 ring streamed 22 pages in
-// 6 s and ENDED ON `0x50`. So "quiet for 3 s" is not "done" on every ring — only the `0x50` is a
-// ring-side statement, and even that is not proof the ring is empty (`endmarker-not-ring-empty`).
+// (07:36 → 08:27) ended a channel `quietAfterPages` after 1–2 `0x4c` pages and ZERO `0x50`s,
+// delivering 9 / 3 / 3 / 8 records whose timestamps march forward (03:11–03:31, 03:51–03:56,
+// 03:58–04:03, 04:06–04:23). In 3 of the 4 the night arrived on the ALL-DAY channel while the sleep
+// channel came back `.empty`, so the commit gate (which reads the sleep trace) mostly skipped
+// staging; the card read "woke at ~4 am". The same morning another FR05.011 ring streamed 22 pages
+// in 6 s on the sleep channel and ENDED ON `0x50`. So "quiet for 3 s" is not "done" on every ring —
+// only the `0x50` is a ring-side statement, and even that is not proof the ring is empty
+// (`endmarker-not-ring-empty`). The night-on-another-channel half is `HistoryCommitGate`'s
+// `nightRecordsOnOtherChannels`.
 //
 // THE RULE. Keep asking while the ring keeps giving, and stop the moment it either says it is done
 // (`0x50`) or answers a re-ask with nothing:
@@ -26,6 +29,15 @@ public enum DrainContinuation {
     /// Fetch nudges allowed in a row with NO new page in between. One: a ring that is waiting to be
     /// asked answers the first ask; a ring that is genuinely done costs one extra quiet window.
     public static let maxNudgesWithoutProgress = 1
+    /// Nudges per ROUND, progress or not. Small on purpose: a ring that answers every ask with one
+    /// page would otherwise hold a single round open until `drainTickCeiling`, where it exits
+    /// `.hardTimeout` → `.partial` → the night banked but NOT staged (adversarial review
+    /// 2026-09-28). Sustained continuation belongs to the reopen loop, which gets a fresh budget.
+    public static let maxNudgesPerRound = 2
+    /// Ticks that must remain before the ceiling for a nudge to be allowed: the 3-tick quiet exit it
+    /// re-arms plus ~2 s page latency plus margin — so a nudge can never be what runs a round into
+    /// the ceiling.
+    public static let nudgeHeadroomTicks = 8
 
     /// Reopen rounds per channel per sync. POLICY BOUNDS, not measurements. Foreground: at the
     /// tester's observed 3–9 records per round, 12 rounds cover ~1.5–4.5 h of backlog in about two
@@ -37,10 +49,22 @@ public enum DrainContinuation {
     public static let minBackgroundSecondsForReopen: TimeInterval = 15
 
     /// At the quiet exit: send another fetch instead of ending the channel?
+    ///
+    /// `allowed` is false for the sport channel and for the workout-start prime (its 18 s budget
+    /// exists to put the ring into measuring mode, not to catch up history).
     public static func shouldNudge(sawPages: Bool, sawEndMarker: Bool,
                                    nudgesWithoutProgress: Int,
-                                   maxNudgesWithoutProgress: Int = maxNudgesWithoutProgress) -> Bool {
-        sawPages && !sawEndMarker && nudgesWithoutProgress < maxNudgesWithoutProgress
+                                   nudgesThisRound: Int,
+                                   tick: Int, ceiling: Int,
+                                   inBackground: Bool,
+                                   backgroundSecondsRemaining: TimeInterval,
+                                   allowed: Bool = true) -> Bool {
+        guard allowed, sawPages, !sawEndMarker else { return false }
+        guard nudgesWithoutProgress < maxNudgesWithoutProgress,
+              nudgesThisRound < maxNudgesPerRound,
+              tick + nudgeHeadroomTicks < ceiling else { return false }
+        if inBackground { return backgroundSecondsRemaining >= minBackgroundSecondsForReopen }
+        return true
     }
 
     /// After a channel returns: open the SAME channel again in this sync?
@@ -56,8 +80,9 @@ public enum DrainContinuation {
                                     recordsAdded: Int,
                                     round: Int,
                                     inBackground: Bool,
-                                    backgroundSecondsRemaining: TimeInterval) -> Bool {
-        guard exitReason == .quietAfterPages, recordsAdded > 0 else { return false }
+                                    backgroundSecondsRemaining: TimeInterval,
+                                    allowed: Bool = true) -> Bool {
+        guard allowed, exitReason == .quietAfterPages, recordsAdded > 0 else { return false }
         if inBackground {
             return round < maxReopenRoundsBackground
                 && backgroundSecondsRemaining >= minBackgroundSecondsForReopen
