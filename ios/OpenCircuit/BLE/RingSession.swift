@@ -4051,7 +4051,12 @@ final class RingSession: NSObject {
                     nudgesThisRound += 1
                     uniqueAtLastNudge = unique
                     syncQuietTicks = 0
-                    activeDrainTrace?.fetchNudges = (activeDrainTrace?.fetchNudges ?? 0) + 1
+                    // Read, THEN write — never both in one statement. `activeDrainTrace?.x = (activeDrainTrace?.x
+                    // ?? 0) + 1` holds a modify access on this class property while the right-hand side
+                    // reads it: a Swift exclusivity violation that ABORTS the app at runtime (build 55
+                    // crashed on every nudging sync, 2026-09-29).
+                    let nudges = (activeDrainTrace?.fetchNudges ?? 0) + 1
+                    activeDrainTrace?.fetchNudges = nudges
                     ringLog.notice("sync: ch=\(label, privacy: .public) quiet without 0x50 at \(tick)s — fetch nudge")
                     nudged = true
                 }
