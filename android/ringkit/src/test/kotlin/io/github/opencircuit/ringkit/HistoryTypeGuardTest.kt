@@ -5,6 +5,8 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -161,5 +163,95 @@ class HistoryTypeGuardTest {
         assertEquals(CumulativeMetricState(previousRawValue = 10.0, dailyTotal = 10.0), state)
         // An equal reading is a zero delta, not a rollover.
         assertEquals(0.0, CumulativeMetricAccumulator.accumulate(QuantitySample(MetricKind.STEPS, t, value = 10.0), state).deltaValue)
+    }
+
+    // BulkRecord / BulkSleep
+
+    /** Real FR02.018 deep-sleep record (HR 68, HRV 77, SpO2 98) — upstream BulkSleepTests.swift:25. */
+    private val deepSleepRec = "0c22d5bf444d057a620a01010101012aa0000090000004"
+
+    /** Real activity epoch with its [15:20] tail zeroed — upstream BulkSleepTests.swift:113. */
+    private val quietActivityRec = "0c22a16b55210a7d120a01010101010000000000040000"
+
+    private fun bulk(h: String, edit: (ByteArray) -> Unit = {}): BulkRecord =
+        assertNotNull(BulkRecord.of(hex(h).also(edit)))
+
+    @Test
+    fun bulkRecordExistsOnlyForExactlyTwentyThreeBytes() {
+        assertNull(BulkRecord.of(ByteArray(0)))
+        assertNull(BulkRecord.of(ByteArray(22)))
+        assertNull(BulkRecord.of(ByteArray(24)))
+        assertNotNull(BulkRecord.of(ByteArray(23)))
+    }
+
+    @Test
+    fun bulkRecordHoldsAPrivateCopyAndComparesByContent() {
+        val src = hex(deepSleepRec)
+        val r = assertNotNull(BulkRecord.of(src))
+        val hashBefore = r.hashCode()
+
+        src[4] = 0x10 // the caller keeps writing to its own array
+        r.raw[4] = 0x10 // readers write to the arrays they were handed
+        r.motion[0] = 0x7f
+        r.activityCounts[0] = 0x7f
+        r.motionIntensityTail[0] = 0x7f
+
+        assertContentEquals(hex(deepSleepRec), r.raw)
+        assertEquals(68, r.heartRate)
+        assertContentEquals(bytes(1, 1, 1, 1, 1), r.motion)
+        assertContentEquals(bytes(0x2a, 0xa0, 0x00, 0x00, 0x90), r.motionIntensityTail)
+        assertEquals(hashBefore, r.hashCode())
+        assertEquals(bulk(deepSleepRec), r)
+        assertTrue(bulk(deepSleepRec) { it[22] = 0x05 } != r, "every byte is part of equality")
+    }
+
+    @Test
+    fun bulkRecordReadsEveryFieldUnsigned() {
+        // Bytes ≥ 0x80 in each numeric field: a signed read would go negative and fail every guard.
+        val r = bulk(deepSleepRec) {
+            it[0] = 0xF0.toByte() // counter high byte
+            it[4] = 0xC8.toByte() // HR 200
+            it[5] = 0x96.toByte() // HRV 150
+            it[7] = 0xF0.toByte() // RR 240 / 8 = 30.0
+        }
+        assertEquals(0xF022d5bfL, r.counter)
+        assertEquals(Instant.ofEpochSecond(0xF022d5bfL + 1_577_793_600L), r.date())
+        assertEquals(200, r.heartRate)
+        assertEquals(150, r.hrvRMSSD)
+        assertEquals(150, r.measuredHRVRMSSD)
+        assertEquals(30.0, r.measuredRespiratoryRate)
+        assertEquals(98, r.spo2Percent)
+    }
+
+    @Test
+    fun motionStillnessIsASpreadOfAtMostTwoReadUnsigned() {
+        fun motion(vararg m: Int) = bulk(deepSleepRec) { b -> m.forEachIndexed { i, v -> b[10 + i] = v.toByte() } }
+        assertTrue(motion(1, 1, 3, 1, 1).motionResolvesStillness, "spread 2 is still")
+        assertFalse(motion(1, 1, 4, 1, 1).motionResolvesStillness, "spread 3 is movement")
+        // 0x7f and 0x81 are 2 apart unsigned, but 254 apart if read as signed bytes.
+        assertTrue(motion(0x7f, 0x81, 0x80, 0x7f, 0x81).motionResolvesStillness)
+        val idle = bulk("0c0000000500" + "0c0001" + "0a" + "0101010101" + "00000000000000" + "00")
+        assertFalse(idle.motionResolvesStillness, "the idle template never resolves stillness")
+        assertEquals(28.0, ActivityPeriod.WORN_MIN_TEMPERATURE_C, "the wear-gate constant keeps resolving")
+    }
+
+    @Test
+    fun hrvPoolingNeedsTwentyQuietEpochsPerSideAndSplitsAtNineMs() {
+        fun activity(hrv: Int) = bulk(quietActivityRec) { it[5] = hrv.toByte() }
+        fun sleep(hrv: Int) = bulk(deepSleepRec) { b -> for (i in 15 until 20) b[i] = 0; b[5] = hrv.toByte() }
+        fun run(nAct: Int, act: Int, nSleep: Int, sv: Int) = List(nAct) { activity(act) } + List(nSleep) { sleep(sv) }
+
+        assertEquals(BulkSleep.HRVPooling.AGREE, BulkSleep.hrvPooling(run(20, 50, 20, 41)), "shift 9 ms agrees")
+        assertEquals(BulkSleep.HRVPooling.DISAGREE, BulkSleep.hrvPooling(run(20, 50, 20, 40)), "shift 10 ms disagrees")
+        assertEquals(BulkSleep.HRVPooling.NO_EVIDENCE, BulkSleep.hrvPooling(run(19, 50, 20, 50)))
+        assertEquals(BulkSleep.HRVPooling.NO_EVIDENCE, BulkSleep.hrvPooling(run(20, 50, 19, 50)))
+
+        // The verdict gates only the recovered activity-epoch HRV; sleep-vitals HRV is never gated.
+        val slice = listOf(activity(33), sleep(60))
+        fun hrvValues(s: List<QuantitySample>) = s.filter { it.kind == MetricKind.HRV_SDNN }.map { it.value }
+        assertEquals(listOf(33.0, 60.0), hrvValues(BulkSleep.samples(slice)), "no calibration leaves the gate inert")
+        assertEquals(listOf(60.0), hrvValues(BulkSleep.samples(slice, verdict = BulkSleep.HRVPooling.DISAGREE)))
+        assertEquals(listOf(60.0), hrvValues(BulkSleep.samples(slice, calibratedBy = run(20, 50, 20, 40))))
+        assertEquals(listOf(33.0, 60.0), hrvValues(BulkSleep.samples(slice, calibratedBy = run(20, 50, 20, 41))))
     }
 }

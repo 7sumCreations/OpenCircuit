@@ -1,12 +1,13 @@
 package io.github.opencircuit.ringkit
 
 // PARTIAL port of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/Analytics/SleepDetection.swift
-// (@ b1c2fdd): only the wear-gate constant at `:128`, which `DeviceStatus.isWorn` needs.
+// (@ b1c2fdd): the wear-gate constant at `:128`, which `DeviceStatus.isWorn` needs, and the
+// motion-count stillness threshold at `:87`, which `BulkRecord.motionResolvesStillness` reads.
 
 /**
  * Minimal home for the sleep wear-gate threshold that `DeviceStatus.isWorn` defaults to.
  *
- * Only [WORN_MIN_TEMPERATURE_C] is ported in E1. The rest of upstream's
+ * [WORN_MIN_TEMPERATURE_C] was ported in E1 and [MOTION_STILL_THRESHOLD] with the history decoder. The rest of upstream's
  * `struct ActivityPeriod` (`SleepDetection.swift:63`: `activity`, `start`, `end`) and the rest of
  * `SleepDetection.swift` port in E3. If E3 turns this into a `data class`, the constant moves into
  * its `companion object` and the call site `ActivityPeriod.WORN_MIN_TEMPERATURE_C` stays unchanged.
@@ -17,4 +18,10 @@ object ActivityPeriod {
      * A worn Gen-2 ring reads ~30–34 °C; off-wrist / on the charger it falls toward room ambient.
      */
     const val WORN_MIN_TEMPERATURE_C: Double = 28.0
+
+    /**
+     * Motion-count stillness threshold for the `0x4c` `[10:15]` channel (🟢 grounded: recovers
+     * the captured night's in-bed window). Baseline `01` = still. The single home of this number.
+     */
+    const val MOTION_STILL_THRESHOLD: Float = 2f
 }
