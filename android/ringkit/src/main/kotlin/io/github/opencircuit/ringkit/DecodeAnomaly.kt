@@ -7,17 +7,14 @@ package io.github.opencircuit.ringkit
 // Per-field clamps (e.g. LiveHR.VALID_BPM) already catch single implausible values; this is about
 // PATTERNS across a whole drain/session that a single-value clamp can't see — what a firmware
 // update silently changing a byte's meaning would produce. Deliberately conservative: each check
-// requires a STRUCTURAL signal (a SUSTAINED run of bad readings), never a single bad sample.
-// Pure; the app layer decides what to do with the result.
-//
-// NOT PORTED: `detect(records:minWornEpochs:)` (:31-35) and its 4 tests need `BulkRecord`, which
-// is E2's history decoder — they arrive with it (PORTING.md D-7).
+// requires a STRUCTURAL signal (enough worn epochs, a SUSTAINED run of bad readings), never a
+// single bad sample. Pure; the app layer decides what to do with the result.
 
 /** A pattern-level decode anomaly. [rawValue] is upstream's stable string id. */
 enum class DecodeAnomaly(val rawValue: String) {
     /**
      * A drained night/session had enough WORN epochs to expect heart rate, but every one decoded
-     * HR as null. Detected by `detect(records:)` — arrives in E2.
+     * HR as null. Sparse/empty syncs are NOT this — [detect]'s `minWornEpochs` guards them.
      */
     ALL_ZERO_HR_WHILE_WORN("allZeroHRWhileWorn"),
 
@@ -29,6 +26,18 @@ enum class DecodeAnomaly(val rawValue: String) {
     SKIN_TEMP_OUT_OF_PHYSICAL_RANGE("skinTempOutOfPhysicalRange");
 
     companion object {
+        /**
+         * [ALL_ZERO_HR_WHILE_WORN] over one drain's decoded [records]: at least [minWornEpochs]
+         * worn (non-idle) epochs, and not one of them decoded a heart rate. [minWornEpochs] keeps a
+         * near-empty or contended sync (few records is normal) from reading as an anomaly; idle
+         * epochs never count as worn. Upstream `:31-35`.
+         */
+        fun detect(records: List<BulkRecord>, minWornEpochs: Int = 5): Set<DecodeAnomaly> {
+            val worn = records.filter { it.layout != BulkRecord.Layout.IDLE }
+            if (worn.size < minWornEpochs || !worn.all { it.heartRate == null }) return emptySet()
+            return setOf(ALL_ZERO_HR_WHILE_WORN)
+        }
+
         /**
          * True when [readingsC] (°C, live descriptor readings in order) holds [sustainedRun]
          * consecutive readings outside [minC]…[maxC]. The band ends themselves are plausible. A
