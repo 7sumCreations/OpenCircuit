@@ -58,8 +58,7 @@ object StepAccumulator {
     /**
      * How long after a boundary the ring may still report the PREVIOUS bucket 🟢 — measured max 108 s
      * upstream, rounded up to 120 s. Used only to widen [windowStart] backwards, never to credit steps.
-     *
-     * iOS-tuned — re-check in E9/E11. Ported verbatim from upstream (`:88`).
+     * A measurement of the ring, not of the phone. Ported verbatim from upstream (`:88`).
      */
     val CLEAR_LAG_ALLOWANCE: Duration = Duration.ofSeconds(120)
 
