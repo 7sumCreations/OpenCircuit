@@ -413,12 +413,11 @@ class HistoryDrainPlanTest {
     }
 
     // :404 — the TTL outlasts the longest single reconnect backoff step and expires well inside a
-    // drain cadence. Upstream reads `ReconnectBackoff.delays`, which is ported with the connection
-    // policy files; until then these are its literal values, typed from S/ReconnectBackoff.swift:18.
+    // drain cadence. Reads the ported `ReconnectBackoff.DELAYS`, as upstream reads `delays`, so a
+    // retuned backoff that outgrows the TTL fails here.
     @Test
     fun theTimeToLiveCoversTheWorstReconnectBackoffWithMargin() {
-        val reconnectBackoffDelays = listOf(1L, 5L, 30L).map { Duration.ofSeconds(it) }
-        val worstBackoff = reconnectBackoffDelays.max()
+        val worstBackoff = ReconnectBackoff.DELAYS.max()
         assertTrue(HistoryDrainPlan.ResumeHint.TIME_TO_LIVE > worstBackoff)
         assertTrue(HistoryDrainPlan.ResumeHint.TIME_TO_LIVE < HistoryDrainPlan.DEFAULT_MORNING_CATCH_UP_WINDOW)
     }
