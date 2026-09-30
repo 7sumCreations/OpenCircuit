@@ -33,4 +33,16 @@ class UpstreamPinTest {
             "UPSTREAM.md pins ${pins.single()} but RingKit.UPSTREAM_SHA is ${RingKit.UPSTREAM_SHA} — bump both together",
         )
     }
+
+    @Test
+    fun pinLineAcceptsOnlyAFullLowercaseShaAtLineStart() {
+        val sha = "0123456789abcdef0123456789abcdef01234567"
+        assertEquals(listOf(sha), pinsIn(listOf("Pinned SHA: $sha")))
+        assertEquals(listOf(sha), pinsIn(listOf("Pinned SHA: $sha  \r")), "trailing whitespace / CR is tolerated")
+        assertEquals(2, pinsIn(listOf("Pinned SHA: $sha", "Pinned SHA: $sha")).size, "duplicates are all counted")
+        assertEquals(emptyList(), pinsIn(listOf("Pinned SHA: ${sha.uppercase()}")), "uppercase hex rejected")
+        assertEquals(emptyList(), pinsIn(listOf("Pinned SHA: ${sha.dropLast(1)}")), "39 chars rejected")
+        assertEquals(emptyList(), pinsIn(listOf("  Pinned SHA: $sha")), "indented line rejected")
+        assertEquals(emptyList(), pinsIn(listOf("Pinned SHA: $sha trailing")), "trailing text rejected")
+    }
 }

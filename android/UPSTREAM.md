@@ -32,7 +32,7 @@ scripts/upstream-diff.sh --no-fetch         # offline: compare against the last-
 scripts/upstream-diff.sh ios/OpenCircuit    # also watch extra paths (repo-root relative)
 ```
 
-By default it watches `docs/PROTOCOL.md`, `ios/OpenCircuitKit` and `LICENSE`. It prints the upstream commits and a diffstat, or `no upstream changes since <short-sha>`. It never modifies anything.
+By default it watches `docs/PROTOCOL.md`, `ios/OpenCircuitKit` and `LICENSE`. It prints the upstream commits and a diffstat, or `no upstream changes since <short-sha>`. It never modifies your files or the pin; the only thing it updates is the fetched `upstream/*` refs.
 
 If it reports that there is no `upstream` remote, add one:
 
