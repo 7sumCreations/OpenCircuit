@@ -5,8 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 /**
- * Kotlin-only additions for `DeviceStatus`: the plausibility-band edges of each descriptor decoder
- * (A3). Upstream's `DeviceStatusTests.swift` never tests them (see `DeviceStatusTest`, the 30-test
+ * Kotlin-only additions for `DeviceStatus`: the plausibility-band edges of each descriptor decoder.
+ * Upstream's `DeviceStatusTests.swift` never tests them (see `DeviceStatusTest`, the 30-test
  * port). They are kept in a separate class so the ported class keeps upstream's count.
  *
  * Bands are from upstream `S/DeviceStatus.swift` (@ b1c2fdd): battery 1…100 (:45), skin temp

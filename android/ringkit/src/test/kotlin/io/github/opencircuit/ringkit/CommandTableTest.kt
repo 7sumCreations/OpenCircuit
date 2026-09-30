@@ -13,11 +13,11 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertTrue
 
 /**
- * DoD 3 (E1): every production TX command (incl. `vibrate`, E1 S3) equals upstream's literal bytes, carries no XOR
+ * Every production TX command (incl. `vibrate`, E1 S3) equals upstream's literal bytes, carries no XOR
  * trailer, and the legacy auth API (`status1`, `liveHRStart`, `authNonce`/`knownAuthNonces`)
- * does not exist. ADR E1 D3 A — plain Java reflection, no kotlin-reflect.
+ * does not exist. Checked with plain Java reflection, no kotlin-reflect.
  *
- * A14: every expected value below is typed by hand from upstream
+ * Every expected value below is typed by hand from upstream
  * ios/OpenCircuitKit/Sources/OpenCircuitKit/Opcodes.swift (@ b1c2fdd), line cited per row —
  * never copied from Opcodes.kt. A table mirroring the code under test asserts nothing.
  */
@@ -46,7 +46,7 @@ class CommandTableTest {
         Row("osaAssessmentStop", bytes(0x05, 0x22, 0x02), 104),
     )
 
-    // Parameterised `Command.vibrate(pattern)` (Opcodes.swift:95-97). A14: expected bytes are typed
+    // Parameterised `Command.vibrate(pattern)` (Opcodes.swift:95-97). The expected bytes are typed
     // from the 🟢 capture list in S/RingVibration.swift:12-15, the frames a Gen 3 ring buzzed on —
     // not from Opcodes.swift. A function, so the getter-completeness set above is unchanged.
     private class VibrateRow(val pattern: VibrationPattern, val expected: ByteArray, val upstreamLine: Int)
@@ -164,7 +164,7 @@ class CommandTableTest {
 
     @Test
     fun gettersReturnFreshArrays() {
-        // ADR D3 A / I4: mutating one caller's copy must not change the next read.
+        // Getters return fresh arrays: mutating one caller's copy must not change the next read.
         for (row in table) {
             val first = read(row.name)
             first[0] = (first[0].toInt() xor 0xFF).toByte()

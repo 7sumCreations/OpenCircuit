@@ -51,7 +51,7 @@ object SportFrame {
         val steps: Int,
         /**
          * Interval-end cursor: seconds since the sync epoch (2019-12-31 12:00 UTC, `Command.SYNC_EPOCH`),
-         * big-endian unsigned 32-bit. `Long` because a Kotlin `Int` can't hold values ≥ 2³¹ (ADR E1 D1 A).
+         * big-endian unsigned 32-bit. `Long` because a Kotlin `Int` can't hold values ≥ 2³¹.
          */
         val cursor: Long,
     )

@@ -6,8 +6,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Kotlin-only edges of `DecodeAnomaly` that upstream's `DecodeAnomalyTests.swift` does not test
- * (A3): the band ends are inclusive-plausible, an empty input, a run straddling the band on both
+ * Kotlin-only edges of `DecodeAnomaly` that upstream's `DecodeAnomalyTests.swift` does not test:
+ * the band ends are inclusive-plausible, an empty input, a run straddling the band on both
  * sides, the `sustainedRun` / band parameters actually being honoured, and the stable raw values.
  */
 class DecodeAnomalyEdgeTest {

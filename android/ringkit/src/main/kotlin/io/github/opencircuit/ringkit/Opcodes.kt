@@ -31,7 +31,7 @@ object Opcode {
 /**
  * ByteArray from unsigned byte values — the production literal builder behind every `Command` getter.
  * Swift's `UInt8` parameters made an out-of-range byte unrepresentable; with `Int` parameters
- * (ADR E1 D1 A) this check keeps e.g. `sportStart(0x100)` from silently truncating to 0x00
+ * this check keeps e.g. `sportStart(0x100)` from silently truncating to 0x00
  * (no silent fail-open at a boundary).
  */
 private fun bytes(vararg v: Int): ByteArray {
@@ -43,8 +43,8 @@ private fun bytes(vararg v: Int): ByteArray {
  * Exact TX command byte sequences, sent VERBATIM (🟢 PROTOCOL.md §3). Commands are NOT
  * XOR-checksummed — never build them with [Frame.xorTrailer]; that yields frames the ring ignores.
  *
- * Every literal is a getter returning a FRESH array (ADR E1 D3 A): no caller can mutate
- * another caller's command bytes (I4). Opcodes.swift:32-188, minus the legacy auth fallbacks
+ * Every literal is a getter returning a FRESH array: no caller can mutate
+ * another caller's command bytes. Opcodes.swift:32-188, minus the legacy auth fallbacks
  * `status1`, `liveHRStart` and `authNonce`/`knownAuthNonces` — not ported (E1 1.3 Option 1,
  * PORTING.md). Per-connection auth is `RingAuth` (PROTOCOL.md §5.8).
  */
@@ -150,7 +150,7 @@ object Command {
 
     /**
      * Open a HISTORY sync "up to NOW" on [channel] — the official app's history behaviour
-     * (🟢 PROTOCOL.md §3). Use this, NOT [syncAll], for sleep/vitals history. [now] is injectable (I8).
+     * (🟢 PROTOCOL.md §3). Use this, NOT [syncAll], for sleep/vitals history. [now] is injectable so tests can pin the clock.
      */
     fun syncUpToNow(now: Instant = Instant.now(), channel: Int = SYNC_CHANNEL_SLEEP): ByteArray =
         syncSince(now.epochSecond, channel)

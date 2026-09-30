@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
  * sequence of ≥ 2 readings; any flat, falling, or mixed pattern returns false.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/ChargingInferenceTests.swift:10-66
- * (@ b1c2fdd) — all 13 tests. Pulled into E1 from E2 (ADR E1 D4 A).
+ * (@ b1c2fdd) — all 13 tests. Pulled into E1 from E2 because `DeviceStatus.isCharging` delegates to it.
  */
 class ChargingInferenceTest {
 

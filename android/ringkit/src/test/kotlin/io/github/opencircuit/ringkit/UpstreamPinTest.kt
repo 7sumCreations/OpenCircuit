@@ -8,9 +8,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * DoD1 (E0): android/UPSTREAM.md and RingKit.UPSTREAM_SHA must name the same upstream commit.
- * The pin line regex is shared with android/scripts/upstream-diff.sh (ADR E0 D2) — change both together.
- * A14: the expected value is read from the live file, never a SHA literal of this test's own.
+ * android/UPSTREAM.md and RingKit.UPSTREAM_SHA must name the same upstream commit.
+ * The pin line regex is shared with android/scripts/upstream-diff.sh — change both together.
+ * The expected value is read from the live file, never a SHA literal of this test's own.
  */
 class UpstreamPinTest {
     private val pinLine = Regex("""^Pinned SHA: ([0-9a-f]{40})\s*$""")

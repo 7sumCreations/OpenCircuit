@@ -1,7 +1,7 @@
 package io.github.opencircuit.ringkit
 
 // PARTIAL port of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/Analytics/SleepDetection.swift
-// (@ b1c2fdd): only the wear-gate constant at `:128` (ADR E1 D4 A).
+// (@ b1c2fdd): only the wear-gate constant at `:128`, which `DeviceStatus.isWorn` needs.
 
 /**
  * Minimal home for the sleep wear-gate threshold that `DeviceStatus.isWorn` defaults to.

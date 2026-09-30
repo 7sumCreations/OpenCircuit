@@ -14,7 +14,7 @@ package io.github.opencircuit.ringkit
 
 /**
  * Unsigned read of one byte (0..255). The ONLY sanctioned byte-read path in `:ringkit`
- * (ADR E1 D1 A): Kotlin `Byte` is signed, so a bare `this[i].toInt()` turns 0xb0 into −80.
+ * because Kotlin `Byte` is signed, so a bare `this[i].toInt()` turns 0xb0 into −80.
  */
 internal fun ByteArray.u8(index: Int): Int = this[index].toInt() and 0xFF
 
@@ -46,7 +46,7 @@ object Frame {
 
     /**
      * A parsed response frame: opcode, body (bytes between opcode and trailer), trailer.
-     * Content-based equality (ADR E1 D1 A) — `ByteArray` alone compares by reference.
+     * Content-based equality — `ByteArray` alone compares by reference.
      */
     class Parsed(val opcode: Int, val body: ByteArray, val trailer: Int) {
         override fun equals(other: Any?): Boolean =

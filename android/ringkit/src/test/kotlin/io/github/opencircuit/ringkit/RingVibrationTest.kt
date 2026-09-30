@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  * ios/OpenCircuitKit/Tests/OpenCircuitKitTests/RingAlarmTests.swift:24-39 (@ b1c2fdd) ONLY.
  * The rest of RingAlarmTests (alarm scheduling, `RingAlarm`) ports with E20.
  *
- * A14: the expected frames are typed from the capture list in
+ * The expected frames are typed from the capture list in
  * `S/RingVibration.swift:12-15` (🟢 12/12 buzzes on a Gen 3 ring), never from `Opcodes.kt`.
  */
 class RingVibrationTest {
@@ -61,7 +61,7 @@ class RingVibrationTest {
 
     @Test
     fun vibrateReturnsAFreshArrayEachCall() {
-        // ADR E1 D3 A / I4 — a caller mutating its frame must not change the next one.
+        // Fresh array per call: a caller mutating its frame must not change the next one.
         val first = Command.vibrate(VibrationPattern.NOTIFICATION)
         first[2] = 0x02
         assertContentEquals(hex("0b03016400"), Command.vibrate(VibrationPattern.NOTIFICATION))

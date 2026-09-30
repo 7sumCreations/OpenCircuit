@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
  *   • isCharging false-positive → at most a "likely charging" hint in the UI. Never drops a night.
  *
  * Fixtures are built on the RAW byte path; `chargingFrame` / `wornFrame` are
- * REAL frames, and they carry bytes ≥ 0x80 (0xf7, 0xa1, 0xff) that a signed read would corrupt (A5).
+ * REAL frames, and they carry bytes ≥ 0x80 (0xf7, 0xa1, 0xff) that a signed read would corrupt.
  */
 class DeviceStatusTest {
 

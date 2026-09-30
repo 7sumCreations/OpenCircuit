@@ -10,7 +10,7 @@ package io.github.opencircuit.ringkit
 // HR is verified (HR-only capture settled to 61 bpm resting); the first HR sample is a warm-up
 // sentinel (byte[2] ≈ 8). SpO2 byte[14] matches the app's 96–97 % live.
 //
-// Every decoder returns null on a failed guard and never throws (ADR E1 — fail closed).
+// Every decoder returns null on a failed guard and never throws (fail closed).
 
 object LiveHR {
     /** Live-sample response opcode, ring → host (reply to the `0x95` poll). */
@@ -29,7 +29,7 @@ object LiveHR {
      * The plausible band a decoded HR must fall in to be treated as a real reading. Shared by the
      * live decoder, `SportFrame`, AND (from E2) the history/sleep-vitals decoder, so a garbage epoch
      * (e.g. byte[4] == 4, the cause of the impossible "Resting HR 4 bpm") can never become a
-     * persisted sample. The single home of this rule (I3).
+     * persisted sample. The single home of this rule.
      */
     val VALID_BPM: IntRange = MIN_VALID_BPM..MAX_VALID_BPM
 

@@ -12,7 +12,7 @@ package io.github.opencircuit.ringkit
 //   `[17]`    = CASE byte: low 7 bits = case battery % · bit 0x80 = case charging ·
 //               0xff = ring NOT in case (#89)                                               🟢
 //
-// Every byte is read through `u8` (ADR E1 D1): the real frames carry bytes ≥ 0x80.
+// Every byte is read through `u8`: the real frames carry bytes ≥ 0x80.
 // Decoders return null for anything that fails a guard; they never throw.
 
 /**

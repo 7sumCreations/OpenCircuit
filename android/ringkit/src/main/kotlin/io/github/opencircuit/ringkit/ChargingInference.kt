@@ -2,7 +2,7 @@ package io.github.opencircuit.ringkit
 
 // Charging-state inference from the battery % trend (upstream #60).
 // Port of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/ChargingInference.swift:13-30 (@ b1c2fdd).
-// Pulled into E1 from E2 (ADR E1 D4 A) because `DeviceStatus.isCharging` delegates to it.
+// Pulled into E1 from E2 because `DeviceStatus.isCharging` delegates to it.
 //
 // The ring's charging state is NOT on the wire in any confirmed byte (PROTOCOL.md §5).
 // The closest 🟢 proxy is the battery % in the 0x10/0x87 descriptor: if a short window of

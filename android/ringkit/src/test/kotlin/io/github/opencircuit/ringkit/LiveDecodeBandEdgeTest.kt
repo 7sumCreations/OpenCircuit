@@ -7,7 +7,7 @@ import kotlin.test.assertNull
 /**
  * Kotlin-only edge cases for the live decoders (`LiveHR`, `SportFrame`) that upstream's vectors
  * never hit: the edges of every plausibility band, every minimum-length guard, and bytes ≥ 0x80 in
- * the positions a signed read or a signed shift would corrupt (A3, A5).
+ * the positions a signed read or a signed shift would corrupt.
  *
  * Kept out of `LiveHRSettlingTest` / `SportFrameTest` so those keep the test plan's pinned upstream
  * counts (5 / 6), the same split as `DeviceStatusBandEdgeTest`.
@@ -34,7 +34,7 @@ class LiveDecodeBandEdgeTest {
 
     @Test
     fun decodeReadsTheHrByteUnsignedAndNeedsFourBytes() {
-        assertEquals(255, LiveHR.decode(hrFrame(0xff)), "0xff must read 255, not -1 (A5)")
+        assertEquals(255, LiveHR.decode(hrFrame(0xff)), "0xff must read 255, not -1")
         assertEquals(0x5b, LiveHR.decode(bytes(0x15, 0x00, 0x5b, 0x0a)), "exactly 4 bytes is enough")
         assertNull(LiveHR.decode(bytes(0x15, 0x00, 0x5b)), "3 bytes is too short")
         assertNull(LiveHR.decode(bytes(0x16, 0x00, 0x5b, 0x0a)), "wrong opcode")

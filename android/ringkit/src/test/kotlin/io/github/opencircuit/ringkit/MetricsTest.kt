@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
  * Kotlin-only checks of the `Metrics.kt` value types (upstream
  * ios/OpenCircuitKit/Sources/OpenCircuitKit/Metrics.swift:9-173 @ b1c2fdd). Upstream tests these
  * only through `RingKitVerify` :155-158 (ported in `RingKitVerifyTest`) and through
- * `SleepProvenanceTests.swift`, which is deferred to E3 whole (ADR E1 D2 A). These pin the stable
+ * `SleepProvenanceTests.swift`, which is deferred to E3 whole (it tests sleep code). These pin the stable
  * raw values (persistence / cursor keys), the verbatim unit and label tables, and the provenance
  * predicates that E3's derived statistics will build on.
  */

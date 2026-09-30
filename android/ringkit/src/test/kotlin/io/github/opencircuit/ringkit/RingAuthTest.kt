@@ -16,7 +16,7 @@ import kotlin.test.assertNull
  * as a fixture only. They were captured from the official app talking to the ring with MAC
  * F8:79:99:F7:03:AD (already public upstream), so `RingAuth.response` must reproduce every
  * one of them. Most challenges and response bytes are ≥ 0x80, which catches a signed-`Byte`
- * slip (A5). All fixtures are typed as raw hex, never produced by production code.
+ * slip. All fixtures are typed as raw hex, never produced by production code.
  */
 class RingAuthTest {
     // RingKitVerify/main.swift:267 — F8:79:99:F7:03:AD → V = 0xf7 ^ 0x03 ^ 0xad = 0x59.
@@ -46,7 +46,7 @@ class RingAuthTest {
 
     // Not upstream: GB/T 32905-2016 example 2 ("abcd" × 16 = 64 bytes → 2 blocks after padding)
     // and the empty input — the auth pairs are all single-block, so these cover the multi-block
-    // loop and the zero-length padding edge (A3). Expected values cross-checked with
+    // loop and the zero-length padding edge. Expected values cross-checked with
     // `openssl dgst -sm3` (OpenSSL 3, Homebrew) on 2026-09-30.
     @Test
     fun sm3StandardTwoBlockAndEmptyVectors() {
@@ -68,7 +68,7 @@ class RingAuthTest {
         assertEquals(0x59, RingAuth.macTailXor(authMac))
     }
 
-    // S/RingAuth.swift:35-38 — short MAC → 0 (A3).
+    // S/RingAuth.swift:35-38 — short MAC → 0.
     @Test
     fun macTailXorShortMacIsZero() {
         assertEquals(0, RingAuth.macTailXor(hex("f87999f703")))
@@ -97,7 +97,7 @@ class RingAuthTest {
     }
 
     // PORTING.md D-2 — Swift's `UInt8` challenge made out-of-range values impossible; the
-    // Kotlin `Int` parameter rejects them instead of silently truncating 0x100 → 0x00 (A3).
+    // Kotlin `Int` parameter rejects them instead of silently truncating 0x100 → 0x00.
     @Test
     fun challengeOutsideByteRangeIsRejected() {
         assertFailsWith<IllegalArgumentException> { RingAuth.response(0x100, authMac) }
@@ -146,7 +146,7 @@ class RingAuthTest {
         assertContentEquals(authMac, RingAuth.macFromSystemID(hex("aaf87999f703ad")))
     }
 
-    // S/RingAuth.swift:62 — shorter than 6 bytes → null (A3).
+    // S/RingAuth.swift:62 — shorter than 6 bytes → null.
     @Test
     fun macFromSystemIdShortIsNull() {
         assertNull(RingAuth.macFromSystemID(hex("f87999f703")))

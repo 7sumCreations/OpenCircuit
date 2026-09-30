@@ -5,7 +5,7 @@ package io.github.opencircuit.ringkit
 // (@ b1c2fdd). These are app-side data structures, not protocol facts; the byte-level decoders
 // that populate them stay 🔴 until captures decode each metric (../docs/PROTOCOL.md §5).
 //
-// VALUE SEMANTICS ONLY (ADR E1 D2 A). Swift's `Codable` conformances, including SleepSegment's
+// VALUE SEMANTICS ONLY. Swift's `Codable` conformances, including SleepSegment's
 // hand-written `init(from:)` / `encode(to:)` (:175-218), are NOT ported: :ringkit carries no
 // serialization dependency, and the persisted form is E6's decision. E6 inherits the requirement
 // that an unreadable provenance label degrades to ASSERTED_COVERAGE_UNKNOWN, never MEASURED, and

@@ -11,7 +11,7 @@ dependencies {
 }
 
 tasks.test {
-    // ADR E0 D1 A: UpstreamPinTest reads the pin file via an absolute path,
+    // UpstreamPinTest reads the pin file via an absolute path,
     // never a working-dir-relative one (IDE runners use a different cwd).
     // inputs.files (a collection) keeps the task runnable while the file is absent,
     // so a missing UPSTREAM.md fails inside the test with a readable message.
@@ -20,6 +20,10 @@ tasks.test {
     inputs.files(upstreamMd)
         .withPropertyName("upstreamMd")
         .withPathSensitivity(PathSensitivity.NONE)
+    // PublicSurfaceTest walks the android/ tree from this absolute root. Deliberately NOT a task
+    // input: the whole tree would make every edit anywhere re-run the suite, and gate runs always
+    // pass --rerun anyway.
+    systemProperty("opencircuit.androidRoot", rootProject.projectDir.absolutePath)
     useJUnitPlatform()
     maxParallelForks = 1
     testLogging {

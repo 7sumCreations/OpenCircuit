@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
  * ios/OpenCircuitKit/Tests/OpenCircuitKitTests/FirmwareInfoTests.swift (@ b1c2fdd), all 14 tests,
  * upstream line cited per test. Upstream's `var info = FirmwareInfo(); info.version = …` becomes
  * `FirmwareInfo(version = …)` — the Kotlin type is immutable (PORTING.md D-12). The last three
- * tests are Kotlin-only additions (A3): the user-facing `rawValue` strings, no setters (D-12), and
+ * tests are Kotlin-only additions: the user-facing `rawValue` strings, no setters (D-12), and
  * the prefix match's case-sensitivity / anchoring.
  */
 class FirmwareInfoTest {
@@ -151,7 +151,7 @@ class FirmwareInfoTest {
 
     @Test
     fun prefixMatchIsCaseSensitiveAndAnchored() {
-        // Swift `hasPrefix` is case-sensitive and anchored at index 0 (A3 — degraded DIS strings).
+        // Swift `hasPrefix` is case-sensitive and anchored at index 0 (degraded DIS strings).
         fun gen(v: String) = FirmwareInfo(version = v).generation
         assertEquals(RingGeneration.UNKNOWN, gen("fr02.018"), "lower-case prefix")
         assertEquals(RingGeneration.UNKNOWN, gen(" FR02.018"), "leading space")
