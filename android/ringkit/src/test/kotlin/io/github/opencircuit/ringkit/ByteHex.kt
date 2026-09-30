@@ -3,7 +3,7 @@ package io.github.opencircuit.ringkit
 // Test-only byte helpers. Port of the `hex(_:)` helper in upstream
 // ios/OpenCircuitKit/Tests/OpenCircuitKitTests/FrameTests.swift:9-16 (@ b1c2fdd).
 // Fixtures are built on the RAW byte path with these — never through production
-// code such as `Command` or `Frame.xorTrailer` (PL-2026-09-30-m).
+// code such as `Command` or `Frame.xorTrailer`.
 
 /** "8100b031" → [0x81, 0x00, 0xb0, 0x31]. Two hex chars per byte; odd length or a non-hex char throws. */
 internal fun hex(s: String): ByteArray {

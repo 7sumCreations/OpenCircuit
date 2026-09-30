@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
  *
  * Upstream builds the :104/:113/:116 fixtures with an embedded space removed
  * (`"…1019 02ffaf".replacingOccurrences(of: " ", with: "")`); the strings below are the result.
- * Every fixture is a raw hex literal (PL-2026-09-30-m), never built through production code.
+ * Every fixture is a raw hex literal, never built through production code.
  */
 class RingKitVerifyTest {
 

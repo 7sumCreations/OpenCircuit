@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
  * `RingKitVerify` decodes from the FR02.018 poll capture — the only real one upstream holds.
  *
  * `settled` is pure over its input list, so there is no per-instance state to test across reuse
- * (PL-2026-09-30-l does not apply here). The caller that keeps the trend across reconnects
+ * (so a reuse test does not apply here). The caller that keeps the trend across reconnects
  * (E7/E8 `liveHRTrend`) owes its own reuse test — this class does not cover it.
  */
 class LiveHRSettlingTest {

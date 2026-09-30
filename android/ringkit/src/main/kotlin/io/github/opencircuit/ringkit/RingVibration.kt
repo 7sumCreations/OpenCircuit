@@ -53,7 +53,7 @@ object RingVibration {
      * Whether this ring has a motor we can drive. Gen 3 ONLY, deliberately narrow: no Gen 1, Gen 2
      * or Gen 2 Air has ever been sent `0x0b`. [RingGeneration.UNKNOWN] (before the DIS firmware read
      * lands) is excluded too — the gate fails CLOSED, hiding a feature rather than showing a dead
-     * button (PL-2026-09-30-a).
+     * button.
      */
     fun isSupported(generation: RingGeneration): Boolean = generation == RingGeneration.GEN3
 }

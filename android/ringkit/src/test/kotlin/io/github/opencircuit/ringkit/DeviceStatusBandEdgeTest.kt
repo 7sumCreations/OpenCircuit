@@ -11,7 +11,7 @@ import kotlin.test.assertNull
  *
  * Bands are from upstream `S/DeviceStatus.swift` (@ b1c2fdd): battery 1…100 (:45), skin temp
  * 150…500 (0.1 °C) on BOTH channels (:57), voltage 2500…4600 mV (:96), case % ≤ 100 (:120).
- * Frames are built on the RAW byte path (PL-2026-09-30-m).
+ * Frames are built on the RAW byte path.
  */
 class DeviceStatusBandEdgeTest {
 

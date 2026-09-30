@@ -32,7 +32,7 @@ object Opcode {
  * ByteArray from unsigned byte values — the production literal builder behind every `Command` getter.
  * Swift's `UInt8` parameters made an out-of-range byte unrepresentable; with `Int` parameters
  * (ADR E1 D1 A) this check keeps e.g. `sportStart(0x100)` from silently truncating to 0x00
- * (PL-2026-09-30-a — no silent fail-open at a boundary).
+ * (no silent fail-open at a boundary).
  */
 private fun bytes(vararg v: Int): ByteArray {
     require(v.all { it in 0..0xFF }) { "command byte out of range 0..255: ${v.toList()}" }

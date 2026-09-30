@@ -13,7 +13,7 @@ import kotlin.test.assertNull
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/SportFrameTests.swift:9-68
  * (@ b1c2fdd) — all 6 tests.
  *
- * Fixtures are built on the RAW byte path (PL-2026-09-30-m): every XOR trailer is the literal
+ * Fixtures are built on the RAW byte path: every XOR trailer is the literal
  * upstream writes (`0x71`, `0x05`, `0x4e xor 0x08 xor 0x03`), never computed with
  * `Frame.xorTrailer`. The real yoga frame carries `0xf2`/`0xce` — a signed read corrupts both,
  * and a signed shift of the cursor bytes sign-extends into a negative cursor (A5).

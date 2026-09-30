@@ -113,7 +113,7 @@ class CommandTableTest {
         assertEquals(emptyList(), legacyAuthMembers(commandClass), "legacy auth API must not be ported (E1 1.3 Option 1)")
     }
 
-    /** The absence check must be able to fail (PL-2026-09-30-n): a class that HAS the members is flagged. */
+    /** The absence check must be able to fail: a class that HAS the members is flagged. */
     @Suppress("unused")
     private object LegacyCommandStub {
         val status1: ByteArray get() = bytes(0x01, 0x01, 0x31, 0x82, 0x67, 0x00)

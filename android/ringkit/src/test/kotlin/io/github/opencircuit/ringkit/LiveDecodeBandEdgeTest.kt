@@ -12,7 +12,7 @@ import kotlin.test.assertNull
  * Kept out of `LiveHRSettlingTest` / `SportFrameTest` so those keep the test plan's pinned upstream
  * counts (5 / 6), the same split as `DeviceStatusBandEdgeTest`.
  *
- * Fixtures are built on the RAW byte path (PL-2026-09-30-m): every XOR trailer is written out by
+ * Fixtures are built on the RAW byte path: every XOR trailer is written out by
  * hand as `0x4e xor …`, the way upstream writes its warm-up fixture — never via `Frame.xorTrailer`.
  */
 class LiveDecodeBandEdgeTest {

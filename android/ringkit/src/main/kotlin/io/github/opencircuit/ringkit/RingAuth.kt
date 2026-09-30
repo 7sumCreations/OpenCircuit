@@ -22,7 +22,7 @@ object RingAuth {
      * The 3 response bytes = last 3 bytes of SM3([V, challenge]), V = XOR of the last 3 MAC bytes.
      * Throws [IllegalArgumentException] for a [challenge] outside 0..255 (PORTING.md D-2) or a [mac]
      * that isn't exactly 6 bytes (PORTING.md D-11) — upstream silently computed V = 0 for a short MAC
-     * and sent a well-formed but WRONG reply the ring drops without a word (PL-2026-09-30-a).
+     * and sent a well-formed but WRONG reply the ring drops without a word.
      */
     fun response(challenge: Int, mac: ByteArray): ByteArray {
         require(challenge in 0..0xFF) { "challenge must be a byte 0..255: $challenge" }

@@ -16,8 +16,7 @@ import kotlin.test.assertNull
  * as a fixture only. They were captured from the official app talking to the ring with MAC
  * F8:79:99:F7:03:AD (already public upstream), so `RingAuth.response` must reproduce every
  * one of them. Most challenges and response bytes are ≥ 0x80, which catches a signed-`Byte`
- * slip (A5). All fixtures are typed as raw hex, never produced by production code
- * (PL-2026-09-30-m).
+ * slip (A5). All fixtures are typed as raw hex, never produced by production code.
  */
 class RingAuthTest {
     // RingKitVerify/main.swift:267 — F8:79:99:F7:03:AD → V = 0xf7 ^ 0x03 ^ 0xad = 0x59.
@@ -79,7 +78,7 @@ class RingAuthTest {
     // S/Opcodes.swift:170-179 + RingKitVerify/main.swift:269-272 (which checks 5 of them).
     @Test
     fun reproducesAll24CapturedPairs() {
-        // Anchor the count: a loop over an accidentally empty/truncated table passes (PL-2026-09-30-n).
+        // Anchor the count: a loop over an accidentally empty/truncated table passes.
         assertEquals(24, capturedPairs.size, "fixture must hold all 24 captured pairs")
         assertEquals(24, capturedPairs.map { it.first }.toSet().size, "challenges must be distinct")
         for ((challenge, expected) in capturedPairs) {
@@ -106,7 +105,7 @@ class RingAuthTest {
     }
 
     // PORTING.md D-11 — upstream computes V = 0 for a short MAC and returns a well-formed but wrong
-    // reply; the Kotlin auth entry points reject any MAC that isn't exactly 6 bytes (PL-2026-09-30-a).
+    // reply; the Kotlin auth entry points reject any MAC that isn't exactly 6 bytes.
     @Test
     fun macNotSixBytesIsRejected() {
         assertFailsWith<IllegalArgumentException> { RingAuth.response(0xb0, hex("f87999f703")) }

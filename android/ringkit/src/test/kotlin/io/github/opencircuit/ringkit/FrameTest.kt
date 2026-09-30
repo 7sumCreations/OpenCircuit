@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/FrameTests.swift (@ b1c2fdd).
  *
  * Fixtures are REAL frames from the FR02.018 reference capture, typed as hex literals —
- * never produced by `Frame`/`Command` (PL-2026-09-30-m). Several carry bytes ≥ 0x80
+ * never produced by `Frame`/`Command`. Several carry bytes ≥ 0x80
  * (81, b0, 87, 9e, fd, ff), which is what catches a signed-`Byte` slip (A5).
  *
  * `testLiveHRDecode` (:112-116) → `liveHrDecode`, added with `LiveHR` in E1-S4-T6.

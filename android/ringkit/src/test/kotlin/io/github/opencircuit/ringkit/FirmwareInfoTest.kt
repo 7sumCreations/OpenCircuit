@@ -119,7 +119,7 @@ class FirmwareInfoTest {
         )
         assertEquals(a, b)
         assertEquals(a.hashCode(), b.hashCode())
-        // Kotlin-only (PL-2026-09-30-n): equality must be able to fail — one differing field breaks it.
+        // Kotlin-only: equality must be able to fail — one differing field breaks it.
         assertNotEquals(a, b.copy(hardwareRevision = null))
         assertNotEquals(a, b.copy(mac = "AA:BB:CC:DD:EE:00"))
     }
