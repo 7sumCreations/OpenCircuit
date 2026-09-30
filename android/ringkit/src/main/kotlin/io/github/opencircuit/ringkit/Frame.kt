@@ -30,7 +30,10 @@ object Frame {
     /** True when a whole frame's last byte is the correct XOR trailer. Frames shorter than 2 bytes are invalid. */
     fun isValid(frame: ByteArray): Boolean {
         if (frame.size < 2) return false
-        return xorTrailer(frame.copyOfRange(0, frame.size - 1)) == frame.u8(frame.size - 1)
+        // XOR in place over [0, size-1) — no per-notification copy on the BLE hot path.
+        var x = 0
+        for (i in 0 until frame.size - 1) x = x xor frame.u8(i)
+        return x == frame.u8(frame.size - 1)
     }
 
     /** Response opcode for a command opcode: `cmd XOR 0x80` (PROTOCOL.md §3). */

@@ -23,15 +23,17 @@ enum class RingGeneration(val rawValue: String) {
 /**
  * The Device Information Service fields from a connected ring. Populated incrementally as each
  * DIS characteristic is read (GATT reads arrive asynchronously); unread fields stay at their
- * empty defaults — hence `var`, as in upstream's struct.
+ * empty defaults. Immutable (PORTING.md D-12): upstream's `var` fields sit on a Swift STRUCT, which
+ * copies on assignment; a Kotlin class is a shared reference, so `var` here would let one holder
+ * mutate another's snapshot (and never emit through a StateFlow). Accumulate reads with `copy(...)`.
  */
 data class FirmwareInfo(
-    var version: String = "",
-    var modelName: String = "",
-    var manufacturer: String = "",
-    var hardwareRevision: String? = null,
+    val version: String = "",
+    val modelName: String = "",
+    val manufacturer: String = "",
+    val hardwareRevision: String? = null,
     /** Ring MAC recovered from the System ID (0x2A23) characteristic. */
-    var mac: String? = null,
+    val mac: String? = null,
 ) {
     /**
      * True when a version string is known AND doesn't start with [PINNED_VERSION]. The non-empty

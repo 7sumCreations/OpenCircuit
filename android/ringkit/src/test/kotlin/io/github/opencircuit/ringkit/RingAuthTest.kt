@@ -105,6 +105,17 @@ class RingAuthTest {
         assertFailsWith<IllegalArgumentException> { RingAuth.authCommand(-1, authMac) }
     }
 
+    // PORTING.md D-11 — upstream computes V = 0 for a short MAC and returns a well-formed but wrong
+    // reply; the Kotlin auth entry points reject any MAC that isn't exactly 6 bytes (PL-2026-09-30-a).
+    @Test
+    fun macNotSixBytesIsRejected() {
+        assertFailsWith<IllegalArgumentException> { RingAuth.response(0xb0, hex("f87999f703")) }
+        assertFailsWith<IllegalArgumentException> { RingAuth.authCommand(0xb0, ByteArray(0)) }
+        assertFailsWith<IllegalArgumentException> { RingAuth.authCommand(0xb0, hex("f87999fffef703ad")) }
+        // The 6-byte MAC still authenticates (the guard can't reject the real input).
+        assertContentEquals(bytes(0x01, 0x01, 0x31, 0x82, 0x67, 0x00), RingAuth.authCommand(0xb0, authMac))
+    }
+
     // RingKitVerify/main.swift:275-276, S/RingAuth.swift:46-48 — forward EUI-64.
     @Test
     fun macFromSystemIdForward() {

@@ -20,18 +20,21 @@ object RingAuth {
 
     /**
      * The 3 response bytes = last 3 bytes of SM3([V, challenge]), V = XOR of the last 3 MAC bytes.
-     * Throws [IllegalArgumentException] for a [challenge] outside 0..255 (PORTING.md D-2).
+     * Throws [IllegalArgumentException] for a [challenge] outside 0..255 (PORTING.md D-2) or a [mac]
+     * that isn't exactly 6 bytes (PORTING.md D-11) — upstream silently computed V = 0 for a short MAC
+     * and sent a well-formed but WRONG reply the ring drops without a word (PL-2026-09-30-a).
      */
     fun response(challenge: Int, mac: ByteArray): ByteArray {
         require(challenge in 0..0xFF) { "challenge must be a byte 0..255: $challenge" }
+        require(mac.size == 6) { "mac must be exactly 6 bytes: ${mac.size}" }
         val v = macTailXor(mac)
         val digest = SM3.hash(byteArrayOf(v.toByte(), challenge.toByte()))
         return digest.copyOfRange(digest.size - 3, digest.size)
     }
 
     /**
-     * V = mac[3] ^ mac[4] ^ mac[5] (0..255). Returns 0 for a MAC shorter than 6 bytes
-     * (callers must not auth without a real MAC).
+     * V = mac[3] ^ mac[4] ^ mac[5] (0..255). Returns 0 for a MAC shorter than 6 bytes (upstream
+     * parity); the auth entry points [response] / [authCommand] reject such a MAC instead (D-11).
      */
     fun macTailXor(mac: ByteArray): Int {
         if (mac.size < 6) return 0

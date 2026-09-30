@@ -10,8 +10,10 @@ import kotlin.test.assertTrue
 /**
  * Tests for `FirmwareInfo` / `RingGeneration` — port of upstream
  * ios/OpenCircuitKit/Tests/OpenCircuitKitTests/FirmwareInfoTests.swift (@ b1c2fdd), all 14 tests,
- * upstream line cited per test. The last two tests are Kotlin-only additions (A3): the
- * user-facing `rawValue` strings and the prefix match's case-sensitivity / anchoring.
+ * upstream line cited per test. Upstream's `var info = FirmwareInfo(); info.version = …` becomes
+ * `FirmwareInfo(version = …)` — the Kotlin type is immutable (PORTING.md D-12). The last three
+ * tests are Kotlin-only additions (A3): the user-facing `rawValue` strings, no setters (D-12), and
+ * the prefix match's case-sensitivity / anchoring.
  */
 class FirmwareInfoTest {
 
@@ -19,36 +21,31 @@ class FirmwareInfoTest {
 
     @Test
     fun gen1Prefix() { // :8-12
-        val info = FirmwareInfo()
-        info.version = "FR01.010"
+        val info = FirmwareInfo(version = "FR01.010")
         assertEquals(RingGeneration.GEN1, info.generation)
     }
 
     @Test
     fun gen2Prefix() { // :14-18
-        val info = FirmwareInfo()
-        info.version = "FR02.018"
+        val info = FirmwareInfo(version = "FR02.018")
         assertEquals(RingGeneration.GEN2, info.generation)
     }
 
     @Test
     fun gen2AirPrefix() { // :20-24
-        val info = FirmwareInfo()
-        info.version = "FR04.003"
+        val info = FirmwareInfo(version = "FR04.003")
         assertEquals(RingGeneration.GEN2_AIR, info.generation)
     }
 
     @Test
     fun gen3Prefix() { // :26-30
-        val info = FirmwareInfo()
-        info.version = "FR05.008" // RingConn Gen3-C384
+        val info = FirmwareInfo(version = "FR05.008") // RingConn Gen3-C384
         assertEquals(RingGeneration.GEN3, info.generation)
     }
 
     @Test
     fun unknownPrefix() { // :32-36
-        val info = FirmwareInfo()
-        info.version = "FR99.001"
+        val info = FirmwareInfo(version = "FR99.001")
         assertEquals(RingGeneration.UNKNOWN, info.generation)
     }
 
@@ -62,29 +59,25 @@ class FirmwareInfoTest {
 
     @Test
     fun exactPinnedVersionNoMismatch() { // :45-49
-        val info = FirmwareInfo()
-        info.version = FirmwareInfo.PINNED_VERSION // "FR02.018"
+        val info = FirmwareInfo(version = FirmwareInfo.PINNED_VERSION) // "FR02.018"
         assertFalse(info.hasFirmwareMismatch)
     }
 
     @Test
     fun versionStartingWithPinnedNoMismatch() { // :51-55
-        val info = FirmwareInfo()
-        info.version = "FR02.018.extra"
+        val info = FirmwareInfo(version = "FR02.018.extra")
         assertFalse(info.hasFirmwareMismatch)
     }
 
     @Test
     fun differentVersionMismatch() { // :57-61
-        val info = FirmwareInfo()
-        info.version = "FR02.020"
+        val info = FirmwareInfo(version = "FR02.020")
         assertTrue(info.hasFirmwareMismatch)
     }
 
     @Test
     fun gen1VersionMismatch() { // :63-67
-        val info = FirmwareInfo()
-        info.version = "FR01.010"
+        val info = FirmwareInfo(version = "FR01.010")
         assertTrue(info.hasFirmwareMismatch)
     }
 
@@ -100,8 +93,7 @@ class FirmwareInfoTest {
     @Test
     fun macStoredAndReadBack() { // :77-82
         val mac = "AA:BB:CC:DD:EE:FF"
-        val info = FirmwareInfo()
-        info.mac = mac
+        val info = FirmwareInfo(mac = mac)
         assertEquals(mac, info.mac)
     }
 
@@ -144,6 +136,17 @@ class FirmwareInfoTest {
         assertEquals("Unknown", RingGeneration.UNKNOWN.rawValue)
         assertEquals(5, RingGeneration.entries.size)
         assertEquals("FR02.018", FirmwareInfo.PINNED_VERSION)
+    }
+
+    @Test
+    fun firmwareInfoIsImmutable() {
+        // PORTING.md D-12 — a Kotlin class is a shared reference, so no DIS field may have a setter.
+        val setters = FirmwareInfo::class.java.methods.filter { it.name.startsWith("set") }.map { it.name }
+        assertEquals(emptyList(), setters, "FirmwareInfo must expose no setters")
+        val base = FirmwareInfo(version = "FR02.018")
+        val next = base.copy(mac = "AA:BB:CC:DD:EE:FF")
+        assertNull(base.mac, "copy() must not touch the original snapshot")
+        assertEquals("FR02.018", next.version)
     }
 
     @Test
