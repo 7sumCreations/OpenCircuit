@@ -33,6 +33,13 @@ enum class DecodeAnomaly(val rawValue: String) {
          * True when [readingsC] (°C, live descriptor readings in order) holds [sustainedRun]
          * consecutive readings outside [minC]…[maxC]. The band ends themselves are plausible. A
          * single in-band reading resets the run, so a normal transient never fires this.
+         *
+         * Upstream semantics, kept as-is: a NaN reading compares false against both band ends and
+         * so counts as IN-band (it resets the run), and the parameters are not validated
+         * (`sustainedRun <= 1` fires on the first out-of-band reading; `minC > maxC` puts every
+         * reading out of band). The only E1 producer, `DeviceStatus.skinTemperature`, divides an
+         * integer by 10 and can never emit NaN; a later caller feeding computed values must drop
+         * NaN first.
          */
         fun hasSustainedTemperatureAnomaly(
             readingsC: List<Double>,

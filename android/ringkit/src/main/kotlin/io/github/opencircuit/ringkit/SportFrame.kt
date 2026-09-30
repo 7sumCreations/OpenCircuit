@@ -51,10 +51,16 @@ object SportFrame {
         val steps: Int,
         /**
          * Interval-end cursor: seconds since the sync epoch (2019-12-31 12:00 UTC, `Command.SYNC_EPOCH`),
-         * big-endian unsigned 32-bit. `Long` because a Kotlin `Int` can't hold values ≥ 2³¹.
+         * big-endian unsigned 32-bit. `Long` because a Kotlin `Int` can't hold values ≥ 2³¹; the
+         * constructor keeps it inside 0..0xFFFFFFFF, the range Swift's `UInt32` enforced by type
+         * (PORTING.md D-13).
          */
         val cursor: Long,
-    )
+    ) {
+        init {
+            require(cursor in 0L..0xFFFF_FFFFL) { "cursor must fit an unsigned 32-bit value: $cursor" }
+        }
+    }
 
     /**
      * Decode a `0x4e` sport-stream frame. Validates the XOR trailer first, then extracts HR (byte[5],

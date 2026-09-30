@@ -79,8 +79,15 @@ object Command {
 
     // Native sport / workout mode (🟢 FR02.018, #90).
 
-    /** Enter native workout mode for [type] (0x01–0x07): `06 03 <type> 04 00` → resp `86 00 86`. */
+    /**
+     * Enter native workout mode for a raw [type] byte: `06 03 <type> 04 00` → resp `86 00 86`.
+     * Upstream's signature (a `UInt8`): any byte 0..255 is sent, so a protocol probe can try types
+     * the app has never seen. App code should use the typed overload below.
+     */
     fun sportStart(type: Int): ByteArray = bytes(0x06, 0x03, type, 0x04, 0x00)
+
+    /** Enter native workout mode for one of the 7 captured [SportType]s (0x01–0x07). Same bytes. */
+    fun sportStart(type: SportType): ByteArray = sportStart(type.rawValue)
 
     /** End native workout mode: `06 00 00` → resp `86 00 86`. */
     val sportStop: ByteArray get() = bytes(0x06, 0x00, 0x00)

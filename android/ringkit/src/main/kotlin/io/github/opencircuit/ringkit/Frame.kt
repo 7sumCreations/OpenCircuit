@@ -47,21 +47,40 @@ object Frame {
     /**
      * A parsed response frame: opcode, body (bytes between opcode and trailer), trailer.
      * Content-based equality — `ByteArray` alone compares by reference.
+     *
+     * Keeps the guarantees Swift's `struct Parsed { let opcode: UInt8; let body: [UInt8] … }` had
+     * by type (PORTING.md D-13): [opcode] and [trailer] must be bytes 0..255, and [body] is a
+     * private copy — taken on construction and handed out fresh on every read — so no holder can
+     * change another holder's frame or move its `hashCode`.
      */
-    class Parsed(val opcode: Int, val body: ByteArray, val trailer: Int) {
+    class Parsed(val opcode: Int, body: ByteArray, val trailer: Int) {
+        init {
+            require(opcode in 0..0xFF) { "opcode must be a byte 0..255: $opcode" }
+            require(trailer in 0..0xFF) { "trailer must be a byte 0..255: $trailer" }
+        }
+
+        private val bodyBytes: ByteArray = body.copyOf()
+
+        /** The bytes between opcode and trailer. A fresh copy on every read. */
+        val body: ByteArray get() = bodyBytes.copyOf()
+
         override fun equals(other: Any?): Boolean =
             other is Parsed && opcode == other.opcode && trailer == other.trailer &&
-                body.contentEquals(other.body)
+                bodyBytes.contentEquals(other.bodyBytes)
 
-        override fun hashCode(): Int = (31 * opcode + body.contentHashCode()) * 31 + trailer
+        override fun hashCode(): Int = (31 * opcode + bodyBytes.contentHashCode()) * 31 + trailer
 
         override fun toString(): String =
             "Frame.Parsed(opcode=%02x, body=[%s], trailer=%02x)".format(
-                opcode, body.joinToString(" ") { "%02x".format(it.toInt() and 0xFF) }, trailer,
+                opcode, bodyBytes.joinToString(" ") { "%02x".format(it.toInt() and 0xFF) }, trailer,
             )
     }
 
-    /** Splits a frame into opcode/body/trailer, or returns null when the XOR trailer doesn't validate. */
+    /**
+     * Splits a frame into opcode/body/trailer, or returns null when the XOR trailer doesn't validate.
+     * (The body slice is copied once more inside [Parsed]; ≤ ~20 bytes, and not on the per-notification
+     * [isValid] path.)
+     */
     fun parse(frame: ByteArray): Parsed? {
         if (!isValid(frame)) return null
         return Parsed(
