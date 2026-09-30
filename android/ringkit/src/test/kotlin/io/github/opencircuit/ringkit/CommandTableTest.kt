@@ -13,7 +13,7 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertTrue
 
 /**
- * DoD 3 (E1): every production TX command equals upstream's literal bytes, carries no XOR
+ * DoD 3 (E1): every production TX command (incl. `vibrate`, E1 S3) equals upstream's literal bytes, carries no XOR
  * trailer, and the legacy auth API (`status1`, `liveHRStart`, `authNonce`/`knownAuthNonces`)
  * does not exist. ADR E1 D3 A — plain Java reflection, no kotlin-reflect.
  *
@@ -44,6 +44,16 @@ class CommandTableTest {
         Row("airplaneModeOn", bytes(0x08, 0x04, 0x00), 80),
         Row("osaAssessmentStart", bytes(0x05, 0x22, 0x01), 103),
         Row("osaAssessmentStop", bytes(0x05, 0x22, 0x02), 104),
+    )
+
+    // Parameterised `Command.vibrate(pattern)` (Opcodes.swift:95-97). A14: expected bytes are typed
+    // from the 🟢 capture list in S/RingVibration.swift:12-15, the frames a Gen 3 ring buzzed on —
+    // not from Opcodes.swift. A function, so the getter-completeness set above is unchanged.
+    private class VibrateRow(val pattern: VibrationPattern, val expected: ByteArray, val upstreamLine: Int)
+
+    private val vibrateRows = listOf(
+        VibrateRow(VibrationPattern.NOTIFICATION, bytes(0x0B, 0x03, 0x01, 0x64, 0x00), 12),
+        VibrateRow(VibrationPattern.LONG, bytes(0x0B, 0x03, 0x02, 0x64, 0x00), 15),
     )
 
     private val commandClass = Command::class.java
@@ -120,15 +130,34 @@ class CommandTableTest {
     }
 
     @Test
+    fun vibrateMatchesTheConfirmedCapture() {
+        // Every pattern has a row (a third VibrationPattern without a capture fails here).
+        assertEquals(VibrationPattern.entries.toSet(), vibrateRows.map { it.pattern }.toSet(), "vibrate rows vs VibrationPattern")
+        assertEquals(vibrateRows.size, VibrationPattern.entries.size, "duplicate vibrate rows")
+        for (row in vibrateRows) {
+            val got = Command.vibrate(row.pattern)
+            assertContentEquals(
+                row.expected, got,
+                "Command.vibrate(${row.pattern}) vs RingVibration.swift:${row.upstreamLine} — got ${got.toHex()}",
+            )
+        }
+    }
+
+    @Test
     fun noTxCommandCarriesAnXorTrailer() {
         // FrameTests.swift:33 generalised. NOT "ends in 0x00": osaAssessmentStart/Stop end in 01/02.
-        // Oracle is a local fold, independent of Frame.xorTrailer.
-        for (row in table) {
-            val cmd = read(row.name)
+        // Oracle is a local fold, independent of Frame.xorTrailer. Covers the fixed table plus the
+        // vibrate frames (their XORs are 0x6d / 0x6e vs a literal 0x00 terminator). Builders with an
+        // arbitrary byte parameter (sportStart, syncSince) are excluded: some parameter values make a
+        // literal frame coincide with its XOR (sportStart(0x01) → `06 03 01 04 00`, XOR 0x00), which
+        // says nothing about checksumming.
+        val frames = table.map { "Command.${it.name}" to read(it.name) } +
+            vibrateRows.map { "Command.vibrate(${it.pattern})" to Command.vibrate(it.pattern) }
+        for ((name, cmd) in frames) {
             val xorOfPreceding = cmd.dropLast(1).fold(0) { acc, b -> acc xor (b.toInt() and 0xFF) }
             assertNotEquals(
                 xorOfPreceding, cmd.last().toInt() and 0xFF,
-                "Command.${row.name} (${cmd.toHex()}) ends in the XOR of its preceding bytes — TX is never checksummed",
+                "$name (${cmd.toHex()}) ends in the XOR of its preceding bytes — TX is never checksummed",
             )
         }
     }

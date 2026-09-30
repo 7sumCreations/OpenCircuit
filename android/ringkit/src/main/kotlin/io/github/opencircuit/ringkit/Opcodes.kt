@@ -99,6 +99,15 @@ object Command {
     /** Ring airplane mode ON — drops the BLE link; only the charging case re-wakes it. `08 04 00` → `88 00 88`. */
     val airplaneModeOn: ByteArray get() = bytes(0x08, 0x04, 0x00)
 
+    /**
+     * Drive the Gen 3 vibration motor (🟢 PROTOCOL.md §5.9, recovered from an HCI capture — NOT in
+     * the APK): `0b 03 <pattern> 64 00` → resp `8b 00 8b`. `[3]` is MEASURED INERT and pinned to
+     * [RingVibration.INTENSITY_BYTE]. The reply means ACCEPTED, not felt — no receipt, no stop
+     * command. Gate on [RingVibration.isSupported] first. Opcodes.swift:95-97.
+     */
+    fun vibrate(pattern: VibrationPattern): ByteArray =
+        bytes(0x0B, 0x03, pattern.rawValue, RingVibration.INTENSITY_BYTE, 0x00)
+
     /** Arm an overnight OSA (sleep-apnea) assessment (#91, 🟢): `05 22 01`. */
     val osaAssessmentStart: ByteArray get() = bytes(0x05, 0x22, 0x01)
 
