@@ -9,7 +9,7 @@
 # Compares against upstream's default branch, re-read from the remote on every fetch
 # (`git remote set-head upstream --auto`), so a master -> main rename needs no edit here.
 # Watched by default (repo-root relative): docs/PROTOCOL.md, ios/OpenCircuitKit, LICENSE.
-# Pin source: the single "Pinned SHA: <40-hex>" line in android/UPSTREAM.md (ADR E0 D2);
+# Pin source: the single "Pinned SHA: <40-hex>" line in android/UPSTREAM.md;
 # override the file with UPSTREAM_MD=<file>. This script never modifies the working tree,
 # the index or the pin; the only writes are under refs/remotes/upstream (fetch + set-head).
 set -euo pipefail
@@ -39,7 +39,7 @@ done
 SCRIPT_DIR=$(dir_of "$src")
 ANDROID_DIR=${SCRIPT_DIR%/*}
 PIN_FILE=${UPSTREAM_MD:-$ANDROID_DIR/UPSTREAM.md}
-# Same contract as UpstreamPinTest's pinLine regex — change both together (ADR E0 D2).
+# Same contract as UpstreamPinTest's pinLine regex — change both together.
 PIN_RE='^Pinned SHA: [0-9a-f]{40}[[:space:]]*$'
 
 fetch=1
