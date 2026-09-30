@@ -83,6 +83,41 @@ class HistoryTypeGuardTest {
         assertTrue(copy != original)
     }
 
+    /** A `0x4c` page holding one activity record, trailer by a test-side XOR (never `Frame.xorTrailer`). */
+    private fun activityPage(counterLow: Int, subtype: Int = 0x12): ByteArray {
+        val record = bytes(0x0C, 0x22, 0x98, counterLow) + ByteArray(19).also { it[4] = subtype.toByte(); it[11] = 0x07 }
+        val withoutTrailer = bytes(0x4C, 0x00, 0x00) + record
+        return withoutTrailer + bytes(withoutTrailer.fold(0) { acc, b -> acc xor (b.toInt() and 0xFF) })
+    }
+
+    @Test
+    fun sessionBuffersAPrivateCopyOfEachPage() {
+        val page = activityPage(counterLow = 0xc3)
+        val session = EpochSyncSession()
+        val before = session.appendActivityPage(page)
+        assertEquals(1, before.size)
+
+        page[8 + 3] = 0x13 // the caller reuses its array (subtype byte; the XOR no longer matches)
+        session.complete(hex("500000120c2233440c223344")) // reparses every buffered page
+
+        assertEquals(1, session.activityRecords.size, "the buffered page must not change with the caller's array")
+        assertEquals(0x12, session.activityRecords.single().subtype)
+        assertEquals(0x0cL, session.activityRecords.single().timestamp.minusSeconds(Command.SYNC_EPOCH).epochSecond ushr 24)
+    }
+
+    @Test
+    fun aCopyDoesNotSeePagesAppendedToTheOriginalLater() {
+        val original = EpochSyncSession()
+        original.appendActivityPage(activityPage(counterLow = 0xc3))
+        val copy = original.copy()
+        original.appendActivityPage(activityPage(counterLow = 0xc4))
+        original.complete(hex("500000120c2233440c223344"))
+        copy.complete(hex("500000120c2233440c223344"))
+
+        assertEquals(2, original.activityRecords.size)
+        assertEquals(1, copy.activityRecords.size, "a copy must not share the original's page buffer")
+    }
+
     // SyncCursor
 
     private fun hr(at: Instant) = QuantitySample(kind = MetricKind.HEART_RATE, start = at, value = 60.0)
@@ -148,6 +183,17 @@ class HistoryTypeGuardTest {
             setOf(MetricKind.STEPS, MetricKind.ACTIVE_ENERGY),
             MetricKind.entries.filter { it.isCumulativeCounter }.toSet(),
         )
+    }
+
+    @Test
+    fun cumulativeValueTypesExposeNoSetters() {
+        // Upstream's state is a Swift struct with `var` fields (copied on assignment); a shared
+        // Kotlin reference must not be changeable in place, so each type is `val`-only.
+        for (type in listOf(CumulativeMetricState::class.java, CumulativeMetricResult::class.java)) {
+            assertEquals(emptyList(), type.methods.filter { it.name.startsWith("set") }.map { it.name }, type.simpleName)
+        }
+        val next = CumulativeMetricState().copy(previousRawValue = 5.0)
+        assertEquals(CumulativeMetricState(previousRawValue = 5.0, dailyTotal = 0.0), next)
     }
 
     @Test
