@@ -80,4 +80,86 @@ class HistoryTypeGuardTest {
         assertEquals(0, copy.streamHighByte)
         assertTrue(copy != original)
     }
+
+    // SyncCursor
+
+    private fun hr(at: Instant) = QuantitySample(kind = MetricKind.HEART_RATE, start = at, value = 60.0)
+
+    @Test
+    fun aCopiedCursorDoesNotMoveWhenTheOriginalAdvances() {
+        val original = SyncCursor()
+        val copy = original.copy()
+        original.advance(MetricKind.HEART_RATE, to = t)
+        original.selectNew(listOf(QuantitySample(kind = MetricKind.SPO2, start = t, value = 0.97)))
+
+        assertEquals(t, original.last(MetricKind.HEART_RATE))
+        assertNull(copy.last(MetricKind.HEART_RATE), "a copy must not move when the original advances")
+        assertNull(copy.last(MetricKind.SPO2))
+        assertTrue(copy != original)
+        assertEquals(SyncCursor(), copy)
+    }
+
+    @Test
+    fun cursorDoesNotAliasTheMapItWasBuiltFrom() {
+        val seed = mutableMapOf(MetricKind.STEPS.rawValue to t)
+        val c = SyncCursor(seed)
+        seed[MetricKind.STEPS.rawValue] = t.plusSeconds(60)
+        seed[MetricKind.SPO2.rawValue] = t
+
+        assertEquals(t, c.last(MetricKind.STEPS))
+        assertNull(c.last(MetricKind.SPO2))
+    }
+
+    @Test
+    fun stagedCursorSharesNoStateWithTheOriginal() {
+        val c = SyncCursor()
+        val (fresh, advanced) = c.selectNewStaged(listOf(hr(t)))
+        advanced.advance(MetricKind.SPO2, to = t) // later work on the staged cursor
+
+        assertEquals(1, fresh.size)
+        assertNull(c.last(MetricKind.HEART_RATE))
+        assertNull(c.last(MetricKind.SPO2), "the staged cursor must not share state with the original")
+        assertEquals(listOf(MetricKind.HEART_RATE, MetricKind.SPO2), advanced.advancedKinds(since = c))
+    }
+
+    @Test
+    fun theCursorMovesOnlyThroughAdvanceAndSelectNew() {
+        val c = SyncCursor()
+        c.isNew(MetricKind.HEART_RATE, t)
+        c.last(MetricKind.HEART_RATE)
+        c.advancedKinds(since = SyncCursor())
+        c.selectNewStaged(listOf(hr(t)))
+        c.copy().advance(MetricKind.HEART_RATE, to = t)
+        assertEquals(SyncCursor(), c, "queries, staging and a copy's advance must leave the cursor unmoved")
+
+        c.selectNew(listOf(hr(t)))
+        assertEquals(t, c.last(MetricKind.HEART_RATE))
+        c.selectNew(emptyList())
+        assertEquals(t, c.last(MetricKind.HEART_RATE), "an empty batch is not a move")
+    }
+
+    // CumulativeMetrics
+
+    @Test
+    fun onlyStepsAndActiveEnergyAreCumulativeCounters() {
+        assertEquals(
+            setOf(MetricKind.STEPS, MetricKind.ACTIVE_ENERGY),
+            MetricKind.entries.filter { it.isCumulativeCounter }.toSet(),
+        )
+    }
+
+    @Test
+    fun accumulatedSampleKeepsKindAndSpanAndLeavesTheInputStateAlone() {
+        val state = CumulativeMetricState(previousRawValue = 10.0, dailyTotal = 10.0)
+        val sample = QuantitySample(MetricKind.ACTIVE_ENERGY, start = t, end = t.plusSeconds(60), value = 25.0)
+
+        val r = CumulativeMetricAccumulator.accumulate(sample, state)
+
+        assertEquals(QuantitySample(MetricKind.ACTIVE_ENERGY, start = t, end = t.plusSeconds(60), value = 25.0), r.sample)
+        assertEquals(25.0, r.rawValue)
+        assertEquals(15.0, r.deltaValue)
+        assertEquals(CumulativeMetricState(previousRawValue = 10.0, dailyTotal = 10.0), state)
+        // An equal reading is a zero delta, not a rollover.
+        assertEquals(0.0, CumulativeMetricAccumulator.accumulate(QuantitySample(MetricKind.STEPS, t, value = 10.0), state).deltaValue)
+    }
 }
