@@ -1,0 +1,13 @@
+# Gradle / Android build output
+.gradle/
+.kotlin/
+build/
+local.properties
+*.apk
+*.aab
+# Signing material never enters git
+*.jks
+*.keystore
+keystore.properties
+# Raw BLE captures and exported health data (upstream convention: decoded findings only)
+captures/
