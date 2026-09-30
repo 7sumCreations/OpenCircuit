@@ -128,7 +128,9 @@ object Command {
     fun syncSince(unixSeconds: Long, channel: Int = SYNC_CHANNEL_SLEEP): ByteArray {
         // UInt32(clamping:) semantics: a pre-2020 clock clamps to 0, a far-future clock to 0xFFFFFFFF
         // (fails safe to the skip-backlog open) — never WRAPS to a small, valid-looking cursor.
-        val c = (unixSeconds - SYNC_EPOCH).coerceIn(0L, 0xFFFF_FFFFL)
+        // Compare before subtracting: `unixSeconds - SYNC_EPOCH` overflows near Long.MIN_VALUE
+        // (Swift traps there; Kotlin would wrap to a huge positive cursor).
+        val c = if (unixSeconds <= SYNC_EPOCH) 0L else (unixSeconds - SYNC_EPOCH).coerceAtMost(0xFFFF_FFFFL)
         return bytes(
             0x02, 0x00,
             ((c ushr 24) and 0xFF).toInt(), ((c ushr 16) and 0xFF).toInt(),
