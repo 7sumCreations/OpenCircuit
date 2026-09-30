@@ -80,6 +80,13 @@ class PublicSurfaceTest {
     }
 
     @Test
+    fun planStepRuleBites() {
+        assertEquals(setOf("plan-step"), rulesHit("not ported (E1 1.3 " + "Option 1)"))
+        assertEquals(setOf("plan-step"), rulesHit("added in E1-" + "S4-T6"))
+        assertEquals(emptySet(), rulesHit("E1 slice 4, Phase 3.5 review, option 2, FR02.018, S/Opcodes.swift:34"))
+    }
+
+    @Test
     fun kitDocNameRuleBites() {
         assertEquals(setOf("kit-doc"), rulesHit("Miss" + "_Ledger.md"))
         assertEquals(setOf("kit-doc"), rulesHit("see " + "test-runs" + "/2026.md"))
@@ -145,6 +152,8 @@ private object PublicSurface {
         "anti-pattern-id" to Regex("""\b[AIG]\d{1,2}\b"""),
         // A trailing digit counts too: a numbered label glued to the word is still a citation.
         "design-record" to Regex("""\b(?:ADR|PRD|DoD)(?:\d|\b)"""),
+        // Private planning labels: a numbered question's option ("1.3 Option 1") or a task ID ("E1-S4-T6").
+        "plan-step" to Regex("""\b\d+\.\d+ Option\b|\bE\d+-S\d+-T\d+\b"""),
         "kit-doc" to Regex("""Miss_Ledger|Unit_Test_Writing_Guide|Implementation_Patterns|epics-and-users|test-runs/|KIT_DEVIATIONS"""),
         "personal-data" to Regex("""/Users/|tutanota"""),
     )

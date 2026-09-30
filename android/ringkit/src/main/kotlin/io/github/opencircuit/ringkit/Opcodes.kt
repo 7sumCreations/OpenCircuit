@@ -45,7 +45,7 @@ private fun bytes(vararg v: Int): ByteArray {
  *
  * Every literal is a getter returning a FRESH array: no caller can mutate
  * another caller's command bytes. Opcodes.swift:32-188, minus the legacy auth fallbacks
- * `status1`, `liveHRStart` and `authNonce`/`knownAuthNonces` — not ported (E1 1.3 Option 1,
+ * `status1`, `liveHRStart` and `authNonce`/`knownAuthNonces` — not ported (see D-1 in
  * PORTING.md). Per-connection auth is `RingAuth` (PROTOCOL.md §5.8).
  */
 object Command {

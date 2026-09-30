@@ -16,9 +16,9 @@ import kotlin.test.assertTrue
  * never produced by `Frame`/`Command`. Several carry bytes ≥ 0x80
  * (81, b0, 87, 9e, fd, ff), which is what catches a signed-`Byte` slip.
  *
- * `testLiveHRDecode` (:112-116) → `liveHrDecode`, added with `LiveHR` in E1-S4-T6.
+ * `testLiveHRDecode` (:112-116) → `liveHrDecode`, added with `LiveHR` in E1 slice 4.
  * `testLiveHRStartSequenceShape` (:68-73) is replaced by an absence check: legacy auth,
- * including `Command.liveHRStart`, is not ported (E1 1.3 Option 1, PORTING.md).
+ * including `Command.liveHRStart`, is not ported (PORTING.md D-1).
  */
 class FrameTest {
     // FrameTests.swift:19-23 — real validated notify frames from the capture.

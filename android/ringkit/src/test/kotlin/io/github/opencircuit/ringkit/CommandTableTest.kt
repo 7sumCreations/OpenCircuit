@@ -13,7 +13,7 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertTrue
 
 /**
- * Every production TX command (incl. `vibrate`, E1 S3) equals upstream's literal bytes, carries no XOR
+ * Every production TX command (incl. `vibrate`, added in E1 slice 3) equals upstream's literal bytes, carries no XOR
  * trailer, and the legacy auth API (`status1`, `liveHRStart`, `authNonce`/`knownAuthNonces`)
  * does not exist. Checked with plain Java reflection, no kotlin-reflect.
  *
@@ -110,7 +110,7 @@ class CommandTableTest {
 
     @Test
     fun legacyAuthApiIsAbsent() {
-        assertEquals(emptyList(), legacyAuthMembers(commandClass), "legacy auth API must not be ported (E1 1.3 Option 1)")
+        assertEquals(emptyList(), legacyAuthMembers(commandClass), "legacy auth API must not be ported (PORTING.md D-1)")
     }
 
     /** The absence check must be able to fail: a class that HAS the members is flagged. */
