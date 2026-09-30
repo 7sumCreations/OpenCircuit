@@ -11,6 +11,15 @@ dependencies {
 }
 
 tasks.test {
+    // ADR E0 D1 A: UpstreamPinTest reads the pin file via an absolute path,
+    // never a working-dir-relative one (IDE runners use a different cwd).
+    // inputs.files (a collection) keeps the task runnable while the file is absent,
+    // so a missing UPSTREAM.md fails inside the test with a readable message.
+    val upstreamMd = rootProject.file("UPSTREAM.md")
+    systemProperty("opencircuit.upstreamMd", upstreamMd.absolutePath)
+    inputs.files(upstreamMd)
+        .withPropertyName("upstreamMd")
+        .withPathSensitivity(PathSensitivity.NONE)
     useJUnitPlatform()
     maxParallelForks = 1
     testLogging {
