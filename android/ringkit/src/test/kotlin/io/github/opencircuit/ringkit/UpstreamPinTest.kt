@@ -3,6 +3,7 @@ package io.github.opencircuit.ringkit
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -17,6 +18,12 @@ class UpstreamPinTest {
     private fun pinsIn(lines: List<String>): List<String> =
         lines.mapNotNull { pinLine.matchEntire(it)?.groupValues?.get(1) }
 
+    private fun singlePin(lines: List<String>, where: String): String {
+        val pins = pinsIn(lines)
+        assertEquals(1, pins.size, "expected exactly one 'Pinned SHA: <40-hex>' line in $where, found ${pins.size}")
+        return pins.first()
+    }
+
     @Test
     fun upstreamMdPinMatchesRingKitConstant() {
         val path = assertNotNull(
@@ -25,12 +32,30 @@ class UpstreamPinTest {
         )
         val file = File(path)
         assertTrue(file.isFile, "UPSTREAM.md not found at $path")
-        val pins = pinsIn(file.readLines())
-        assertEquals(1, pins.size, "expected exactly one 'Pinned SHA: <40-hex>' line in $path, found ${pins.size}")
+        val pin = singlePin(file.readLines(), path)
         assertEquals(
             RingKit.UPSTREAM_SHA,
-            pins.single(),
-            "UPSTREAM.md pins ${pins.single()} but RingKit.UPSTREAM_SHA is ${RingKit.UPSTREAM_SHA} — bump both together",
+            pin,
+            "UPSTREAM.md pins $pin but RingKit.UPSTREAM_SHA is ${RingKit.UPSTREAM_SHA} — bump both together",
+        )
+    }
+
+    @Test
+    fun exactlyOnePinLineIsRequired() {
+        val sha = "0123456789abcdef0123456789abcdef01234567"
+        assertEquals(sha, singlePin(listOf("# Upstream", "Pinned SHA: $sha", "Bump: edit the Pinned SHA: line"), "doc"))
+        assertFailsWith<AssertionError>("no pin line") { singlePin(listOf("# Upstream"), "doc") }
+        assertFailsWith<AssertionError>("two pin lines") {
+            singlePin(listOf("Pinned SHA: $sha", "Pinned SHA: ${sha.reversed()}"), "doc")
+        }
+    }
+
+    @Test
+    fun ringKitConstantIsAFullLowercaseSha() {
+        assertEquals(
+            listOf(RingKit.UPSTREAM_SHA),
+            pinsIn(listOf("Pinned SHA: ${RingKit.UPSTREAM_SHA}")),
+            "RingKit.UPSTREAM_SHA must itself satisfy the pin-line format",
         )
     }
 
