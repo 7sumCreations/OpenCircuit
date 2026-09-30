@@ -270,4 +270,12 @@ class BulkSleepTest {
         val hiEdge = hex(deepSleepRec).also { it[4] = 220.toByte() } // 220 ceiling inclusive
         assertEquals(220, record(hiEdge).heartRate)
     }
+
+    @Test
+    fun motionTimelineExpansion() { // :215-221
+        val tl = BulkSleep.motionTimeline(listOf(record(deepSleepRec)))
+        assertEquals(5, tl.size, "5 sub-samples per 150 s epoch")
+        assertEquals(java.time.Duration.ofSeconds(30), java.time.Duration.between(tl[0].time, tl[1].time), "30 s spacing")
+        assertEquals(1f, tl[0].movement, "motion baseline 01 = still")
+    }
 }

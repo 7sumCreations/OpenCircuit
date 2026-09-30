@@ -311,12 +311,11 @@ class RingKitVerifyTest {
     }
 
     /**
-     * :330-343 — HRV and RR ARE carried on `0x12` activity epochs (upstream issue #185). HRV is
+     * :330-345 — HRV and RR ARE carried on `0x12` activity epochs (upstream issue #185). HRV is
      * admitted only when the ring's own `[15:20]` intensity tail says the epoch was QUIET; RR is
      * motion-insensitive. Asserted through the public `samples` surface, plus the strict
-     * accessors, which must be untouched on both. Upstream's last check (:344-345, recovered HRV
-     * never seeds sleep detection) needs `BulkSleep.sleepVitalTimeline`, which is ported later in
-     * this epic with the motion timeline, and moves with it.
+     * accessors, which must be untouched on both, and `sleepVitalTimeline`, which the recovered
+     * HRV must never seed.
      */
     @Test
     fun activityEpochHrvAndRrRecovery() {
@@ -334,6 +333,9 @@ class RingKitVerifyTest {
         )
         assertTrue(
             quietAct.hrvRMSSD == null && movingAct.hrvRMSSD == null, "#185: the strict sleep-vitals accessor is UNCHANGED on both",
+        )
+        assertTrue(
+            BulkSleep.sleepVitalTimeline(listOf(quietAct, movingAct)).isEmpty(), "#185: recovered HRV never seeds sleep detection",
         )
     }
 
