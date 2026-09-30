@@ -28,11 +28,11 @@ Run this from `android/` at the start of every port epic:
 
 ```sh
 scripts/upstream-diff.sh                    # fetch upstream, then list changes since the pin
-scripts/upstream-diff.sh --no-fetch         # offline: compare against the last-fetched upstream/master
+scripts/upstream-diff.sh --no-fetch         # offline: compare against the last-fetched upstream default branch
 scripts/upstream-diff.sh ios/OpenCircuit    # also watch extra paths (repo-root relative)
 ```
 
-By default it watches `docs/PROTOCOL.md`, `ios/OpenCircuitKit` and `LICENSE`. It prints the upstream commits and a diffstat, or `no upstream changes since <short-sha>`. It never modifies your files or the pin; the only thing it updates is the fetched `upstream/*` refs.
+By default it watches `docs/PROTOCOL.md`, `ios/OpenCircuitKit` and `LICENSE`, comparing against upstream's default branch (looked up on every fetch, so a rename such as `master` → `main` needs no change). It prints the upstream commits and a diffstat, or `no upstream changes since <short-sha>`. It never modifies your files or the pin; the only thing it updates is the fetched `upstream/*` refs.
 
 If it reports that there is no `upstream` remote, add one:
 

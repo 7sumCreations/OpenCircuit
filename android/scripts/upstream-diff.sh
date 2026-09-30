@@ -2,13 +2,16 @@
 # upstream-diff.sh — what changed upstream since the pinned SHA (read-only).
 #
 # Usage (from android/):  scripts/upstream-diff.sh [--no-fetch] [extra/path ...]
-#   --no-fetch     skip `git fetch upstream`; compare against the last-fetched upstream/master
+#   --no-fetch     skip the fetch; compare against the last-fetched upstream default branch
+#                  (upstream/HEAD; upstream/master if that was never recorded)
 #   extra/path     additional repo-root-relative paths to watch
 #
+# Compares against upstream's default branch, re-read from the remote on every fetch
+# (`git remote set-head upstream --auto`), so a master -> main rename needs no edit here.
 # Watched by default (repo-root relative): docs/PROTOCOL.md, ios/OpenCircuitKit, LICENSE.
 # Pin source: the single "Pinned SHA: <40-hex>" line in android/UPSTREAM.md (ADR E0 D2);
 # override the file with UPSTREAM_MD=<file>. This script never modifies the working tree,
-# the index or the pin; the only write is `git fetch upstream` updating refs/remotes/upstream.
+# the index or the pin; the only writes are under refs/remotes/upstream (fetch + set-head).
 set -euo pipefail
 
 die() { echo "upstream-diff: $1" >&2; exit 1; }
@@ -67,19 +70,31 @@ git -C "$REPO_ROOT" remote get-url upstream >/dev/null 2>&1 \
 if [ "$fetch" = 1 ]; then
   git -C "$REPO_ROOT" fetch --quiet upstream \
     || die "git fetch upstream failed (offline? retry with --no-fetch)"
+  # Re-ask upstream for its default branch so a rename (master -> main) is followed.
+  # Writes only refs/remotes/upstream/HEAD.
+  git -C "$REPO_ROOT" remote set-head upstream --auto >/dev/null \
+    || die "cannot read upstream's default branch (offline? retry with --no-fetch)"
 fi
-git -C "$REPO_ROOT" rev-parse --verify --quiet "refs/remotes/upstream/master^{commit}" >/dev/null \
-  || die "upstream/master is not available — run without --no-fetch first"
+# upstream/HEAD names upstream's default branch. It can be unset with --no-fetch (a remote
+# added by `git remote add` gets it only on a fetch); then fall back to upstream/master if present.
+if ! upstream_ref=$(git -C "$REPO_ROOT" symbolic-ref --quiet refs/remotes/upstream/HEAD); then
+  git -C "$REPO_ROOT" rev-parse --verify --quiet "refs/remotes/upstream/master^{commit}" >/dev/null \
+    || die "upstream's default branch is unknown — run once without --no-fetch"
+  upstream_ref=refs/remotes/upstream/master
+fi
+branch=${upstream_ref#refs/remotes/upstream/}
+git -C "$REPO_ROOT" rev-parse --verify --quiet "${upstream_ref}^{commit}" >/dev/null \
+  || die "upstream/$branch is not available — run without --no-fetch first"
 git -C "$REPO_ROOT" cat-file -e "${pin}^{commit}" 2>/dev/null \
   || die "pinned SHA $pin is not in this repo (fetch upstream first?)"
 
-log=$(git -C "$REPO_ROOT" log --oneline "$pin..refs/remotes/upstream/master" -- "${paths[@]}")
+log=$(git -C "$REPO_ROOT" log --oneline "$pin..$upstream_ref" -- "${paths[@]}")
 if [ -z "$log" ]; then
   echo "no upstream changes since $short"
 else
-  echo "Upstream commits since $short touching: ${paths[*]}"
+  echo "Upstream commits since $short on upstream/$branch touching: ${paths[*]}"
   echo "$log"
   echo
   # Three dots = changes on upstream since its merge-base with the pin, matching the log range above.
-  git -C "$REPO_ROOT" diff --stat "$pin...refs/remotes/upstream/master" -- "${paths[@]}"
+  git -C "$REPO_ROOT" diff --stat "$pin...$upstream_ref" -- "${paths[@]}"
 fi
