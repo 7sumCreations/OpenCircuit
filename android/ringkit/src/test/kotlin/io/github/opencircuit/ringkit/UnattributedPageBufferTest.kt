@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/UnattributedPageBufferTests.swift
  * (@ b1c2fdd): the 6 tests of `UnattributedPageBufferTests`. The same upstream file also holds
  * `OpenedOntoLiveStreamTests` (2 tests of `HistoryChannelTrace.openedOntoLiveStream`, `:208-229`);
- * they port together with `HistoryChannelTrace`, which does not exist in Kotlin yet.
+ * they are [OpenedOntoLiveStreamTest] at the end of this file.
  *
  * The night is built from REAL record bodies (the 2026-06-13 FR02.018 page) with only the 4-byte
  * counters re-stamped onto the tester's timeline, and every page is sealed with a test-side XOR,
@@ -177,5 +177,38 @@ class UnattributedPageBufferTest {
         val buffer = UnattributedPageBuffer()
         assertTrue(buffer.drain().isEmpty())
         assertTrue(buffer.drain().isEmpty())
+    }
+}
+
+/**
+ * The diagnostic tell that identified both testers' bundles: a drain whose first observed frame is
+ * a `0x4c` data page opened onto a stream already in flight.
+ *
+ * Port of upstream `OpenedOntoLiveStreamTests`, the second class in
+ * ios/OpenCircuitKit/Tests/OpenCircuitKitTests/UnattributedPageBufferTests.swift:208-229
+ * (@ b1c2fdd): both tests. Kept in this file, as upstream keeps it beside the buffer's tests.
+ */
+class OpenedOntoLiveStreamTest {
+
+    // :211-215
+    private fun trace(firstOpcode: Int?): HistoryChannelTrace {
+        val t = HistoryChannelTrace(label = "sleep", channel = 0x00, startedAt = Instant.parse("2026-08-04T04:15:00Z"))
+        t.firstOpcode = firstOpcode
+        return t
+    }
+
+    // :217 — the drain's first frame was a DATA page: pages were in flight before the trace existed.
+    @Test
+    fun firstOpcode4CMeansWeOpenedOntoALiveStream() {
+        assertTrue(trace(firstOpcode = 0x4C).openedOntoLiveStream)
+    }
+
+    // :223
+    @Test
+    fun healthyHandshakesAreNotFlagged() {
+        assertFalse(trace(firstOpcode = 0x81).openedOntoLiveStream, "own auth challenge")
+        assertFalse(trace(firstOpcode = 0x82).openedOntoLiveStream, "own sync-open ACK")
+        assertFalse(trace(firstOpcode = 0x50).openedOntoLiveStream, "end marker")
+        assertFalse(trace(firstOpcode = null).openedOntoLiveStream, "no frame seen at all")
     }
 }
