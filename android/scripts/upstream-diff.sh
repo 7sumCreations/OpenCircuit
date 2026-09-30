@@ -13,12 +13,27 @@ set -euo pipefail
 
 die() { echo "upstream-diff: $1" >&2; exit 1; }
 
-case "${BASH_SOURCE[0]}" in
-  */*) script_dir=${BASH_SOURCE[0]%/*} ;;
-  *) script_dir=. ;;
-esac
-# CDPATH= keeps cd from echoing the target dir into the capture when CDPATH is set.
-SCRIPT_DIR=$(CDPATH='' cd -- "$script_dir" && pwd)
+# Physical directory holding path $1 (dirname without dirname). CDPATH= keeps cd from
+# echoing the target dir into the capture when CDPATH is set; -P resolves symlinked dirs.
+dir_of() {
+  case "$1" in
+    */*) CDPATH='' cd -P -- "${1%/*}" && pwd ;;
+    *) pwd -P ;;
+  esac
+}
+
+# Follow symlinks to the real script so a linked invocation still finds android/UPSTREAM.md.
+# Plain `readlink` (no -f: not on older macOS); a relative target is relative to the link's dir.
+src=${BASH_SOURCE[0]}
+while [ -L "$src" ]; do
+  link_dir=$(dir_of "$src")
+  target=$(readlink -- "$src")
+  case "$target" in
+    /*) src=$target ;;
+    *) src=$link_dir/$target ;;
+  esac
+done
+SCRIPT_DIR=$(dir_of "$src")
 ANDROID_DIR=${SCRIPT_DIR%/*}
 PIN_FILE=${UPSTREAM_MD:-$ANDROID_DIR/UPSTREAM.md}
 # Same contract as UpstreamPinTest's pinLine regex — change both together (ADR E0 D2).
