@@ -68,7 +68,8 @@ git -C "$REPO_ROOT" remote get-url upstream >/dev/null 2>&1 \
   || die "no 'upstream' remote. Add it: git remote add upstream https://github.com/perezjuanj/OpenCircuit.git"
 
 if [ "$fetch" = 1 ]; then
-  git -C "$REPO_ROOT" fetch --quiet upstream \
+  # --no-tags: upstream's tags must not land in local refs/tags (keeps the header's write contract true).
+  git -C "$REPO_ROOT" fetch --quiet --no-tags upstream \
     || die "git fetch upstream failed (offline? retry with --no-fetch)"
   # Re-ask upstream for its default branch so a rename (master -> main) is followed.
   # Writes only refs/remotes/upstream/HEAD.
