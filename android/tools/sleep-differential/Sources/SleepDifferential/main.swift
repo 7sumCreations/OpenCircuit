@@ -49,9 +49,34 @@
 //                                      (rrVarWeight 0.5)
 //   selstg <zone> <brief>              classify(from: latestNightRecords(from:temperatures:)) with the
 //                                      device zone set to <zone> (America/New_York only)
+//   The night metrics, all from the shipped-tuning staging above ("-" = absent):
+//   cscore <score> <tier>              SleepScore.composite of the staged summary, with the mean HR
+//                                      over the sleep window and the mean skin temperature there
+//                                      minus 33.5 °C (each only when the window holds one)
+//   cfac <six factor bit patterns>     its factors, in Factor.allCases order
+//   hrstage <awake> <core> <deep> <rem>  SleepDetailMetrics.averageHRByStage
+//   mov <still> <light> <active> <levels>  movementSummary over the in-bed span (the whole archive
+//                                      when nothing stages); <levels> one digit per epoch
+//   movf <bits>                        its movementFraction
+//   stress <score>                     SleepStress.overnightScore of the in-bed records
+//   stressdur <relaxed> <normal> <medium> <high>   stateDurations of the same, as bit patterns
+//   avg <hr> <hrv> <spo2> <rr>         OvernightAverages.mean of each sample kind over the sleep window
+//   naps <zone> <count>                NapDetection.naps(from:mainSleep:temperatures:) with the device
+//                                      zone set to <zone> (UTC, Asia/Kolkata), then per nap:
+//   nap <zone> <start> <end> <long> <asleep seconds>
+//   napseg <zone> <stage> <start> <end>
+//   and, for nights that carry 0x48 frames:
+//   osadom <frames>                    OSAWaveform.dominantSessionFrames count
+//   osach <ir> <red> <green>           OSAWaveform.channels of those frames, samples per channel
+//   osaraw <bit patterns>              OSASpO2.spo2Series (the gated per-window SpO2, unsmoothed)
+//   osaev <events>                     desaturationEvents of its 3-wide median filter
+//   osa <validWindows> | osa none      OSASpO2.summarize(frames:)
+//   osasum <avg> <min> <below90> <odi> <hours>   its doubles
 //   end
-// (score, onset and overnight lines appear only when there is a main block; sel, stg-family lines
-// always — stg, sum, min, win and stgv describe an empty night when nothing stages.)
+// (score, onset and overnight lines appear only when there is a main block; sel, stg-family and
+// metric lines always — they describe an empty night when nothing stages.)
+// inputs.txt also carries, per OSA night:
+//   w <394 hex digits>                 one 0x48 frame, in arrival order
 //
 // After the synthetic and fixture nights come the selection nights: multi-block archives built to
 // reach every night-selection path (two nights, multi-drain holes, still evenings, short tails,
@@ -59,7 +84,11 @@
 // nights either side of the intra-night gap). After those come the staging nights, built to reach
 // each staging pass: an SpO2 cadence that exits before the data ends, an HR-elevated head, a second
 // bout after a mid-night wake, a moving bedtime lead-in across a data gap, a quiet morning rise that
-// stops emitting sleep-vitals, and still nights under cold, worn or out-of-block temperatures.
+// stops emitting sleep-vitals, and still nights under cold, worn or out-of-block temperatures. Then
+// daytime nap days (naps of every length around the 15 min floor and the 3 h long-nap mark,
+// activity-tagged still blocks, a nap beside the night), and last the OSA nights: synthetic 0x48
+// PPG bursts (clean, desaturating, low-perfusion, noisy, a re-dumped previous-night backlog with
+// duplicate frames, and too short to hold one window).
 
 import Foundation
 @testable import OpenCircuitKit
@@ -91,6 +120,7 @@ struct Night {
     let shape: String
     var records: [[UInt8]] = []
     var temps: [(Int, Double)] = []
+    var frames: [[UInt8]] = []
 }
 
 /// Builds a night epoch by epoch; every epoch advances the counter by 150 s.
@@ -600,6 +630,133 @@ func stagingNight(_ index: Int) -> Night {
     return Night(id: "staging-\(padded(index, 3))", shape: shape, records: b.records, temps: temps)
 }
 
+// MARK: - Nap days (daytime stillness of every length, beside or without a night)
+
+let napDayShapes = ["nap-floor", "nap-long", "nap-sedentary", "nap-after-night", "nap-restless", "nap-uniform"]
+let napDaysPerShape = 2
+
+/// Nap day `index` (deterministic from its index alone). Times are UTC wall clock; Kolkata sees the
+/// same archive 5 h 30 min later.
+func napDay(_ index: Int) -> Night {
+    let shape = napDayShapes[index % napDayShapes.count]
+    var rng = SplitMix64(state: 0x0A9D_A400_0000_0000 &+ UInt64(index))
+    let day = 3000 + index                   // after every staging night
+    let hr = rng.int(48, 60)
+    var b = Builder(rng: SplitMix64(state: rng.next()), counter: utc(day, 9, rng.int(0, 59)))
+    switch shape {
+    case "nap-floor":
+        // Blocks either side of the 15 min floor, then an ordinary nap.
+        b.active(20); b.asleep(rng.int(5, 9), hr: hr); b.active(20); b.asleep(rng.int(10, 14), hr: hr)
+        b.active(20); b.asleep(rng.int(24, 48), hr: hr); b.active(20)
+    case "nap-long":
+        // Either side of the 3 h long-nap mark.
+        b.active(20); b.asleep(rng.int(70, 80), hr: hr); b.active(20)
+    case "nap-sedentary":
+        // Awake at a desk (still, activity-tagged), then a real nap.
+        b.active(20); b.awakeStill(rng.int(30, 50), hr: 68...80); b.active(20); b.asleep(rng.int(20, 40), hr: hr)
+        b.active(20)
+    case "nap-after-night":
+        // The night ends, then a late-morning nap a couple of hours later.
+        b.counter = utc(day + 1, 0, rng.int(0, 59))
+        b.active(8); b.asleep(rng.int(150, 180), hr: hr); b.active(rng.int(40, 60)); b.asleep(rng.int(24, 48), hr: hr + 4)
+        b.active(20)
+    case "nap-restless":
+        // A nap broken by short stirs.
+        b.active(20); b.asleep(rng.int(10, 16), hr: hr); b.stir(2, hr: hr); b.asleep(rng.int(10, 16), hr: hr)
+        b.stir(1, hr: hr); b.asleep(rng.int(8, 14), hr: hr); b.active(20)
+    case "nap-uniform":
+        // Short, perfectly still sleep-vitals blocks: too short to stage, so the nap falls back to its
+        // coarse split (or, with nothing detected inside, to the whole window asleep).
+        b.active(20)
+        for _ in 0..<rng.int(9, 12) { b.stillVitals(hr: hr, hrv: 50) }
+        b.active(20)
+        for _ in 0..<rng.int(16, 30) { b.stillVitals(hr: hr, hrv: 50) }
+        b.active(20)
+    default:
+        fatalError("unknown nap shape \(shape)")
+    }
+    var night = Night(id: "napday-\(padded(index, 3))", shape: shape, records: b.records)
+    if rng.chance(50) {
+        for i in stride(from: 0, to: b.records.count, by: 2) {
+            let t = Int(BulkRecord(b.records[i])!.date().timeIntervalSince1970)
+            night.temps.append((t, Double(315 + b.rng.int(0, 30)) / 10))
+        }
+    }
+    return night
+}
+
+// MARK: - OSA nights (synthetic 0x48 PPG bursts)
+
+let osaShapes = ["osa-clean", "osa-dips", "osa-lowperf", "osa-noisy", "osa-backlog", "osa-short"]
+let osaNightsPerShape = 5
+
+/// Pack three channels into 0x48 frames: 20 samples per channel per frame, two 30-sample blocks at
+/// [15] and [106] interleaving the channels, counters stepping down by 20 from `top`, an XOR trailer.
+func osaFrames(_ ch: [[Int]], cursor: UInt32, top: UInt32) -> [[UInt8]] {
+    var out: [[UInt8]] = []
+    for k in 0..<(ch[0].count / 20) {
+        var f = [UInt8](repeating: 0, count: 197)
+        let counter = top &- UInt32(k * 20)
+        f[0] = 0x48; f[1] = 0xc1
+        for (o, v) in [(2, counter), (6, cursor)] {
+            f[o] = UInt8(v >> 24); f[o + 1] = UInt8((v >> 16) & 0xFF); f[o + 2] = UInt8((v >> 8) & 0xFF); f[o + 3] = UInt8(v & 0xFF)
+        }
+        f[11] = 0x46; f[12] = 0x50; f[14] = 0x5b; f[105] = 0x5c
+        for (blockIndex, blk) in [15, 106].enumerated() {
+            for s in 0..<30 {
+                let v = ch[s % 3][k * 20 + blockIndex * 10 + s / 3]
+                f[blk + s * 3] = UInt8((v >> 16) & 0xFF); f[blk + s * 3 + 1] = UInt8((v >> 8) & 0xFF); f[blk + s * 3 + 2] = UInt8(v & 0xFF)
+            }
+        }
+        f[196] = f[0..<196].reduce(0, ^)
+        out.append(f)
+    }
+    return out
+}
+
+/// OSA night `index` (deterministic from its index alone): IR / red / green PPG at ~4.15 Hz with a
+/// cardiac pulse, the red/IR ratio R setting SpO2 (≈ 104.91 − 15.18·R), and per-shape perfusion,
+/// noise and desaturations.
+func osaNight(_ index: Int) -> Night {
+    let shape = osaShapes[index % osaShapes.count]
+    var rng = SplitMix64(state: 0x05A0_0000_0000_0000 &+ UInt64(index))
+    let n = shape == "osa-short" ? 20 * rng.int(2, 6) : 20 * rng.int(60, 150)
+    let fc = Double(rng.int(240, 310)) / 1000          // cardiac frequency, cycles per sample
+    let dcIR = Double(rng.int(330_000, 360_000)), dcRed = Double(rng.int(280_000, 295_000)), dcGreen = Double(rng.int(265_000, 280_000))
+    let perfusion = shape == "osa-lowperf" ? 0.0006 : Double(rng.int(80, 150)) / 10_000
+    let noise = shape == "osa-noisy" ? rng.int(2_000, 6_000) : rng.int(0, 60)
+    let baseR = Double(rng.int(58, 70)) / 100
+    let dipEvery = rng.int(500, 900), dipLength = rng.int(80, 170)
+    var ch: [[Int]] = [[], [], []]
+    for t in 0..<n {
+        let inDip = shape == "osa-dips" && t % dipEvery >= dipEvery - dipLength
+        let r = inDip ? Double(rng.int(115, 135)) / 100 : baseR + Double(rng.int(-2, 2)) / 100
+        let wave = cos(2 * Double.pi * fc * Double(t))
+        let acIR = dcIR * perfusion
+        let acRed = r * acIR / dcIR * dcRed
+        ch[0].append(Int(dcIR + acIR * wave) + rng.int(-noise, noise))
+        ch[1].append(Int(dcRed + acRed * wave) + rng.int(-noise, noise))
+        ch[2].append(Int(dcGreen + 2 * acIR * wave) + rng.int(-noise, noise))
+    }
+    let cursor = UInt32(0x0c40_0000 + index * 0x1000)
+    var frames = osaFrames(ch, cursor: cursor, top: UInt32(rng.int(80_000, 120_000)))
+    if shape == "osa-backlog" {
+        // A previous night's session re-dumped first (fewer frames, another cursor), and some of
+        // tonight's frames retransmitted.
+        var old: [[Int]] = [[], [], []]
+        for t in 0..<(20 * rng.int(20, 40)) {
+            let wave = cos(2 * Double.pi * fc * Double(t))
+            old[0].append(Int(dcIR + dcIR * perfusion * wave)); old[1].append(Int(dcRed + baseR * perfusion * dcRed * wave))
+            old[2].append(Int(dcGreen + 2 * dcIR * perfusion * wave))
+        }
+        let previous = osaFrames(old, cursor: cursor &- 0x100, top: UInt32(rng.int(200_000, 220_000)))
+        let dups = (0..<rng.int(5, 20)).map { _ in frames[rng.int(0, frames.count - 1)] }
+        frames = previous + frames + dups
+    }
+    if rng.chance(50) { frames.reverse() }            // arrival order never decides the decode
+    return Night(id: "osa-\(padded(index, 3))", shape: shape, frames: frames)
+}
+
 // MARK: - Device time zone
 
 /// Night selection reads the device calendar, so the generator sets the process default zone and
@@ -670,7 +827,10 @@ func golden(_ night: Night) -> [String] {
         hit("onset-unobserved", onset)
     }
     lines += selection(of: recs, temps: temps)
-    lines += staging(of: recs, temps: temps)
+    let staged = staging(of: recs, temps: temps)
+    lines += staged.lines
+    lines += metrics(of: recs, temps: temps, main: main, segs: staged.segs)
+    if !night.frames.isEmpty { lines += osa(night.frames) }
     lines.append("end")
 
     // Branch coverage — which pipeline paths this night exercised.
@@ -747,8 +907,8 @@ func brief(_ segs: [SleepSegment]) -> String {
         + "\(w.map { secs($0.onset) } ?? "-") \(w.map { secs($0.wake) } ?? "-")"
 }
 
-/// The staging lines for one night, and the staging branches it reached.
-func staging(of recs: [BulkRecord], temps: [TemperatureSample]) -> [String] {
+/// The staging lines for one night (and its shipped-tuning segments), and the staging branches it reached.
+func staging(of recs: [BulkRecord], temps: [TemperatureSample]) -> (lines: [String], segs: [SleepSegment]) {
     let segs = SleepStaging.classify(from: recs, temperatures: temps)
     let s = SleepStaging.summary(segs)
     let m = s.minutes
@@ -788,6 +948,116 @@ func staging(of recs: [BulkRecord], temps: [TemperatureSample]) -> [String] {
     for stage in [SleepStage.awake, .asleepCore, .asleepDeep, .asleepREM] {
         hit("stg-stage-\(stage.rawValue)", segs.contains { $0.stage == stage })
     }
+    return (lines, segs)
+}
+
+// MARK: - Night metrics
+
+let napZones = ["UTC", "Asia/Kolkata"]
+
+func opt(_ d: Double?) -> String { d.map(bits) ?? "-" }
+
+/// The metric lines for one night, from its shipped-tuning staging, and the metric branches it reached.
+func metrics(of recs: [BulkRecord], temps: [TemperatureSample], main: ActivityPeriod?, segs: [SleepSegment]) -> [String] {
+    var lines: [String] = []
+    let s = SleepStaging.summary(segs)
+    let window = SleepStaging.sleepWindow(segs).map { DateInterval(start: $0.onset, end: $0.wake) }
+    let samples = BulkSleep.samples(from: recs)
+    func mean(_ kind: MetricKind) -> Double? {
+        guard let w = window else { return nil }
+        return OvernightAverages.mean(samples.filter { $0.kind == kind }.map { .init(value: $0.value, start: $0.start) }, window: w)
+    }
+    let restingHR = mean(.heartRate)
+    let tempOffset = window.flatMap { w in
+        OvernightAverages.mean(temps.map { .init(value: $0.celsius, start: $0.time) }, window: w)
+    }.map { $0 - 33.5 }
+    let c = SleepScore.composite(.init(totalAsleep: s.totalAsleep, timeAwake: s.awake, efficiency: s.efficiency,
+                                       deep: s.deep, light: s.light, rem: s.rem,
+                                       restingHR: restingHR, tempOffsetC: tempOffset))
+    lines.append("cscore \(c.score) \(c.tier.rawValue)")
+    lines.append("cfac " + SleepScore.Composite.Factor.allCases.map { opt(c.factors[$0]) }.joined(separator: " "))
+    hit("cscore-\(c.tier.rawValue)")
+    hit("cscore-factors-\(c.factors.count)")
+
+    let byStage = SleepDetailMetrics.averageHRByStage(records: recs, segments: segs)
+    lines.append("hrstage " + [SleepStage.awake, .asleepCore, .asleepDeep, .asleepREM]
+        .map { byStage[$0].map(String.init) ?? "-" }.joined(separator: " "))
+    hit("hrstage-any", !byStage.isEmpty)
+
+    let inBed = segs.filter { $0.stage == .inBed }
+    let span = inBed.isEmpty ? nil : DateInterval(start: inBed.map(\.start).min()!, end: inBed.map(\.end).max()!)
+    let m = SleepDetailMetrics.movementSummary(records: recs, in: span)
+    lines.append("mov \(m.still) \(m.light) \(m.active) \(m.levels.isEmpty ? "-" : m.levels.map(String.init).joined())")
+    lines.append("movf \(bits(m.movementFraction))")
+    hit("mov-light", m.light > 0)
+    hit("mov-active", m.active > 0)
+
+    let scoped = BulkSleep.records(recs, within: span)
+    let stress = SleepStress.overnightScore(records: scoped)
+    let durations = SleepStress.stateDurations(records: scoped)
+    lines.append("stress \(stress.map(String.init) ?? "-")")
+    lines.append("stressdur " + SleepStress.Band.allCases.map { opt(durations[$0]) }.joined(separator: " "))
+    hit("stress-none", stress == nil)
+    if let st = stress { hit("stress-\(SleepStress.Band.of(st).rawValue)") }
+
+    lines.append("avg " + [MetricKind.heartRate, .hrvSDNN, .spo2, .respiratoryRate].map { opt(mean($0)) }.joined(separator: " "))
+
+    // Nap candidates (recomputed from the public pieces, for coverage only — the goldens come from naps).
+    let candidates = ActivityPeriod.detectFromMotion(BulkSleep.motionTimeline(from: recs), temperatureSamples: temps)
+    for z in napZones {
+        let naps = withDeviceZone(z) { NapDetection.naps(from: recs, mainSleep: main, temperatures: temps) }
+        lines.append("naps \(z) \(naps.count)")
+        for n in naps {
+            precondition(n.asleep == n.asleep.rounded(), "non-integral nap asleep \(n.asleep)")
+            lines.append("nap \(z) \(secs(n.start)) \(secs(n.end)) \(n.isLongNap) \(Int64(n.asleep))")
+            lines += n.segments.map { "napseg \(z) \($0.stage.rawValue) \(secs($0.start)) \(secs($0.end))" }
+            hit("nap-long", n.isLongNap)
+            hit("nap-whole-window", n.segments.count == 2 && n.segments.allSatisfy { $0.start == n.start && $0.end == n.end })
+            let stagedNap = BulkSleep.stagedSegments(from: recs.filter { let t = $0.date(); return t >= n.start && t <= n.end },
+                                                     within: DateInterval(start: n.start, end: n.end))
+            hit("nap-coarse-fallback", !stagedNap.contains { $0.stage == .asleepCore || $0.stage == .asleepDeep || $0.stage == .asleepREM })
+            hit("nap-staged-deep-or-rem", n.segments.contains { $0.stage == .asleepDeep || $0.stage == .asleepREM })
+            hit("nap-awake-inside", n.segments.contains { $0.stage == .awake })
+        }
+        hit("nap-found-\(z)", !naps.isEmpty)
+
+        // Why candidate blocks were not naps.
+        for p in candidates where p.activity == .sleep {
+            if p.duration < NapDetection.minNapDuration { hit("nap-cand-too-short"); continue }
+            if let mm = main, p.start < mm.end && p.end > mm.start { hit("nap-cand-overlaps-main"); continue }
+            if withDeviceZone(z, { SleepWindow.isOvernightBlock(start: p.start, end: p.end) }) { hit("nap-cand-overnight-\(z)"); continue }
+            let worn = recs.filter { let t = $0.date(); return t >= p.start && t <= p.end && $0.layout != .idle }
+            let share = worn.isEmpty ? 0 : Double(worn.filter { $0.layout == .sleepVitals }.count) / Double(worn.count)
+            hit("nap-cand-share-rejected", share < NapDetection.minNapSleepVitalsShare)
+        }
+    }
+    return lines
+}
+
+/// The OSA lines for one night's 0x48 frames, and the OSA branches it reached.
+func osa(_ frames: [[UInt8]]) -> [String] {
+    var lines: [String] = []
+    let dominant = OSAWaveform.dominantSessionFrames(frames)
+    let ch = OSAWaveform.channels(from: dominant)
+    let raw = OSASpO2.spo2Series(ir: ch[0], red: ch[1], green: ch[2])
+    lines.append("osadom \(dominant.count)")
+    lines.append("osach \(ch[0].count) \(ch[1].count) \(ch[2].count)")
+    lines.append("osaraw" + raw.map { " " + bits($0) }.joined())
+    lines.append("osaev \(OSASpO2.desaturationEvents(OSASpO2.medianFilter(raw, 3)))")
+    if let s = OSASpO2.summarize(frames: frames) {
+        lines.append("osa \(s.validWindows)")
+        lines.append("osasum \(bits(s.averageSpO2)) \(bits(s.minSpO2)) \(bits(s.timeBelow90Seconds)) \(bits(s.odi)) \(bits(s.durationHours))")
+        hit("osa-summary")
+        hit("osa-below90", s.timeBelow90Seconds > 0)
+        hit("osa-events", s.odi > 0)
+    } else {
+        lines.append("osa none")
+        hit("osa-none")
+    }
+    hit("osa-backlog-dropped", dominant.count < frames.count)
+    hit("osa-duplicate-frames", ch[0].count < dominant.count * OSAWaveform.samplesPerChannelPerFrame)
+    let windows = ch[0].count >= OSASpO2.windowLength ? (ch[0].count - OSASpO2.windowLength) / OSASpO2.windowStep + 1 : 0
+    hit("osa-windows-gated", raw.count < windows)
     return lines
 }
 
@@ -795,6 +1065,7 @@ func inputLines(_ night: Night) -> [String] {
     var lines = ["night \(night.id) \(night.shape)"]
     lines += night.records.map { "r \(hex($0))" }
     lines += night.temps.map { "t \($0.0) \(bits($0.1))" }
+    lines += night.frames.map { "w \(hex($0))" }
     lines.append("end")
     return lines
 }
@@ -811,6 +1082,8 @@ let outDir = URL(fileURLWithPath: args[1], isDirectory: true)
 let nights = (0..<(shapes.count * nightsPerShape)).map(synthetic) + fixtures()
     + (0..<(selectionShapes.count * selectionNightsPerShape)).map(selectionArchive)
     + (0..<(stagingShapes.count * stagingNightsPerShape)).map(stagingNight)
+    + (0..<(napDayShapes.count * napDaysPerShape)).map(napDay)
+    + (0..<(osaShapes.count * osaNightsPerShape)).map(osaNight)
 let header = "# Generated by android/tools/sleep-differential from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

@@ -5,6 +5,7 @@ import io.github.opencircuit.ringkit.SleepDifferentialFixtures.bitsToDouble
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,8 +16,11 @@ import kotlin.test.assertTrue
  * pinned Swift code over seeded synthetic nights and upstream's fixture nights, and wrote their
  * inputs and canonical outputs to `src/test/resources/sleep-differential/`. This test runs the
  * Kotlin port over the same inputs, renders the same canonical lines, and compares them: sleep
- * detection, night selection in three zones, and staging (every segment, the summary and its
- * minutes, the sleep window, each staging switch turned off, and staging after selection).
+ * detection, night selection in three zones, staging (every segment, the summary and its minutes,
+ * the sleep window, each staging switch turned off, and staging after selection), and the night
+ * metrics derived from that staging (composite score and factors, per-stage HR, the movement chart,
+ * overnight stress, overnight averages, naps in two zones) plus, for the OSA nights, the `0x48`
+ * decode, the gated SpO2 series and the night summary.
  *
  * Comparison rule: every line is compared WHOLE and exactly (times, stages, counts, flags), except
  * floating-point fields, which must agree within 1e-9; every double that is not bit-identical is
@@ -26,8 +30,11 @@ import kotlin.test.assertTrue
 class SleepDifferentialTest {
 
     companion object {
-        /** Golden lines whose fields after the first token are IEEE-754 bit patterns. */
-        private val DOUBLE_FIELDS = setOf("score", "sum")
+        /** Threads the nights are rendered on — the same cap as the build's test workers. */
+        private const val RENDER_THREADS = 4
+
+        /** Golden lines whose fields after the first token are IEEE-754 bit patterns ("-" = absent). */
+        private val DOUBLE_FIELDS = setOf("score", "sum", "cfac", "movf", "stressdur", "avg", "osaraw", "osasum")
 
         private val OVERNIGHT_ZONES = listOf("UTC", "Asia/Kolkata")
 
@@ -73,13 +80,12 @@ class SleepDifferentialTest {
                 "${w?.let { secs(it.onset) } ?: "-"} ${w?.let { secs(it.wake) } ?: "-"}"
         }
 
-        /** The staging lines: shipped tuning in full, each knob changed in brief, and staging after selection. */
-        private fun stagingLines(n: DifferentialNight): List<String> {
+        /** The staging lines for [segs] (the shipped-tuning staging): in full, each knob changed in brief, and staging after selection. */
+        private fun stagingLines(n: DifferentialNight, segs: List<SleepSegment>): List<String> {
             fun classify(
                 tuning: SleepStaging.Tuning = SleepStaging.Tuning.DEFAULT,
                 baseline: SleepStaging.PersonalBaseline? = null,
             ) = SleepStaging.classify(n.records, temperatures = n.temps, tuning = tuning, baseline = baseline)
-            val segs = classify()
             val s = SleepStaging.summary(segs)
             val m = s.minutes
             val lines = segs.mapTo(mutableListOf()) { "stg ${it.stage.rawValue} ${secs(it.start)} ${secs(it.end)}" }
@@ -103,6 +109,87 @@ class SleepDifferentialTest {
                 BulkSleep.latestNightRecords(n.records, zone = zone, temperatures = n.temps), temperatures = n.temps,
             )
             lines += "selstg America/New_York ${brief(selected)}"
+            return lines
+        }
+
+        private fun opt(d: Double?): String = d?.let { bits(it) } ?: "-"
+
+        /** Zones naps are judged in (upstream reads the device calendar; the generator set it to each). */
+        private val NAP_ZONES = listOf("UTC", "Asia/Kolkata")
+
+        /**
+         * The night-metric lines, derived from the shipped-tuning staging [segs] and the main block
+         * already computed — nothing is staged again here except inside each nap's own window.
+         */
+        private fun metricLines(n: DifferentialNight, main: ActivityPeriod?, segs: List<SleepSegment>): List<String> {
+            val recs = n.records
+            val lines = mutableListOf<String>()
+            val s = SleepStaging.summary(segs)
+            val window = SleepStaging.sleepWindow(segs)?.let { DateInterval(it.onset, it.wake) }
+            val samples = BulkSleep.samples(recs)
+            fun mean(kind: MetricKind): Double? = window?.let { w ->
+                OvernightAverages.mean(samples.filter { it.kind == kind }.map { OvernightAverages.Point(it.value, it.start) }, w)
+            }
+            val restingHR = mean(MetricKind.HEART_RATE)
+            val tempOffset = window?.let { w -> OvernightAverages.mean(n.temps.map { OvernightAverages.Point(it.celsius, it.time) }, w) }?.let { it - 33.5 }
+            val c = SleepScore.composite(
+                SleepScore.CompositeInput(
+                    totalAsleep = seconds(s.totalAsleep), timeAwake = seconds(s.awake), efficiency = s.efficiency,
+                    deep = seconds(s.deep), light = seconds(s.light), rem = seconds(s.rem),
+                    restingHR = restingHR, tempOffsetC = tempOffset,
+                ),
+            )
+            lines += "cscore ${c.score} ${c.tier.rawValue}"
+            lines += "cfac " + SleepScore.Composite.Factor.entries.joinToString(" ") { opt(c.factors[it]) }
+
+            val byStage = SleepDetailMetrics.averageHRByStage(recs, segs)
+            lines += "hrstage " + listOf(SleepStage.AWAKE, SleepStage.ASLEEP_CORE, SleepStage.ASLEEP_DEEP, SleepStage.ASLEEP_REM)
+                .joinToString(" ") { byStage[it]?.toString() ?: "-" }
+
+            val inBed = segs.filter { it.stage == SleepStage.IN_BED }
+            val span = if (inBed.isEmpty()) null else DateInterval(inBed.minOf { it.start }, inBed.maxOf { it.end })
+            val m = SleepDetailMetrics.movementSummary(recs, window = span)
+            lines += "mov ${m.still} ${m.light} ${m.active} ${if (m.levels.isEmpty()) "-" else m.levels.joinToString("")}"
+            lines += "movf ${bits(m.movementFraction)}"
+
+            val scoped = BulkSleep.records(recs, span)
+            val stress = SleepStress.overnightScore(scoped)
+            val durations = SleepStress.stateDurations(scoped)
+            lines += "stress ${stress ?: "-"}"
+            lines += "stressdur " + SleepStress.Band.entries.joinToString(" ") { b -> opt(durations[b]?.let { seconds(it) }) }
+
+            lines += "avg " + listOf(MetricKind.HEART_RATE, MetricKind.HRV_SDNN, MetricKind.SPO2, MetricKind.RESPIRATORY_RATE)
+                .joinToString(" ") { opt(mean(it)) }
+
+            for (z in NAP_ZONES) {
+                val naps = NapDetection.naps(recs, mainSleep = main, zone = ZoneId.of(z), temperatures = n.temps)
+                lines += "naps $z ${naps.size}"
+                for (nap in naps) {
+                    lines += "nap $z ${secs(nap.start)} ${secs(nap.end)} ${nap.isLongNap} ${nap.asleep.also { check(it.nano == 0) }.seconds}"
+                    nap.segments.forEach { lines += "napseg $z ${it.stage.rawValue} ${secs(it.start)} ${secs(it.end)}" }
+                }
+            }
+            return lines
+        }
+
+        /** The OSA lines for a night that carries `0x48` frames. */
+        private fun osaLines(frames: List<ByteArray>): List<String> {
+            val dominant = OSAWaveform.dominantSessionFrames(frames)
+            val ch = OSAWaveform.channels(dominant)
+            val raw = OSASpO2.spo2Series(ch[0], ch[1], ch[2])
+            val lines = mutableListOf(
+                "osadom ${dominant.size}",
+                "osach ${ch[0].size} ${ch[1].size} ${ch[2].size}",
+                "osaraw" + raw.joinToString("") { " " + bits(it) },
+                "osaev ${OSASpO2.desaturationEvents(OSASpO2.medianFilter(raw, 3))}",
+            )
+            val s = OSASpO2.summarize(frames = frames)
+            if (s == null) {
+                lines += "osa none"
+            } else {
+                lines += "osa ${s.validWindows}"
+                lines += "osasum ${bits(s.averageSpO2)} ${bits(s.minSpO2)} ${bits(s.timeBelow90Seconds)} ${bits(s.odi)} ${bits(s.durationHours)}"
+            }
             return lines
         }
 
@@ -132,7 +219,10 @@ class SleepDifferentialTest {
                 }
             }
             lines += selectionLines(n)
-            lines += stagingLines(n)
+            val staged = SleepStaging.classify(n.records, temperatures = n.temps)
+            lines += stagingLines(n, staged)
+            lines += metricLines(n, main, staged)
+            if (n.frames.isNotEmpty()) lines += osaLines(n.frames)
             return lines
         }
     }
@@ -162,6 +252,11 @@ class SleepDifferentialTest {
                     continue
                 }
                 for (j in 1 until eTokens.size) {
+                    if (eTokens[j] == "-" || aTokens[j] == "-") {
+                        // An absent value matches only an absent value.
+                        if (eTokens[j] != aTokens[j]) report.mismatches += "$id line ${k + 1}: golden '$e' vs kotlin '$a'"
+                        continue
+                    }
                     report.doubles++
                     if (eTokens[j] == aTokens[j]) continue
                     val ed = bitsToDouble(eTokens[j])
@@ -184,8 +279,16 @@ class SleepDifferentialTest {
         val goldens = SleepDifferentialFixtures.goldens()
         assertEquals(goldens.keys.toList(), inputs.map { it.id }, "inputs and goldens list the same nights in the same order")
 
+        // Every night renders independently through pure functions, so the nights render on a small
+        // fixed pool (the machine's per-run worker cap) and are compared one by one, in file order.
+        val pool = Executors.newFixedThreadPool(RENDER_THREADS)
+        val rendered = try {
+            inputs.map { n -> pool.submit<List<String>> { render(n) } }.map { it.get() }
+        } finally {
+            pool.shutdownNow()
+        }
         val report = Report()
-        for (n in inputs) compare(n.id, goldens.getValue(n.id), render(n), report)
+        inputs.forEachIndexed { k, n -> compare(n.id, goldens.getValue(n.id), rendered[k], report) }
 
         println(
             "sleep differential: ${inputs.size} nights, ${report.lines} golden lines, ${report.doubles} doubles, " +
@@ -221,6 +324,12 @@ class SleepDifferentialTest {
         // Single nights shaped to reach each staging pass.
         val stagingShapes = listOf("cadence-exit", "elevated-head", "second-bout", "bedtime-lead-in", "offset-rise", "temperature-block")
         for (s in stagingShapes) assertTrue((shapes[s] ?: 0) >= 10, "staging shape $s has ${shapes[s] ?: 0} nights")
+        // Daytime nap days and synthetic 0x48 OSA bursts.
+        val napShapes = listOf("nap-floor", "nap-long", "nap-sedentary", "nap-after-night", "nap-restless", "nap-uniform")
+        for (s in napShapes) assertTrue((shapes[s] ?: 0) >= 2, "nap shape $s has ${shapes[s] ?: 0} days")
+        val osaShapes = listOf("osa-clean", "osa-dips", "osa-lowperf", "osa-noisy", "osa-backlog", "osa-short")
+        for (s in osaShapes) assertTrue((shapes[s] ?: 0) >= 5, "OSA shape $s has ${shapes[s] ?: 0} nights")
+        assertTrue(inputs.count { it.frames.isNotEmpty() } >= 30, "OSA nights carry their 0x48 frames")
 
         // Every branch the detection pipeline can take was reached by at least one night.
         val coverage = SleepDifferentialFixtures.coverage()
@@ -237,6 +346,19 @@ class SleepDifferentialTest {
             "stg-staged", "stg-multi-fragment", "stg-leading-wake", "stg-cadence-wake", "stg-wear-gate", "stg-offset",
             "stg-rescue", "stg-bedtime-widen", "stg-baseline", "stg-rr-variability", "stg-stage-awake",
             "stg-stage-asleepCore", "stg-stage-asleepDeep", "stg-stage-asleepREM",
+            // Night metrics: every composite tier, with and without the optional factors; per-stage
+            // HR; light and active movement; stress scored and absent.
+            "cscore-excellent", "cscore-good", "cscore-needsImprovement", "cscore-factors-4", "cscore-factors-5",
+            "cscore-factors-6", "hrstage-any", "mov-light", "mov-active", "stress-none", "stress-relaxed", "stress-normal",
+            // Naps found in both zones, long, with an awakening inside, staged and on the coarse
+            // fallback; candidates rejected for overlapping the night, being overnight, or the share.
+            "nap-found-UTC", "nap-found-Asia/Kolkata", "nap-long", "nap-awake-inside", "nap-staged-deep-or-rem",
+            "nap-coarse-fallback", "nap-cand-overlaps-main", "nap-cand-overnight-UTC", "nap-cand-overnight-Asia/Kolkata",
+            "nap-cand-share-rejected",
+            // OSA: summarised and not, a backlog dropped, duplicate frames, gated windows, dips below
+            // 90 % and desaturation events.
+            "osa-summary", "osa-none", "osa-backlog-dropped", "osa-duplicate-frames", "osa-windows-gated", "osa-below90",
+            "osa-events",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }

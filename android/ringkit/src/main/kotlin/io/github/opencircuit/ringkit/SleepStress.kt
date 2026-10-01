@@ -7,9 +7,9 @@ package io.github.opencircuit.ringkit
 //  • State durations are `Duration`s (upstream `TimeInterval`); each is a whole number of seconds.
 //  • A NaN RMSSD (upstream traps converting the score to `Int`) is rejected with an
 //    `IllegalArgumentException`; every other value scores as upstream.
+//  • `log` is `StrictMath.log` (fdlibm), the same bits on every JVM and on Android.
 
 import java.time.Duration
-import kotlin.math.ln
 
 /**
  * Overnight / sleep stress score from sleep-window HRV. NOT a port of a Baevsky stress index over
@@ -68,10 +68,10 @@ object SleepStress {
     fun score(rmssdMs: Double): Int {
         require(!rmssdMs.isNaN()) { "RMSSD is NaN" }
         val rmssd = swiftMax(rmssdMs, 1.0) // guard log(0)
-        val hi = ln(RESTED_RMSSD)
-        val lo = ln(STRESSED_RMSSD)
+        val hi = StrictMath.log(RESTED_RMSSD)
+        val lo = StrictMath.log(STRESSED_RMSSD)
         // t = 0 at the rested bound, 1 at the stressed bound.
-        val t = (hi - ln(rmssd)) / (hi - lo)
+        val t = (hi - StrictMath.log(rmssd)) / (hi - lo)
         val clamped = swiftMin(swiftMax(t, 0.0), 1.0)
         val s = LOW_SCORE + clamped * (HIGH_SCORE - LOW_SCORE)
         return roundHalfAwayFromZero(s).toInt()

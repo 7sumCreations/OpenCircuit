@@ -7,8 +7,14 @@ package io.github.opencircuit.ringkit
 
 import java.time.Instant
 
-/** One night's recorded inputs: its records in archive order and its skin-temperature samples. */
-internal class DifferentialNight(val id: String, val shape: String, val records: List<BulkRecord>, val temps: List<TemperatureSample>)
+/** One night's recorded inputs: its records in archive order, its skin-temperature samples and its `0x48` frames in arrival order. */
+internal class DifferentialNight(
+    val id: String,
+    val shape: String,
+    val records: List<BulkRecord>,
+    val temps: List<TemperatureSample>,
+    val frames: List<ByteArray> = emptyList(),
+)
 
 internal object SleepDifferentialFixtures {
 
@@ -32,17 +38,19 @@ internal object SleepDifferentialFixtures {
             check(head.size == 3 && head[0] == "night") { "bad night header at input line ${i + 1}: ${lines[i]}" }
             val recs = mutableListOf<BulkRecord>()
             val temps = mutableListOf<TemperatureSample>()
+            val frames = mutableListOf<ByteArray>()
             i++
             while (lines[i] != "end") {
                 val f = lines[i].split(' ')
                 when (f[0]) {
                     "r" -> recs += checkNotNull(BulkRecord.of(hex(f[1]))) { "bad record: ${lines[i]}" }
                     "t" -> temps += TemperatureSample(Instant.ofEpochSecond(f[1].toLong()), bitsToDouble(f[2]))
+                    "w" -> frames += hex(f[1]).also { check(it.size == OSAWaveform.FRAME_LENGTH) { "bad 0x48 frame: ${lines[i]}" } }
                     else -> error("bad input line ${i + 1}: ${lines[i]}")
                 }
                 i++
             }
-            out += DifferentialNight(head[1], head[2], recs, temps)
+            out += DifferentialNight(head[1], head[2], recs, temps, frames)
             i++
         }
         return out

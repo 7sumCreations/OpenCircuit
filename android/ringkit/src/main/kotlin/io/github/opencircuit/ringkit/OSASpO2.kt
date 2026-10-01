@@ -13,10 +13,12 @@ package io.github.opencircuit.ringkit
 //    ±Inf and -0.0 land where upstream puts them.
 //  • `desaturationEvents` stops when its scan would revisit an index; upstream loops forever there
 //    (or traps stepping before the start). Every input upstream returns on is unchanged.
+//  • The Goertzel step's `cos`/`sin` are `StrictMath`'s (fdlibm): the same bits on every JVM and on
+//    Android, whose `Math` uses the platform's libm. Measured against upstream's Swift output, the
+//    JVM's intrinsic `Math.cos`/`Math.sin` left 4 of 8731 differential values one ulp off; fdlibm
+//    left none.
 
 import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -142,8 +144,8 @@ object OSASpO2 {
         if (n == 0) return 0.0
         val mean = sum(x) / n.toDouble()
         val w = 2 * PI * f
-        val cr = cos(w)
-        val ci = sin(w)
+        val cr = StrictMath.cos(w)
+        val ci = StrictMath.sin(w)
         var s1 = 0.0
         var s2 = 0.0
         for (v in x) {
