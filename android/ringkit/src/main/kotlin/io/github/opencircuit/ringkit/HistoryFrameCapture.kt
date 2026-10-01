@@ -29,7 +29,7 @@ class CapturedFrame(val date: Instant, bytes: ByteArray) {
     val opcode: Int = if (bytes.isEmpty()) 0 else bytes.u8(0)
 
     /** The whole frame as lowercase space-separated hex (e.g. "4c 00 12 …"). */
-    val hex: String = bytes.joinToString(" ") { String.format(Locale.ROOT, "%02x", it.toInt() and 0xFF) }
+    val hex: String = lowercaseHex(bytes)
 
     /** Frame length in bytes. */
     val byteCount: Int = bytes.size
@@ -41,6 +41,25 @@ class CapturedFrame(val date: Instant, bytes: ByteArray) {
     override fun hashCode(): Int = ((date.hashCode() * 31 + opcode) * 31 + hex.hashCode()) * 31 + byteCount
 
     override fun toString(): String = "CapturedFrame(date=$date, opcode=$opcode, byteCount=$byteCount, hex=$hex)"
+
+    private companion object {
+        const val HEX_DIGITS = "0123456789abcdef"
+
+        /**
+         * `%02x` per byte, space-separated, without a `String.format` call per byte: this runs for
+         * every captured frame on the inbound stream (up to ~140 bytes each).
+         */
+        fun lowercaseHex(bytes: ByteArray): String {
+            if (bytes.isEmpty()) return ""
+            val sb = StringBuilder(bytes.size * 3 - 1)
+            for ((i, b) in bytes.withIndex()) {
+                if (i > 0) sb.append(' ')
+                val v = b.toInt() and 0xFF
+                sb.append(HEX_DIGITS[v ushr 4]).append(HEX_DIGITS[v and 0x0F])
+            }
+            return sb.toString()
+        }
+    }
 }
 
 /**
