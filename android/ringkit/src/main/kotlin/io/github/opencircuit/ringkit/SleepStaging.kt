@@ -896,5 +896,6 @@ object SleepStaging {
         return sorted[idx]
     }
 
-    private fun seconds(d: Duration): Double = d.seconds + d.nano / 1e9
+    /** A `Duration` as upstream's `TimeInterval` (seconds as `Double`). */
+    internal fun seconds(d: Duration): Double = d.seconds + d.nano / 1e9
 }

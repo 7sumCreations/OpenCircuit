@@ -10,7 +10,6 @@ package io.github.opencircuit.ringkit
 // An instant `java.time` cannot place in a zone (the last year of `Instant`'s range) yields no
 // window rather than an exception; upstream's calendar returned a wrapped, wrong year there.
 
-import java.time.DateTimeException
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -163,13 +162,6 @@ object SleepWindow {
 
     private fun startOfDay(t: Instant, zone: ZoneId): ZonedDateTime? = guarded { t.atZone(zone).toLocalDate().atStartOfDay(zone) }
 
-    /** Runs [block]; an instant `java.time` cannot represent yields null instead of an exception. */
-    private inline fun <T> guarded(block: () -> T): T? =
-        try {
-            block()
-        } catch (e: DateTimeException) {
-            null
-        } catch (e: ArithmeticException) {
-            null
-        }
+    /** Runs [block]; an instant `java.time` cannot represent yields null instead of an exception (the shared rule). */
+    private inline fun <T> guarded(block: () -> T): T? = zonedOrNull(block)
 }
