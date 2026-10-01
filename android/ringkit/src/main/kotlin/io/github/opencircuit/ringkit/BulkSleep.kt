@@ -5,12 +5,11 @@ package io.github.opencircuit.ringkit
 // split (`:368-396`), the motion timeline and motion-channel selection (`:398-803`, `:915-1140`),
 // the HRV pooling gate (`:804-913`), the sample path (`:1656-1722`), and from the night half the
 // main sleep block and coarse sleep segments (`:1129-1201`), `onsetContiguityGap` (`:1250`),
-// `onsetIsUnobserved` (`:1278-1291`) and night selection (`:1212-1234`, `:1293-1629`).
+// `onsetIsUnobserved` (`:1278-1291`), night selection (`:1212-1234`, `:1293-1629`) and the staged
+// segments (`:1631-1640`, a thin wrapper over `SleepStaging.classify`).
 //
 // A 0x4c page is `[0x4c][0x00][countdown][N × 23-byte record][xor]` (../docs/PROTOCOL.md §5.3).
 // Records align to page boundaries — each page body is a whole number of records.
-//
-// Not ported yet: the rest of the night half — staging (`stagedSegments`).
 
 import java.time.Duration
 import java.time.Instant
@@ -800,6 +799,19 @@ object BulkSleep {
         if (!(expected > 0)) return false
         return observed / expected >= cut
     }
+
+    /**
+     * Light/Deep/REM/Awake staging of the detected sleep block, restricted to [within] when given.
+     * A thin wrapper over [SleepStaging.classify] (no skin temperatures, default tuning).
+     */
+    fun stagedSegments(
+        records: List<BulkRecord>,
+        within: DateInterval? = null,
+        epoch: Long = Command.SYNC_EPOCH,
+        baseline: SleepStaging.PersonalBaseline? = null,
+        motionPolicy: MotionChannelPolicy = MotionChannelPolicy.DEFAULT,
+    ): List<SleepSegment> =
+        SleepStaging.classify(this.records(records, within, epoch), epoch = epoch, baseline = baseline, motionPolicy = motionPolicy)
 
     /**
      * Health samples for [records] (one drain's slice).
