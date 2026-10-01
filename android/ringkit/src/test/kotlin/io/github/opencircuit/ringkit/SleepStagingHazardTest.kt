@@ -16,8 +16,9 @@ import kotlin.test.assertTrue
  * `BulkSleep.stagedSegments`): empty, single-record and single-epoch nights; heart-rate bytes 0 and
  * 255; HRV and respiratory bytes 255; reversed, duplicated and far-future counters; a week-long
  * night (time-bounded); non-finite personal baselines; segment lists that run backwards; NaN and
- * infinite smoothed heart rates; and tuning values upstream cannot run with. Kept out of the
- * upstream-port class so its count stays exact.
+ * infinite smoothed heart rates in the offset scan and the cadence confirmation; tuning values
+ * upstream cannot run with; and the machine zone that upstream's own selection-based vectors depend
+ * on. Kept out of the upstream-port classes so their counts stay exact.
  *
  * Every expected value here was measured on upstream's pinned Swift build with the same records,
  * so each test pins upstream's outcome — except where upstream traps (crashes); those inputs are
@@ -320,6 +321,55 @@ class SleepStagingHazardTest {
         assertEquals(tail, cut(List(40) { 50.0 } + Double.NaN + List(9) { 80.0 }), "NaN at the tail's first epoch")
         assertEquals(tail, cut(List(40) { 50.0 } + List(9) { 80.0 } + Double.NaN), "NaN at the last epoch")
         assertEquals(tail, cut(List(40) { 50.0 } + List(10) { Double.POSITIVE_INFINITY }), "+Inf tail")
+    }
+
+    @Test
+    fun cadenceWakeConfirmationTreatsNonFiniteHeartRatesAsSwiftsMinDoes() {
+        // The HR no-return confirmation reads Swift's `Sequence.min()` of the suffix: it starts from
+        // the FIRST element and only a later value that compares smaller replaces it. So a NaN first
+        // stays NaN (never above the bar → decline) while a NaN later is skipped (cut), +Inf first
+        // is replaced by the real minimum, and -Inf anywhere wins. Kotlin's minOf would propagate
+        // the later NaN and decline. Measured upstream (quiet run 0..99, rise 62 bpm over a 50 + 4
+        // bar): NaN first → none; NaN at 110 → 100..119; +Inf first → 100..119; -Inf at 110 → none;
+        // all NaN → none.
+        val cadence = MutableList(120) { SleepStaging.CadenceStep.VIOLATION }
+        cadence[0] = SleepStaging.CadenceStep.UNKNOWN
+        for (i in 1..99) cadence[i] = SleepStaging.CadenceStep.ALTERNATING
+        fun cut(patch: Map<Int, Double>): List<Int> {
+            val hr = MutableList(120) { if (it >= 100) 62.0 else 52.0 }
+            for ((k, v) in patch) hr[k] = v
+            val awake = BooleanArray(120)
+            SleepStaging.markCadenceWakeOffset(awake, cadence, hr, floor = 50.0, margin = 4.0, tuning = SleepStaging.Tuning.DEFAULT)
+            return awake.indices.filter { awake[it] }
+        }
+        val tail = (100 until 120).toList()
+        assertEquals(emptyList(), cut(mapOf(100 to Double.NaN)), "NaN first in the suffix")
+        assertEquals(tail, cut(mapOf(110 to Double.NaN)), "NaN later in the suffix")
+        assertEquals(tail, cut(mapOf(100 to Double.POSITIVE_INFINITY)), "+Inf first in the suffix")
+        assertEquals(emptyList(), cut(mapOf(110 to Double.NEGATIVE_INFINITY)), "-Inf later in the suffix")
+        assertEquals(emptyList(), cut((100 until 120).associateWith { Double.NaN }), "an all-NaN suffix")
+    }
+
+    @Test
+    fun wanderingPedestalNightSelectsAndStagesByTheNamedZoneExactlyAsUpstream() {
+        // Upstream's FR04RaisedPrimaryFloorTests :314 vector goes through latestNightRecords(from:),
+        // which reads the machine's zone. Measured on the pinned build (magnitude channel on): New
+        // York, Los Angeles and UTC select 201 records (counters 207668748..207698748) and stage 21
+        // segments; Tokyo and Kolkata select 354 records (207618048..207670998), reaching back into
+        // the awake day, and stage nothing — so upstream's own test fails there. The port names
+        // its zone and reproduces each outcome.
+        val on = BulkSleep.MotionChannelPolicy(magnitudeChannelEnabled = true)
+        fun outcome(zone: String): Triple<Int, String, Int> {
+            val recs = FR04RaisedPrimaryFloorTest().wanderingPedestalNight(includeDay = true) // fresh noise seed each time
+            val sel = BulkSleep.latestNightRecords(recs, java.time.ZoneId.of(zone), motionPolicy = on)
+            return Triple(sel.size, "${sel.first().counter}..${sel.last().counter}", BulkSleep.stagedSegments(sel, motionPolicy = on).size)
+        }
+        for (zone in listOf("America/New_York", "America/Los_Angeles", "UTC")) {
+            assertEquals(Triple(201, "207668748..207698748", 21), outcome(zone), zone)
+        }
+        for (zone in listOf("Asia/Tokyo", "Asia/Kolkata")) {
+            assertEquals(Triple(354, "207618048..207670998", 0), outcome(zone), zone)
+        }
     }
 
     @Test

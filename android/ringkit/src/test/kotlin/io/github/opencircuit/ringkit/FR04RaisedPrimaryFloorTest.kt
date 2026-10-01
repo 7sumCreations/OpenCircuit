@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
  * is named ([deviceZone], America/New_York). Measured on the pinned Swift build, `:314` depends on
  * that zone: it passes in New York, Chicago, Los Angeles, Buenos Aires, UTC, London and Paris, and
  * FAILS in Kolkata, Tokyo, Sydney and Honolulu, where selection keeps 354 records reaching back into
- * the awake day and nothing stages.
+ * the awake day and nothing stages (`SleepStagingHazardTest` reproduces both outcomes).
  *
  * All data is SYNTHETIC. Every fixture number is typed from upstream. The noise generator is
  * upstream's deterministic xorshift, and the fixtures consume it in upstream's exact order (a
