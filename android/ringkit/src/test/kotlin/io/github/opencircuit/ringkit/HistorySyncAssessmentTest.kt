@@ -38,14 +38,15 @@ class HistorySyncAssessmentTest {
         assertTrue(trace.outcome.allowsSleepCommit)
     }
 
-    // :16
+    // :16 — REPLACED (D-43): upstream asserts COMPLETE here; the port requires the 0x50 end report.
     @Test
-    fun quietAfterSleepPagesStillCountsAsComplete() {
+    fun quietAfterSleepPagesWithoutEndMarkerIsPartial() {
         val trace = trace("sleep", 0x00)
         trace.sawSyncAck = true
         trace.page4CCount = 1
         trace.exitReason = HistoryChannelExitReason.QUIET_AFTER_PAGES
-        assertEquals(HistoryChannelOutcome.COMPLETE, trace.outcome)
+        assertEquals(HistoryChannelOutcome.PARTIAL, trace.outcome)
+        assertFalse(trace.outcome.allowsSleepCommit)
     }
 
     // :24
