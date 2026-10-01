@@ -111,7 +111,10 @@ class ScriptedDrainTest {
 
     @Test
     fun aDrainCutOffBeforeTheCursorReportIsPartialAndNeverStages() {
-        for (cutOff in listOf(HistoryChannelExitReason.HARD_TIMEOUT, HistoryChannelExitReason.LINK_UNUSABLE, HistoryChannelExitReason.CANCELLED)) {
+        for (cutOff in listOf(
+            HistoryChannelExitReason.HARD_TIMEOUT, HistoryChannelExitReason.LINK_UNUSABLE, HistoryChannelExitReason.CANCELLED,
+            HistoryChannelExitReason.QUIET_AFTER_PAGES, // D-43: quiet after pages without a 0x50 is not a clean end
+        )) {
             val sleep = drain(HistoryDrainPlan.SLEEP_STEP, listOf(hex(syncAck), hex(realPage)), exitWithoutEndMarker = cutOff)
 
             assertFalse(sleep.session.isComplete, "no 0x50 arrived: the session is not finished ($cutOff)")
