@@ -118,10 +118,16 @@ object SleepWindow {
      * acceptance only — an accepted block is kept whole. A block whose end precedes its start is
      * judged as zero-length at [start]. An instant that cannot be placed in [zone] is not overnight.
      */
-    fun isOvernightBlock(start: Instant, end: Instant, zone: ZoneId): Boolean {
+    fun isOvernightBlock(start: Instant, end: Instant, zone: ZoneId): Boolean = overnightVerdict(start, end, zone) ?: false
+
+    /**
+     * [isOvernightBlock], except that a block whose midpoint cannot be placed in [zone] gives null
+     * instead of `false`, so a caller that must fail closed there (the manual nap edit) can.
+     */
+    internal fun overnightVerdict(start: Instant, end: Instant, zone: ZoneId): Boolean? {
         val safeEnd = maxOf(end, start)
         val mid = start.plus(Duration.between(start, safeEnd).dividedBy(2))
-        val local = guarded { mid.atZone(zone) } ?: return false
+        val local = guarded { mid.atZone(zone) } ?: return null
         val minutes = local.hour * 60 + local.minute
         return minutes < 9 * 60 || minutes >= 21 * 60 // before 09:00 or at/after 21:00
     }
