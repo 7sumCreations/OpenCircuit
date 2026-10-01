@@ -329,8 +329,9 @@ class MissedNightHazardTest {
 
     /**
      * Upstream's own quirk, kept for parity: on a spring-forward evening the "nearest wake" flips to
-     * tomorrow's shortened day and the 24 h step back lands on the PREVIOUS day, so for about 20 to 40
-     * minutes the morning wake is yesterday's (measured in New York, London, Havana and Lord Howe).
+     * tomorrow's shortened day and the 24 h step back lands on the PREVIOUS day, so for a few tens of
+     * minutes the morning wake is yesterday's (measured: 20–40 min in New York and London, 10–30 min in
+     * Lord Howe; Havana's nearest window flips the other way and shows no stale wake).
      */
     @Test
     fun theSpringForwardEveningStepsBackToYesterdaysWakeAsUpstream() {
