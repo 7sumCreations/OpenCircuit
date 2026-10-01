@@ -33,13 +33,33 @@
 //                                      (observedGapCoverageCut 0, the guard off); noreanchor
 //                                      (declinedBridgeMayReanchor false); nomorning
 //                                      (morningContinuationGap 0).
+//   stg <stage> <start> <end>          SleepStaging.classify(from:temperatures:), shipped tuning
+//   sum <inBed> <awake> <light> <deep> <rem> <efficiency>
+//                                      SleepStaging.summary of those segments: the five
+//                                      TimeIntervals and the efficiency, as bit patterns
+//   min <inBed> <awake> <light> <deep> <rem> <asleep>   Summary.minutes
+//   win <onset> <wake> | win none      SleepStaging.sleepWindow
+//   stgv <variant> <brief>             classify with one tuning knob changed; <brief> is
+//                                      "<segments> <the six minutes> <onset|-> <wake|->".
+//                                      Variants: noleadprotect (protectsLeadingHRWake false),
+//                                      nocadence (cadenceWakeQuietEpochs 0), nowear (stagedWearGate
+//                                      false), nooffset (offsetNoReturnSpreadFraction 0), norescue
+//                                      (hrWakeRescueCeilingBPM 0), nowiden (preOnsetBedtimeReachEpochs
+//                                      0), baseline (a PersonalBaseline of 44 bpm), rrvar
+//                                      (rrVarWeight 0.5)
+//   selstg <zone> <brief>              classify(from: latestNightRecords(from:temperatures:)) with the
+//                                      device zone set to <zone> (America/New_York only)
 //   end
-// (score, onset and overnight lines appear only when there is a main block; sel lines always.)
+// (score, onset and overnight lines appear only when there is a main block; sel, stg-family lines
+// always — stg, sum, min, win and stgv describe an empty night when nothing stages.)
 //
 // After the synthetic and fixture nights come the selection nights: multi-block archives built to
 // reach every night-selection path (two nights, multi-drain holes, still evenings, short tails,
 // morning continuations, late naps, truncated tails, daytime-only, all-day SpO2, leapfrogs, and
-// nights either side of the intra-night gap).
+// nights either side of the intra-night gap). After those come the staging nights, built to reach
+// each staging pass: an SpO2 cadence that exits before the data ends, an HR-elevated head, a second
+// bout after a mid-night wake, a moving bedtime lead-in across a data gap, a quiet morning rise that
+// stops emitting sleep-vitals, and still nights under cold, worn or out-of-block temperatures.
 
 import Foundation
 @testable import OpenCircuitKit
@@ -199,6 +219,37 @@ struct Builder {
             let tail = moving ? (0..<5).map { _ in rng.int(1, 200) } : [0, 0, 0, 0, 0]
             push(hr: base + rng.int(-3, 6), hrv: 0, conf: rng.int(3, 10), rr: rng.int(0x60, 0x90), tag: 0x12,
                  motion: [c, c, c, c, c], tail: tail, trailer: [0x04, 0, 0])
+        }
+    }
+
+    /// One still sleep-vitals epoch: placeholder motion, a quiet tail, an SpO2 % in [8].
+    mutating func stillVitals(hr: Int, hrv: Int) {
+        push(hr: hr, hrv: hrv, conf: rng.int(2, 8), rr: rng.int(0x60, 0x80), tag: rng.int(95, 98),
+             motion: [1, 1, 1, 1, 1], tail: [0, 0, 0, 0, 0], trailer: [0, 0, 0x04])
+    }
+
+    /// One still activity-template epoch (no SpO2 read in it): placeholder motion, a quiet tail.
+    mutating func stillNoSpO2(hr: Int) {
+        push(hr: hr, hrv: 0, conf: rng.int(3, 9), rr: rng.int(0x60, 0x80), tag: 0x12,
+             motion: [1, 1, 1, 1, 1], tail: [0, 0, 0, 0, 0], trailer: [0x04, 0, 0])
+    }
+
+    /// Still sleep in the ring's 1:1 SpO2 duty cycle (sleep-vitals and activity templates
+    /// alternating), HR within ±1 of `base`.
+    mutating func cadenceSleep(_ n: Int, hr base: Int) {
+        for i in 0..<n {
+            if i % 2 == 0 { stillVitals(hr: base + rng.int(-1, 1), hrv: rng.int(40, 70)) }
+            else { stillNoSpO2(hr: base + rng.int(-1, 1)) }
+        }
+    }
+
+    /// Awake while moving in bed (reading): varying motion that still carries HR on the
+    /// sleep-vitals template.
+    mutating func movingLeadIn(_ n: Int, hr: ClosedRange<Int>) {
+        for _ in 0..<n {
+            let motion = [rng.int(25, 35), rng.int(5, 10), rng.int(25, 35), rng.int(5, 10), rng.int(25, 35)]
+            push(hr: rng.int(hr), hrv: 60, conf: rng.int(3, 9), rr: rng.int(0x60, 0x80), tag: rng.int(95, 98),
+                 motion: motion, tail: [0, 0, 0, 0, 0], trailer: [0, 0, 0x04])
         }
     }
 }
@@ -484,6 +535,71 @@ func selectionArchive(_ index: Int) -> Night {
     return night
 }
 
+// MARK: - Staging nights (single nights shaped to reach each staging pass)
+
+let stagingShapes = ["cadence-exit", "elevated-head", "second-bout", "bedtime-lead-in", "offset-rise", "temperature-block"]
+let stagingNightsPerShape = 10
+
+/// Staging night `index` (deterministic from its index alone).
+func stagingNight(_ index: Int) -> Night {
+    let shape = stagingShapes[index % stagingShapes.count]
+    var rng = SplitMix64(state: 0x57A6_1260_0000_0000 &+ UInt64(index))
+    let day = 2900 + index                   // after every selection archive
+    let hr = rng.int(46, 58)
+    var b = Builder(rng: SplitMix64(state: rng.next()), counter: utc(day, 21, rng.int(0, 59)))
+    var temps: [(Int, Double)] = []
+
+    switch shape {
+    case "cadence-exit":
+        // The duty cycle holds through the night, then the morning is same-template throughout with a
+        // rise too small for the wake gate.
+        b.active(rng.int(8, 15)); b.cadenceSleep(rng.int(100, 160), hr: hr)
+        let rise = rng.int(7, 12)
+        for _ in 0..<rng.int(20, 50) { b.stillVitals(hr: hr + rise + rng.int(-1, 1), hrv: rng.int(40, 70)) }
+        if rng.chance(50) { b.active(rng.int(6, 12)) }
+    case "elevated-head":
+        // A still head at an HR well above the night's floor, then flat still sleep.
+        b.active(rng.int(8, 15))
+        let head = hr + rng.int(20, 26)
+        for _ in 0..<rng.int(3, 5) { b.stillVitals(hr: head + rng.int(-1, 1), hrv: rng.int(40, 70)) }
+        b.cadenceSleep(rng.int(100, 150), hr: hr); b.active(rng.int(8, 12))
+    case "second-bout":
+        // A first bout at the floor, a moving bathroom trip, a still second bout a little higher.
+        b.active(12); b.cadenceSleep(rng.int(80, 110), hr: hr); b.active(rng.int(3, 5))
+        b.cadenceSleep(rng.int(60, 100), hr: hr + rng.int(18, 24)); b.active(12)
+    case "bedtime-lead-in":
+        // Reading in bed (moving, HR up), a short still settle, a data gap, then the sleep block.
+        b.movingLeadIn(rng.int(10, 20), hr: 70...80)
+        for _ in 0..<3 { b.stillVitals(hr: hr + 1, hrv: 60) }
+        b.gap(150 * rng.int(2, 12))
+        for _ in 0..<rng.int(100, 140) { b.stillVitals(hr: hr + rng.int(0, 1), hrv: 60) }
+        if rng.chance(50) { b.active(rng.int(6, 12)) }
+    case "offset-rise":
+        // Flat sleep with HRV on every other epoch, then a quiet rise that carries no sleep-vitals.
+        let n = rng.int(140, 170)
+        let riseAt = n - rng.int(15, 25)
+        for i in 0..<n {
+            let tail = i >= riseAt
+            b.stillVitals(hr: tail ? hr + 10 : hr, hrv: tail ? 0 : (i % 2 == 0 ? 55 : 0))
+        }
+    case "temperature-block":
+        // A still night ending in an HR rise, with cold, worn or out-of-block skin temperatures.
+        let n = rng.int(130, 170)
+        b.cadenceSleep(n - 30, hr: hr)
+        for i in 0..<30 { if i % 2 == 0 { b.stillVitals(hr: hr + 26, hrv: 55) } else { b.stillNoSpO2(hr: hr + 26) } }
+        let first = recordDate(b.records[0])
+        let last = recordDate(b.records[b.records.count - 1])
+        switch rng.pick(["cold", "worn", "outside"]) {
+        case "cold": for t in stride(from: first, through: last, by: 300) { temps.append((t, Double(200 + rng.int(0, 40)) / 10)) }
+        case "worn": for t in stride(from: first, through: last, by: 300) { temps.append((t, Double(330 + rng.int(0, 20)) / 10)) }
+        default: for k in 0..<60 { temps.append((first - 6 * 3600 + k * 300, 20.0)) }
+        }
+    default:
+        fatalError("unknown staging shape \(shape)")
+    }
+    return Night(id: "staging-\(padded(index, 3))", shape: shape, records: b.records, temps: temps)
+}
+
 // MARK: - Device time zone
 
 /// Night selection reads the device calendar, so the generator sets the process default zone and
@@ -554,6 +670,7 @@ func golden(_ night: Night) -> [String] {
         hit("onset-unobserved", onset)
     }
     lines += selection(of: recs, temps: temps)
+    lines += staging(of: recs, temps: temps)
     lines.append("end")
 
     // Branch coverage — which pipeline paths this night exercised.
@@ -622,6 +739,58 @@ func selection(of recs: [BulkRecord], temps: [TemperatureSample]) -> [String] {
     return lines
 }
 
+/// `<segments> <the six minutes> <onset|-> <wake|->` of one staged night.
+func brief(_ segs: [SleepSegment]) -> String {
+    let m = SleepStaging.summary(segs).minutes
+    let w = SleepStaging.sleepWindow(segs)
+    return "\(segs.count) \(m.inBed) \(m.awake) \(m.light) \(m.deep) \(m.rem) \(m.asleep) "
+        + "\(w.map { secs($0.onset) } ?? "-") \(w.map { secs($0.wake) } ?? "-")"
+}
+
+/// The staging lines for one night, and the staging branches it reached.
+func staging(of recs: [BulkRecord], temps: [TemperatureSample]) -> [String] {
+    let segs = SleepStaging.classify(from: recs, temperatures: temps)
+    let s = SleepStaging.summary(segs)
+    let m = s.minutes
+    var lines = segs.map { "stg \($0.stage.rawValue) \(secs($0.start)) \(secs($0.end))" }
+    lines.append("sum \(bits(s.inBed)) \(bits(s.awake)) \(bits(s.light)) \(bits(s.deep)) \(bits(s.rem)) \(bits(s.efficiency))")
+    lines.append("min \(m.inBed) \(m.awake) \(m.light) \(m.deep) \(m.rem) \(m.asleep)")
+    lines.append(SleepStaging.sleepWindow(segs).map { "win \(secs($0.onset)) \(secs($0.wake))" } ?? "win none")
+
+    func tuned(_ change: (inout SleepStaging.Tuning) -> Void) -> SleepStaging.Tuning {
+        var t = SleepStaging.Tuning.default
+        change(&t)
+        return t
+    }
+    let variants: [(String, [SleepSegment])] = [
+        ("noleadprotect", SleepStaging.classify(from: recs, temperatures: temps, tuning: tuned { $0.protectsLeadingHRWake = false })),
+        ("nocadence", SleepStaging.classify(from: recs, temperatures: temps, tuning: tuned { $0.cadenceWakeQuietEpochs = 0 })),
+        ("nowear", SleepStaging.classify(from: recs, temperatures: temps, tuning: tuned { $0.stagedWearGate = false })),
+        ("nooffset", SleepStaging.classify(from: recs, temperatures: temps, tuning: tuned { $0.offsetNoReturnSpreadFraction = 0 })),
+        ("norescue", SleepStaging.classify(from: recs, temperatures: temps, tuning: tuned { $0.hrWakeRescueCeilingBPM = 0 })),
+        ("nowiden", SleepStaging.classify(from: recs, temperatures: temps, tuning: tuned { $0.preOnsetBedtimeReachEpochs = 0 })),
+        ("baseline", SleepStaging.classify(from: recs, temperatures: temps,
+                                           baseline: SleepStaging.PersonalBaseline(deepSleepHR: 44))),
+        ("rrvar", SleepStaging.classify(from: recs, temperatures: temps, tuning: tuned { $0.rrVarWeight = 0.5 })),
+    ]
+    lines += variants.map { "stgv \($0.0) \(brief($0.1))" }
+    let selected = withDeviceZone("America/New_York") {
+        SleepStaging.classify(from: BulkSleep.latestNightRecords(from: recs, temperatures: temps), temperatures: temps)
+    }
+    lines.append("selstg America/New_York \(brief(selected))")
+
+    hit("stg-staged", !segs.isEmpty)
+    hit("stg-multi-fragment", !segs.isEmpty && BulkSleep.contiguousFragments(recs).count > 1)
+    let branch = ["noleadprotect": "stg-leading-wake", "nocadence": "stg-cadence-wake", "nowear": "stg-wear-gate",
+                  "nooffset": "stg-offset", "norescue": "stg-rescue", "nowiden": "stg-bedtime-widen",
+                  "baseline": "stg-baseline", "rrvar": "stg-rr-variability"]
+    for (name, out) in variants { hit(branch[name]!, out != segs) }
+    for stage in [SleepStage.awake, .asleepCore, .asleepDeep, .asleepREM] {
+        hit("stg-stage-\(stage.rawValue)", segs.contains { $0.stage == stage })
+    }
+    return lines
+}
+
 func inputLines(_ night: Night) -> [String] {
     var lines = ["night \(night.id) \(night.shape)"]
     lines += night.records.map { "r \(hex($0))" }
@@ -641,6 +810,7 @@ let outDir = URL(fileURLWithPath: args[1], isDirectory: true)
 
 let nights = (0..<(shapes.count * nightsPerShape)).map(synthetic) + fixtures()
     + (0..<(selectionShapes.count * selectionNightsPerShape)).map(selectionArchive)
+    + (0..<(stagingShapes.count * stagingNightsPerShape)).map(stagingNight)
 let header = "# Generated by android/tools/sleep-differential from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

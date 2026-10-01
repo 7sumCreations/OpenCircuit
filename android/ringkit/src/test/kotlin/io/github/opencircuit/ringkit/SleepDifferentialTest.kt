@@ -14,7 +14,9 @@ import kotlin.test.assertTrue
  * Differential check against upstream's own Swift pipeline: `tools/sleep-differential` ran the
  * pinned Swift code over seeded synthetic nights and upstream's fixture nights, and wrote their
  * inputs and canonical outputs to `src/test/resources/sleep-differential/`. This test runs the
- * Kotlin port over the same inputs, renders the same canonical lines, and compares them.
+ * Kotlin port over the same inputs, renders the same canonical lines, and compares them: sleep
+ * detection, night selection in three zones, and staging (every segment, the summary and its
+ * minutes, the sleep window, each staging switch turned off, and staging after selection).
  *
  * Comparison rule: every line is compared WHOLE and exactly (times, stages, counts, flags), except
  * floating-point fields, which must agree within 1e-9; every double that is not bit-identical is
@@ -25,7 +27,7 @@ class SleepDifferentialTest {
 
     companion object {
         /** Golden lines whose fields after the first token are IEEE-754 bit patterns. */
-        private val DOUBLE_FIELDS = setOf("score")
+        private val DOUBLE_FIELDS = setOf("score", "sum")
 
         private val OVERNIGHT_ZONES = listOf("UTC", "Asia/Kolkata")
 
@@ -61,6 +63,49 @@ class SleepDifferentialTest {
             ).map { (variant, slice) -> "sel $z $variant ${sliceKey(slice)}" }
         }
 
+        private fun seconds(d: Duration): Double = d.seconds + d.nano / 1e9
+
+        /** `<segments> <the six minutes> <onset|-> <wake|->` of one staged night. */
+        private fun brief(segs: List<SleepSegment>): String {
+            val m = SleepStaging.summary(segs).minutes
+            val w = SleepStaging.sleepWindow(segs)
+            return "${segs.size} ${m.inBed} ${m.awake} ${m.light} ${m.deep} ${m.rem} ${m.asleep} " +
+                "${w?.let { secs(it.onset) } ?: "-"} ${w?.let { secs(it.wake) } ?: "-"}"
+        }
+
+        /** The staging lines: shipped tuning in full, each knob changed in brief, and staging after selection. */
+        private fun stagingLines(n: DifferentialNight): List<String> {
+            fun classify(
+                tuning: SleepStaging.Tuning = SleepStaging.Tuning.DEFAULT,
+                baseline: SleepStaging.PersonalBaseline? = null,
+            ) = SleepStaging.classify(n.records, temperatures = n.temps, tuning = tuning, baseline = baseline)
+            val segs = classify()
+            val s = SleepStaging.summary(segs)
+            val m = s.minutes
+            val lines = segs.mapTo(mutableListOf()) { "stg ${it.stage.rawValue} ${secs(it.start)} ${secs(it.end)}" }
+            lines += "sum ${bits(seconds(s.inBed))} ${bits(seconds(s.awake))} ${bits(seconds(s.light))} " +
+                "${bits(seconds(s.deep))} ${bits(seconds(s.rem))} ${bits(s.efficiency)}"
+            lines += "min ${m.inBed} ${m.awake} ${m.light} ${m.deep} ${m.rem} ${m.asleep}"
+            lines += SleepStaging.sleepWindow(segs)?.let { "win ${secs(it.onset)} ${secs(it.wake)}" } ?: "win none"
+            val t = SleepStaging.Tuning.DEFAULT
+            listOf(
+                "noleadprotect" to classify(t.copy(protectsLeadingHRWake = false)),
+                "nocadence" to classify(t.copy(cadenceWakeQuietEpochs = 0)),
+                "nowear" to classify(t.copy(stagedWearGate = false)),
+                "nooffset" to classify(t.copy(offsetNoReturnSpreadFraction = 0.0)),
+                "norescue" to classify(t.copy(hrWakeRescueCeilingBPM = 0.0)),
+                "nowiden" to classify(t.copy(preOnsetBedtimeReachEpochs = 0)),
+                "baseline" to classify(baseline = SleepStaging.PersonalBaseline(44.0)),
+                "rrvar" to classify(t.copy(rrVarWeight = 0.5)),
+            ).forEach { (variant, out) -> lines += "stgv $variant ${brief(out)}" }
+            val zone = ZoneId.of("America/New_York")
+            val selected = SleepStaging.classify(
+                BulkSleep.latestNightRecords(n.records, zone = zone, temperatures = n.temps), temperatures = n.temps,
+            )
+            lines += "selstg America/New_York ${brief(selected)}"
+            return lines
+        }
+
         /** The Kotlin pipeline's canonical lines for one night, in the generator's format. */
         internal fun render(n: DifferentialNight): List<String> {
             val recs = n.records
@@ -87,6 +132,7 @@ class SleepDifferentialTest {
                 }
             }
             lines += selectionLines(n)
+            lines += stagingLines(n)
             return lines
         }
     }
@@ -146,7 +192,12 @@ class SleepDifferentialTest {
                 "${report.nonIdentical.size} not bit-identical (tolerated within 1e-9), ${report.mismatches.size} mismatches",
         )
         report.nonIdentical.forEach { println("  not bit-identical: $it") }
-        assertTrue(report.mismatches.isEmpty(), "${report.mismatches.size} night(s) differ from upstream:\n" + report.mismatches.take(20).joinToString("\n"))
+        val nightsDiffering = report.mismatches.map { it.substringBefore(' ').trimEnd(':') }.toSet().size
+        assertTrue(
+            report.mismatches.isEmpty(),
+            "${report.mismatches.size} mismatch(es) in $nightsDiffering night(s) differ from upstream:\n" +
+                report.mismatches.take(20).joinToString("\n"),
+        )
     }
 
     @Test
@@ -167,6 +218,9 @@ class SleepDifferentialTest {
             "truncated-tail", "daytime-only", "all-day-spo2", "leapfrog", "intra-night-gap",
         )
         for (s in selectionShapes) assertTrue((shapes[s] ?: 0) >= 10, "selection shape $s has ${shapes[s] ?: 0} archives")
+        // Single nights shaped to reach each staging pass.
+        val stagingShapes = listOf("cadence-exit", "elevated-head", "second-bout", "bedtime-lead-in", "offset-rise", "temperature-block")
+        for (s in stagingShapes) assertTrue((shapes[s] ?: 0) >= 10, "staging shape $s has ${shapes[s] ?: 0} nights")
 
         // Every branch the detection pipeline can take was reached by at least one night.
         val coverage = SleepDifferentialFixtures.coverage()
@@ -178,6 +232,11 @@ class SleepDifferentialTest {
             // overnight filter, several candidate nights and no night at all were all reached.
             "sel-guard-declined", "sel-reanchored", "sel-morning-absorbed", "sel-scoped", "sel-truncated-correction",
             "sel-no-night", "sel-several-nights",
+            // Staging: every pass changed at least one night's hypnogram when switched off, stitched
+            // nights staged, and every stage occurred.
+            "stg-staged", "stg-multi-fragment", "stg-leading-wake", "stg-cadence-wake", "stg-wear-gate", "stg-offset",
+            "stg-rescue", "stg-bedtime-widen", "stg-baseline", "stg-rr-variability", "stg-stage-awake",
+            "stg-stage-asleepCore", "stg-stage-asleepDeep", "stg-stage-asleepREM",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }
