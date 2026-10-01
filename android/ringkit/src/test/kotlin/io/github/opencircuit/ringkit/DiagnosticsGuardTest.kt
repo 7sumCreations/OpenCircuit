@@ -214,4 +214,22 @@ class DiagnosticsGuardTest {
             spanLine(ZoneId.of("America/New_York"), Instant.parse("2026-07-15T12:00:00Z")),
         )
     }
+
+    // --- DiagnosticsFrameImport: Swift's `UInt8(_, radix: 16)` reads ASCII hex digits only ---
+
+    @Test
+    fun hexBytesAreAsciiOnlyAsSwiftParsesThem() {
+        val stamp = "2026-08-04T12:56:16Z"
+        assertEquals(
+            listOf(0x4c, 0x01, 0xab, 0x0f),
+            assertNotNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c 01 aB +f")).map { it.toInt() and 0xFF },
+        )
+        // Fullwidth digits and letters are hex digits to Java's `Character.digit` but not to Swift.
+        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c ０１ 02 03"))
+        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c 01 ＡＢ 03"))
+        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c 01 02 ١٢"))
+
+        assertEquals("AD", DiagnosticsFrameImport.sourceRingFromDiagnosticsText("MAC: AA:BB:CC:DD:EE:AD").macSuffix)
+        assertNull(DiagnosticsFrameImport.sourceRingFromDiagnosticsText("MAC: AA:BB:CC:DD:EE:ＡＤ").macSuffix)
+    }
 }

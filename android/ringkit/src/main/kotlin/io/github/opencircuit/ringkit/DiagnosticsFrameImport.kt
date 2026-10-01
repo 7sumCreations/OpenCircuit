@@ -186,7 +186,7 @@ object DiagnosticsFrameImport {
      * Swift's `split(whereSeparator: \.isNewline)`: `\r\n` is ONE separator (a single grapheme in
      * Swift), as is each of LF, VT, FF, CR, NEL, LS and PS; empty lines are dropped.
      */
-    private val NEWLINE = Regex("\r\n|[\n\u000B\u000C\r\u0085  ]")
+    private val NEWLINE = Regex("\r\n|[\n\u000B\u000C\r\u0085\u2028\u2029]")
 
     private fun lines(text: String): List<String> = text.split(NEWLINE).filter { it.isNotEmpty() }
 
@@ -194,12 +194,20 @@ object DiagnosticsFrameImport {
     private fun isSwiftWhitespace(c: Char): Boolean = c == '\t' || Character.getType(c) == Character.SPACE_SEPARATOR.toInt()
 
     private fun isSwiftNewline(c: Char): Boolean =
-        c in '\n'..'\r' || c == '\u0085' || c == ' ' || c == ' '
+        c in '\n'..'\r' || c == '\u0085' || c == '\u2028' || c == '\u2029'
 
     private fun trimWhitespace(s: String): String = s.trim { isSwiftWhitespace(it) }
 
     private fun trimWhitespaceAndNewlines(s: String): String = s.trim { isSwiftWhitespace(it) || isSwiftNewline(it) }
 
-    /** Swift's `UInt8(_, radix: 16)`: an optional sign, hex digits, value 0–255; null otherwise. */
-    private fun parseByte(token: String): Int? = token.toIntOrNull(16)?.takeIf { it in 0..0xFF }
+    /**
+     * Swift's `UInt8(_, radix: 16)`: an optional sign, ASCII hex digits, value 0–255; null
+     * otherwise. `toIntOrNull(16)` alone would also take fullwidth and other Unicode digits,
+     * which Swift rejects.
+     */
+    private fun parseByte(token: String): Int? {
+        val digits = if (token.startsWith('+') || token.startsWith('-')) token.substring(1) else token
+        if (digits.isEmpty() || !digits.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) return null
+        return token.toIntOrNull(16)?.takeIf { it in 0..0xFF }
+    }
 }
