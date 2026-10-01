@@ -4,16 +4,17 @@ package io.github.opencircuit.ringkit
 // upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/BulkSleep.swift (@ b1c2fdd): the page/stream
 // split (`:368-396`), the motion timeline and motion-channel selection (`:398-803`, `:915-1140`),
 // the HRV pooling gate (`:804-913`), the sample path (`:1656-1722`), and from the night half the
-// main sleep block and coarse sleep segments (`:1129-1201`), `onsetContiguityGap` (`:1250`) and
-// `onsetIsUnobserved` (`:1278-1291`).
+// main sleep block and coarse sleep segments (`:1129-1201`), `onsetContiguityGap` (`:1250`),
+// `onsetIsUnobserved` (`:1278-1291`) and night selection (`:1212-1234`, `:1293-1629`).
 //
 // A 0x4c page is `[0x4c][0x00][countdown][N × 23-byte record][xor]` (../docs/PROTOCOL.md §5.3).
 // Records align to page boundaries — each page body is a whole number of records.
 //
-// Not ported yet: the rest of the night half — night selection and staging.
+// Not ported yet: the rest of the night half — staging (`stagedSegments`).
 
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneId
 import kotlin.math.abs
 
 /** Reassembles `0x4c` pages into records and maps epochs to health samples. */
@@ -618,6 +619,186 @@ object BulkSleep {
         val requiredHole = maxOf(ONSET_CONTIGUITY_GAP, SleepWindow.PRESUMED_TRUNCATED_NIGHT_SPAN.minus(block.duration))
         val previous = records.map { it.date(epoch) }.filter { it.isBefore(block.start) }.maxOrNull() ?: return true
         return Duration.between(previous, block.start) > requiredHole
+    }
+
+    // Night half — night selection (upstream `:1212-1250`, `:1293-1629`)
+
+    /**
+     * Widest gap between two sleep blocks that still counts as the SAME night. The ring buffers only
+     * ~4.75 h and a missed drain leaves a hole, so one night's fragments can sit hours apart, while
+     * the previous night is ~14 h+ away. 6 h absorbs intra-night buffer-loss gaps without ever
+     * merging two nights.
+     */
+    val MAX_INTRA_NIGHT_GAP: Duration = Duration.ofHours(6)
+
+    /**
+     * Longest plausible single night (in bed); caps the night-scoping window. The all-day channel
+     * fills the daytime and a sedentary worn day reads as "still", so detection can emit a block
+     * bridging daytime into the night (reproduced upstream: a 20.5 h block). Without the cap the
+     * selector chained back into the previous night's tail and staging discarded the result.
+     */
+    val MAX_NIGHT_SPAN: Duration = Duration.ofHours(14)
+
+    /**
+     * Whether a bridge the observed-gap guard DECLINES may RE-ANCHOR the night onto the (longer)
+     * block it just orphaned, instead of leaving a short trailing bout standing as "the night".
+     * `false` is byte-identical to the code before the re-anchor. It only ever moves the anchor
+     * EARLIER, onto a block that already qualified as an overnight night: it cannot invent a night
+     * and it cannot bridge one.
+     */
+    const val DECLINED_BRIDGE_MAY_REANCHOR: Boolean = true
+
+    /**
+     * Longest arousal the morning-continuation absorb bridges between the anchor night's end and a
+     * later same-morning sleep block. It IS [ActivityPeriod.MAX_SLEEP_PAUSE] because this pre-filter
+     * must never be stricter about "same night" than `ActivityPeriod.mainSleepBlock`, the function it
+     * feeds: while upstream's value was 30 min, a 30–60 min morning pause deleted every later record
+     * before staging ran. A zero or negative gap disables the absorb (byte-identical to the code
+     * before it). Not a fitted constant — it references the symbol so the two move together.
+     */
+    val MORNING_CONTINUATION_MAX_GAP: Duration = ActivityPeriod.MAX_SLEEP_PAUSE
+
+    /**
+     * OBSERVED-GAP GUARD on the backward cluster chain of [latestNightRecords]. A bridge is declined
+     * when the gap it spans is essentially completely covered by real records
+     * (`observed / (gap / 150 s) >= cut`): those epochs exist, the detector looked at them and did not
+     * call them sleep, so the gap is measured awake time, not the missing-drain hole the chain exists
+     * for. 0.95 is a completeness threshold read off the gap geometry (a fully observed gap of an
+     * hour or more reads ≥ 0.958), not a fit; on upstream's corpus it changed exactly one of 21
+     * staged nights. Its known cost: a genuine mid-night bout of 30–60 min awake with the ring
+     * recording also drops the first bout. Any value that is not greater than zero — including NaN —
+     * switches the guard off, byte-identical to the code before it. Gaps at or below
+     * [ONSET_CONTIGUITY_GAP] are never judged.
+     */
+    const val OBSERVED_GAP_ABSORB_COVERAGE_CUT: Double = 0.95
+
+    /**
+     * The records of the most recent OVERNIGHT night (± a 30 min margin), so that staging a
+     * multi-night archive union describes LAST night rather than the earliest block. Returns the
+     * input (sorted by counter) unchanged when no overnight block exists.
+     *
+     * In order:
+     *  1. detect sleep blocks longer than the minimum sleep duration over the counter-sorted
+     *     records ([temperatures] apply the wear gate, [motionPolicy] the motion channel);
+     *  2. TWO-PASS night filter: pass 1 keeps blocks [SleepWindow.isOvernightBlock] accepts; ONLY when
+     *     pass 1 keeps nothing, pass 2 retries with the truncated-night correction, earned per block
+     *     by [onsetIsUnobserved] against these records. The "only when empty" is load-bearing — a
+     *     newly accepted block could only move the anchor later, which evicts, clips or inflates a
+     *     real night; gating on "nothing found" makes all three impossible by construction;
+     *  3. the anchor is the latest-ending night; when a bridge back to a LONGER earlier night within
+     *     [MAX_INTRA_NIGHT_GAP] is declined by the observed-gap guard, the anchor moves onto that
+     *     night ([declinedBridgeMayReanchor]) — the guard may separate two bouts but may never make
+     *     the smaller one the night;
+     *  4. cluster earlier nights back from the anchor within [MAX_INTRA_NIGHT_GAP] of the running
+     *     cluster start (a declined bridge is skipped, not a chain break), then cap the window at
+     *     [MAX_NIGHT_SPAN] before the anchor's end;
+     *  5. chain FORWARD over later sleep periods of at least [NapDetection.MIN_NAP_DURATION] within
+     *     [morningContinuationGap], while the envelope stays inside [MAX_NIGHT_SPAN] and overnight;
+     *  6. return the records from 30 min before the cluster start to 30 min after its end.
+     *
+     * [zone] is where "overnight" is judged — upstream reads the device calendar; here it is
+     * explicit and has no default. [observedGapCoverageCut] not greater than zero (or NaN) switches
+     * the guard and the re-anchor off; a non-positive [morningContinuationGap] switches the absorb off.
+     */
+    fun latestNightRecords(
+        records: List<BulkRecord>,
+        zone: ZoneId,
+        temperatures: List<TemperatureSample> = emptyList(),
+        epoch: Long = Command.SYNC_EPOCH,
+        morningContinuationGap: Duration = MORNING_CONTINUATION_MAX_GAP,
+        observedGapCoverageCut: Double = OBSERVED_GAP_ABSORB_COVERAGE_CUT,
+        declinedBridgeMayReanchor: Boolean = DECLINED_BRIDGE_MAY_REANCHOR,
+        motionPolicy: MotionChannelPolicy = MotionChannelPolicy.DEFAULT,
+    ): List<BulkRecord> {
+        // Detection needs a time-ordered timeline; sort defensively so any caller is served.
+        val sorted = records.sortedBy { it.counter }
+        val periods = ActivityPeriod.detectFromMotion(
+            motionTimeline(sorted, epoch, motionPolicy),
+            temperatureSamples = temperatures,
+            heartRateSamples = heartRateTimeline(sorted, epoch),
+            sleepVitalTimes = sleepVitalTimeline(sorted, epoch),
+        )
+        val sleepBlocks = periods.filter { it.activity == Activity.SLEEP && it.duration > ActivityPeriod.MIN_SLEEP_DURATION }
+        // Two-pass: the truncated-night correction runs ONLY when the plain rule accepted nothing.
+        var nights = sleepBlocks.filter { SleepWindow.isOvernightBlock(it.start, it.end, zone) }
+        if (nights.isEmpty()) {
+            nights = sleepBlocks.filter {
+                val block = DateInterval(it.start, maxOf(it.end, it.start))
+                SleepWindow.isOvernightBlock(it.start, it.end, onsetIsUnobserved = onsetIsUnobserved(block, sorted, epoch), zone = zone)
+            }
+        }
+        var anchor = nights.maxByOrNull { it.end } ?: return sorted
+        // A NaN cut is OFF here, as upstream (and could never fire anyway: `ratio >= NaN` is false).
+        val guardOn = observedGapCoverageCut > 0
+        val times = if (guardOn) sorted.map { it.date(epoch) } else emptyList()
+
+        // Declined-bridge re-anchor. Each step moves the anchor strictly earlier over finitely many
+        // disjoint blocks, so it terminates. MAX_INTRA_NIGHT_GAP keeps it from reaching the previous
+        // night, which daytime records would otherwise make look "observed".
+        if (declinedBridgeMayReanchor && guardOn) {
+            while (true) {
+                val current = anchor
+                val orphaned = nights
+                    .filter {
+                        !it.end.isAfter(current.start) &&
+                            it.duration > current.duration &&
+                            Duration.between(it.end, current.start) <= MAX_INTRA_NIGHT_GAP
+                    }
+                    .maxByOrNull { it.end } ?: break
+                if (!bridgeIsDeclined(current.start, orphaned.end, times, observedGapCoverageCut)) break
+                anchor = orphaned
+            }
+        }
+
+        // Backward cluster chain from the anchor. A declined bridge is skipped (upstream `continue`),
+        // not a chain break.
+        var clusterStart = anchor.start
+        for (p in nights.sortedByDescending { it.start }) {
+            if (p.end.isAfter(anchor.end)) continue
+            if (Duration.between(p.end, clusterStart) <= MAX_INTRA_NIGHT_GAP) {
+                if (guardOn && bridgeIsDeclined(clusterStart, p.end, times, observedGapCoverageCut)) continue
+                clusterStart = minOf(clusterStart, p.start)
+            }
+        }
+        // Cap the window to ONE night: never reach back more than MAX_NIGHT_SPAN before the wake.
+        clusterStart = maxOf(clusterStart, anchor.end.minus(MAX_NIGHT_SPAN))
+
+        // Morning-continuation absorb: chain forward over later sleep periods (disjoint, so a plain
+        // forward scan terminates; the first period that fails a rule ends the chain).
+        var clusterEnd = anchor.end
+        if (morningContinuationGap > Duration.ZERO) {
+            val continuations = periods
+                .filter { it.activity == Activity.SLEEP && it.duration >= NapDetection.MIN_NAP_DURATION && !it.start.isBefore(anchor.end) }
+                .sortedBy { it.start }
+            for (p in continuations) {
+                if (Duration.between(clusterEnd, p.start) > morningContinuationGap) break
+                if (Duration.between(clusterStart, p.end) > MAX_NIGHT_SPAN) break
+                if (!SleepWindow.isOvernightBlock(clusterStart, p.end, zone)) break
+                clusterEnd = maxOf(clusterEnd, p.end)
+            }
+        }
+        val margin = Duration.ofMinutes(30) // don't clip onset/wake at detection granularity
+        val lo = clusterStart.minus(margin)
+        val hi = clusterEnd.plus(margin)
+        return sorted.filter { val t = it.date(epoch); !t.isBefore(lo) && !t.isAfter(hi) }
+    }
+
+    /**
+     * The observed-gap guard's one decision, shared by the backward cluster chain and the
+     * declined-bridge re-anchor in [latestNightRecords] so the two can never ask different
+     * questions. A bridge from [clusterStart] back to [blockEnd] is DECLINED when the records
+     * strictly inside the gap reach [cut] of the `gap / 150 s` the gap could hold. A cut not greater
+     * than zero (or NaN) never declines; a gap at or below [ONSET_CONTIGUITY_GAP] — including a
+     * negative one — is never judged. Duplicate record times count once per copy, as upstream.
+     */
+    internal fun bridgeIsDeclined(clusterStart: Instant, blockEnd: Instant, recordTimes: List<Instant>, cut: Double): Boolean {
+        if (!(cut > 0)) return false
+        val gap = Duration.between(blockEnd, clusterStart)
+        if (gap <= ONSET_CONTIGUITY_GAP) return false
+        val observed = recordTimes.count { it.isAfter(blockEnd) && it.isBefore(clusterStart) }
+        val expected = (gap.seconds + gap.nano / 1e9) / BulkRecord.EPOCH_SECONDS
+        if (!(expected > 0)) return false
+        return observed / expected >= cut
     }
 
     /**
