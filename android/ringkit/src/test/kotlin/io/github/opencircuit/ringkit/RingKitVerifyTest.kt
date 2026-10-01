@@ -13,12 +13,14 @@ import kotlin.test.assertTrue
 /**
  * Codec self-checks against REAL frames from the FR02.018 capture.
  *
- * Port of the E1 subset of upstream ios/OpenCircuitKit/Sources/RingKitVerify/main.swift
- * (@ b1c2fdd): `realFrames` :36-40, framing & commands :44-60, `responseID` :62-68, parse :70-71,
- * live HR :72-83, SpO₂ :85-92, descriptor steps :94-101, skin temperature :103-110, battery +
- * zero-temp :112-117, metric models :155-158, SM3/auth :264-276. Each upstream `check` becomes
- * one assertion; each area is one named test. The rest of the file (epoch sync, analytics,
- * sleep detection …) belongs to E2–E5.
+ * Port of upstream ios/OpenCircuitKit/Sources/RingKitVerify/main.swift (@ b1c2fdd), in parts.
+ * E1: `realFrames` :36-40, framing & commands :44-60, `responseID` :62-68, parse :70-71, live HR
+ * :72-83, SpO₂ :85-92, descriptor steps :94-101, skin temperature :103-110, battery + zero-temp
+ * :112-117, metric models :155-158, SM3/auth :264-276. E2: helpers `makeFrame` :22-25 and
+ * `makeEpochRecord` :26-34, epoch sync Layer A :119-152, `SyncCursor` :160-185, cumulative
+ * counters :187-204, bulk `0x4c` decode :305-343. Each upstream `check` becomes one assertion
+ * carrying its message; each area is one named test. The rest of the file (analytics, sleep
+ * detection …) moves with the epic that ports the code it checks.
  *
  * Upstream builds the :104/:113/:116 fixtures with an embedded space removed
  * (`"…1019 02ffaf".replacingOccurrences(of: " ", with: "")`); the strings below are the result.
@@ -38,6 +40,24 @@ class RingKitVerifyTest {
 
     // :116 — same descriptor with both temperature channels zeroed, space removed.
     private val zeroTempDescriptor = "104e030000000000000000000000101902ffaf"
+
+    // :22-25 — opcode + body + XOR trailer. The trailer is computed here, never by the production
+    // `Frame.xorTrailer`, so a fault in it cannot make these fixtures agree with it.
+    private fun makeFrame(opcode: Int, body: ByteArray): ByteArray {
+        val withoutTrailer = bytes(opcode) + body
+        return withoutTrailer + bytes(withoutTrailer.fold(0) { acc, b -> acc xor (b.toInt() and 0xFF) })
+    }
+
+    // :26-34 — marker, 3-byte big-endian counter, then `fill` up to `size`.
+    private fun makeEpochRecord(size: Int, counter: Int, fill: Int = 0x01): ByteArray {
+        val head = bytes(0x0C, (counter shr 16) and 0xFF, (counter shr 8) and 0xFF, counter and 0xFF)
+        return head + ByteArray(size - head.size) { fill.toByte() }
+    }
+
+    // :160-162 — shared by the SyncCursor and cumulative-counter areas, as upstream.
+    private val t0 = Instant.ofEpochSecond(1000)
+    private val t1 = Instant.ofEpochSecond(2000)
+    private val t2 = Instant.ofEpochSecond(3000)
 
     @Test
     fun framingAndCommands() { // :44-60
@@ -141,6 +161,182 @@ class RingKitVerifyTest {
         assertEquals(78, DeviceStatus.battery(hex(morningDescriptor)), "descriptor [1] 0x4e -> 78% battery")
         assertNull(DeviceStatus.battery(hex("15005b0ab0f4")), "non-descriptor frame -> nil battery")
         assertNull(DeviceStatus.skinTemperature(hex(zeroTempDescriptor)), "zero-temp descriptor -> nil (out of band)")
+    }
+
+    @Test
+    fun epochSyncLayerA() { // :119-152
+        val ppgA = makeEpochRecord(size = EpochRecord.PPG_RECORD_SIZE, counter = 0x000100)
+        for (i in 9 until 47) ppgA[i] = 0xAA.toByte()
+        val ppgB = makeEpochRecord(size = EpochRecord.PPG_RECORD_SIZE, counter = 0x000484)
+        val ppgFrame = makeFrame(EpochRecord.PPG_OPCODE, bytes(0x00, 0x03) + ppgA + ppgB)
+        val ppgRecords = EpochRecord.parsePPGPage(ppgFrame, streamHighByte = 0x0c)
+        assertEquals(2, ppgRecords.size, "0x47 page splits 47-byte records")
+        assertEquals(
+            Instant.ofEpochSecond(Command.SYNC_EPOCH + 0x0c000100),
+            ppgRecords.firstOrNull()?.timestamp,
+            "record counter maps to sync epoch Date",
+        )
+        assertContentEquals(
+            ByteArray(38) { 0xAA.toByte() }, ppgRecords.firstOrNull()?.rawPayload, "0x47 exposes 38-byte raw PPG payload",
+        )
+
+        val activity = makeEpochRecord(size = EpochRecord.ACTIVITY_RECORD_SIZE, counter = 0x2298c3, fill = 0x00)
+        activity[8] = 0x12
+        for (i in 0 until 7) activity[15 + i] = (i + 1).toByte()
+        val activityFrame = makeFrame(EpochRecord.ACTIVITY_OPCODE, bytes(0x00, 0x00) + activity)
+        val activityRecords = EpochRecord.parseActivityPage(activityFrame, streamHighByte = 0x0c)
+        assertEquals(1, activityRecords.size, "0x4c routes to final activity page")
+        assertEquals(0x12, activityRecords.firstOrNull()?.subtype, "0x4c exposes subtype byte[8]")
+        assertContentEquals(
+            bytes(1, 2, 3, 4, 5, 6, 7), activityRecords.firstOrNull()?.rawPayload, "0x4c exposes 7-byte raw metric payload",
+        )
+
+        val cursorReport = bytes(0x50, 0x00, 0x00, 0x12, 0x0c, 0x22, 0xaa, 0xe4, 0x0c, 0x22, 0xac, 0xb5)
+        val report = EpochRecord.parseEndOfHistory(cursorReport)
+        assertNotNull(report, "0x50 routes to cursor report")
+        assertEquals(0x0c22acb5L, report.cursorTo, "0x50 cursor report decodes no-XOR end cursor")
+
+        val epochSession = EpochSyncSession()
+        epochSession.appendActivityPage(activityFrame)
+        epochSession.complete(cursorReport)
+        assertEquals(
+            1,
+            epochSession.placeholderQuantitySamples().size,
+            "epoch metric decoder emits gated zero-value HR placeholders for worn records",
+        )
+    }
+
+    @Test
+    fun syncCursorIsForwardOnly() { // :160-185
+        val cursor = SyncCursor()
+        assertNull(cursor.last(MetricKind.HEART_RATE), "fresh cursor: never synced")
+        assertTrue(cursor.isNew(MetricKind.HEART_RATE, t0), "any date is new before first sync")
+
+        val batch = listOf(
+            QuantitySample(kind = MetricKind.HEART_RATE, start = t1, value = 60.0),
+            QuantitySample(kind = MetricKind.HEART_RATE, start = t0, value = 58.0), // out of order
+            QuantitySample(kind = MetricKind.SPO2, start = t1, value = 0.97),
+        )
+        val fresh = cursor.selectNew(batch)
+        assertEquals(3, fresh.size, "selectNew keeps all 3 first time")
+        // Kept as upstream wrote it. The first alternative can never hold (the batch has one t0),
+        // so the check is effectively "the first kept sample is the oldest".
+        assertTrue(
+            fresh.map { it.start } == listOf(t0, t0, t1) || fresh.firstOrNull()?.start == t0,
+            "selectNew sorts by start",
+        )
+        assertEquals(t1, cursor.last(MetricKind.HEART_RATE), "cursor advanced HR to newest (t1)")
+        assertEquals(t1, cursor.last(MetricKind.SPO2), "cursor tracks spo2 independently")
+
+        val resync = cursor.selectNew(
+            listOf(
+                QuantitySample(kind = MetricKind.HEART_RATE, start = t1, value = 61.0), // equal -> not new
+                QuantitySample(kind = MetricKind.HEART_RATE, start = t2, value = 62.0), // newer -> new
+            ),
+        )
+        assertTrue(resync.size == 1 && resync.firstOrNull()?.start == t2, "re-sync drops <= cursor, keeps newer")
+        assertEquals(t2, cursor.last(MetricKind.HEART_RATE), "cursor advanced to t2; never backward")
+        cursor.advance(MetricKind.HEART_RATE, to = t0)
+        assertEquals(t2, cursor.last(MetricKind.HEART_RATE), "advance() never moves cursor backward")
+    }
+
+    @Test
+    fun cumulativeCounters() { // :187-204
+        assertTrue(MetricKind.STEPS.isCumulativeCounter, "steps are treated as cumulative counters")
+        assertTrue(MetricKind.ACTIVE_ENERGY.isCumulativeCounter, "active energy is treated as cumulative counter")
+        val stepsFirst = CumulativeMetricAccumulator.accumulate(
+            QuantitySample(kind = MetricKind.STEPS, start = t0, value = 100.0),
+            CumulativeMetricState(),
+        )
+        val stepsSecond = CumulativeMetricAccumulator.accumulate(
+            QuantitySample(kind = MetricKind.STEPS, start = t1, value = 140.0),
+            CumulativeMetricState(previousRawValue = stepsFirst.rawValue, dailyTotal = stepsFirst.dailyTotal),
+        )
+        assertTrue(
+            stepsFirst.deltaValue == 100.0 && stepsFirst.dailyTotal == 100.0, "first cumulative sample uses raw as delta",
+        )
+        assertTrue(
+            stepsSecond.deltaValue == 40.0 && stepsSecond.dailyTotal == 140.0,
+            "cumulative sample stores delta and running total",
+        )
+        val rolledSteps = CumulativeMetricAccumulator.accumulate(
+            QuantitySample(kind = MetricKind.STEPS, start = t2, value = 12.0),
+            CumulativeMetricState(previousRawValue = 250.0, dailyTotal = 250.0),
+        )
+        assertTrue(
+            rolledSteps.deltaValue == 12.0 && rolledSteps.dailyTotal == 262.0, "counter rollover uses raw value as delta",
+        )
+    }
+
+    // :306-310 — a real, XOR-valid 0x4c page from the 2026-06-13 overnight sync: 6 × 23-byte records.
+    private val realPage = "4c00260c22a16b55210a7d120a010101010100000402400400000c22a20155000300" +
+        "120a010101010100003c00000d01200c22a297540001005f0a010101010100001101b00f" +
+        "00440c22a32d6027077b120a010101010100402501c02235a00c22a3c351260577120b01" +
+        "0101010108a01000000401300c22a459502d0378120a01010101010160200000040ff0cc"
+
+    @Test
+    fun bulkPageSplitsAndKeysLayout() { // :305-315
+        val pageRecs = BulkSleep.recordsFromPage(hex(realPage))
+        assertEquals(6, pageRecs.size, "0x4c page splits into 6 × 23-byte records")
+        assertTrue(
+            pageRecs.getOrNull(2)?.layout == BulkRecord.Layout.SLEEP_VITALS &&
+                pageRecs.getOrNull(0)?.layout == BulkRecord.Layout.ACTIVITY,
+            "record [8] keys layout: sleep-vitals vs activity",
+        )
+    }
+
+    @Test
+    fun deepSleepEpochVitals() { // :316-326 — confirmed against the app: HR 68 / HRV 77 / SpO2 98.
+        val dsr = assertNotNull(BulkRecord.of(hex("0c22d5bf444d057a620a01010101012aa0000090000004")))
+        assertEquals(68, dsr.heartRate, "sleep-vitals [4] -> HR 68 bpm (🟢 app-confirmed)")
+        assertEquals(77, dsr.hrvRMSSD, "sleep-vitals [5] -> HRV 77 ms (🟢)")
+        assertEquals(98, dsr.spo2Percent, "sleep-vitals [8] -> SpO2 98% (🟢)")
+        assertEquals(15.25, dsr.respiratoryRate, "sleep-vitals [7] 0x7a/8 -> RR 15.25 brpm (🟢, app avg 15.1)")
+        assertEquals(0x0c22d5bfL, dsr.counter, "record [0:4] -> BE counter")
+        val dsSamples = BulkSleep.samples(listOf(dsr))
+        assertEquals(4, dsSamples.size, "sleep-vitals -> HR + HRV + SpO2 + RR samples")
+        assertEquals(0.98, dsSamples.firstOrNull { it.kind == MetricKind.SPO2 }?.value, "SpO2 emitted as 0…1 fraction")
+        assertEquals(
+            15.25, dsSamples.firstOrNull { it.kind == MetricKind.RESPIRATORY_RATE }?.value, "RR sample emitted",
+        )
+    }
+
+    @Test
+    fun idleTemplateYieldsNoSamples() { // :327-329
+        val idleRec = assertNotNull(BulkRecord.of(hex("0c099dbf05000c00120a01010101010000000000000000")))
+        assertTrue(
+            idleRec.layout == BulkRecord.Layout.IDLE && BulkSleep.samples(listOf(idleRec)).isEmpty(),
+            "idle template -> no samples",
+        )
+    }
+
+    /**
+     * :330-345 — HRV and RR ARE carried on `0x12` activity epochs (upstream issue #185). HRV is
+     * admitted only when the ring's own `[15:20]` intensity tail says the epoch was QUIET; RR is
+     * motion-insensitive. Asserted through the public `samples` surface, plus the strict
+     * accessors, which must be untouched on both, and `sleepVitalTimeline`, which the recovered
+     * HRV must never seed.
+     */
+    @Test
+    fun activityEpochHrvAndRrRecovery() {
+        val quietAct = assertNotNull(BulkRecord.of(hex("0c22a16b55210a7d120a01010101010000000000040000")))
+        val movingAct = assertNotNull(BulkRecord.of(hex("0c22a16b55210a7d120a01010101010000040240040000")))
+        val qs = BulkSleep.samples(listOf(quietAct)).map { it.kind }.toSet()
+        val ms = BulkSleep.samples(listOf(movingAct)).map { it.kind }.toSet()
+        assertEquals(
+            setOf(MetricKind.HEART_RATE, MetricKind.HRV_SDNN, MetricKind.RESPIRATORY_RATE),
+            qs,
+            "#185: QUIET activity epoch -> HR + HRV + RR",
+        )
+        assertEquals(
+            setOf(MetricKind.HEART_RATE, MetricKind.RESPIRATORY_RATE), ms, "#185: MOVING activity epoch -> HR + RR, HRV suppressed",
+        )
+        assertTrue(
+            quietAct.hrvRMSSD == null && movingAct.hrvRMSSD == null, "#185: the strict sleep-vitals accessor is UNCHANGED on both",
+        )
+        assertTrue(
+            BulkSleep.sleepVitalTimeline(listOf(quietAct, movingAct)).isEmpty(), "#185: recovered HRV never seeds sleep detection",
+        )
     }
 
     @Test
