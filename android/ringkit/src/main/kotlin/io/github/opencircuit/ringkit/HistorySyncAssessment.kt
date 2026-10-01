@@ -13,6 +13,7 @@ package io.github.opencircuit.ringkit
 
 import java.time.Duration
 import java.time.Instant
+import java.util.Locale
 
 /** The verdict on one history-drain channel open. [rawValue] is upstream's persisted string. */
 enum class HistoryChannelOutcome(val rawValue: String) {
@@ -206,8 +207,9 @@ class HistoryChannelTrace(val label: String, channel: Int, val startedAt: Instan
     override fun hashCode(): Int = fields().hashCode()
 
     override fun toString(): String =
-        "HistoryChannelTrace(label=$label, channel=%02x, pages4c=$page4CCount, pages47=$page47Count, pages4d=$page4DCount, endMarkers=$endMarkerCount, exit=$exitReason)"
-            .format(channel)
+        "HistoryChannelTrace(label=$label, channel=${String.format(Locale.ROOT, "%02x", channel)}, " +
+            "pages4c=$page4CCount, pages47=$page47Count, pages4d=$page4DCount, " +
+            "endMarkers=$endMarkerCount, exit=$exitReason)"
 
     private companion object {
         fun requireByte(value: Int, name: String): Int {

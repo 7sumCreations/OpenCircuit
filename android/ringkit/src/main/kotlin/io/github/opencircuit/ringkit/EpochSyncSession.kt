@@ -10,6 +10,8 @@ package io.github.opencircuit.ringkit
 // public record lists are read-only snapshots, and stored pages are private copies of the caller's
 // arrays, so neither a caller nor a reader can change the session behind its back.
 
+import java.util.Locale
+
 /**
  * @param syncOpenCursor the cursor sent in the sync-open command (unsigned 32-bit, held in a
  *   `Long`), or null. Its top byte seeds [streamHighByte]; `0xFFFFFFFF` (the skip-backlog open)
@@ -110,9 +112,11 @@ class EpochSyncSession(syncOpenCursor: Long? = null) {
         return h
     }
 
-    override fun toString(): String =
-        "EpochSyncSession(streamHighByte=%02x, activityRecords=%d, ppgRecords=%d, endOfHistory=%s)"
-            .format(streamHighByte, activityRecords.size, ppgRecords.size, endOfHistory)
+    override fun toString(): String = String.format(
+        Locale.ROOT,
+        "EpochSyncSession(streamHighByte=%02x, activityRecords=%d, ppgRecords=%d, endOfHistory=%s)",
+        streamHighByte, activityRecords.size, ppgRecords.size, endOfHistory,
+    )
 
     private fun pagesEqual(a: List<ByteArray>, b: List<ByteArray>): Boolean =
         a.size == b.size && a.indices.all { a[it].contentEquals(b[it]) }
