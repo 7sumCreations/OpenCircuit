@@ -225,11 +225,11 @@ class DiagnosticsGuardTest {
             assertNotNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c 01 aB +f")).map { it.toInt() and 0xFF },
         )
         // Fullwidth digits and letters are hex digits to Java's `Character.digit` but not to Swift.
-        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c ０１ 02 03"))
-        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c 01 ＡＢ 03"))
-        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c 01 02 ١٢"))
+        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c \uFF10\uFF11 02 03"))
+        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c 01 \uFF21\uFF22 03"))
+        assertNull(DiagnosticsFrameImport.pageBytesFromLine("$stamp  0x4c  4b  4c 01 02 \u0661\u0662"))
 
-        assertEquals("AD", DiagnosticsFrameImport.sourceRingFromDiagnosticsText("MAC: AA:BB:CC:DD:EE:AD").macSuffix)
-        assertNull(DiagnosticsFrameImport.sourceRingFromDiagnosticsText("MAC: AA:BB:CC:DD:EE:ＡＤ").macSuffix)
+        assertEquals("AD", DiagnosticsFrameImport.sourceRingFromDiagnosticsText("MAC: ··:··:··:··:··:AD").macSuffix)
+        assertNull(DiagnosticsFrameImport.sourceRingFromDiagnosticsText("MAC: ··:··:··:··:··:\uFF21\uFF24").macSuffix)
     }
 }
