@@ -24,8 +24,22 @@
 //   score <bits>                       SleepScore.score(start:end:) of the main block
 //   onset <true|false>                 BulkSleep.onsetIsUnobserved(main block, in: the night)
 //   overnight <zone> <plain> <presumed>  SleepWindow.isOvernightBlock without / with onsetIsUnobserved
+//   sel <zone> <variant> <count> <first> <last>
+//                                      BulkSleep.latestNightRecords(from:temperatures:) with the
+//                                      device time zone set to <zone>: how many records it returns
+//                                      and the first and last counter ("-" when none). The result
+//                                      is always a contiguous run of the counter-sorted input, so
+//                                      these three numbers fix it exactly. Variants: default; cut0
+//                                      (observedGapCoverageCut 0, the guard off); noreanchor
+//                                      (declinedBridgeMayReanchor false); nomorning
+//                                      (morningContinuationGap 0).
 //   end
-// (score, onset and overnight lines appear only when there is a main block.)
+// (score, onset and overnight lines appear only when there is a main block; sel lines always.)
+//
+// After the synthetic and fixture nights come the selection nights: multi-block archives built to
+// reach every night-selection path (two nights, multi-drain holes, still evenings, short tails,
+// morning continuations, late naps, truncated tails, daytime-only, all-day SpO2, leapfrogs, and
+// nights either side of the intra-night gap).
 
 import Foundation
 @testable import OpenCircuitKit
@@ -376,6 +390,112 @@ func fixtures() -> [Night] {
     return out
 }
 
+// MARK: - Selection nights (multi-block archives for night selection)
+
+let selectionShapes = [
+    "two-nights", "multi-drain-hole", "evening-block", "short-tail", "morning-continuation", "late-nap",
+    "truncated-tail", "daytime-only", "all-day-spo2", "leapfrog", "intra-night-gap",
+]
+let selectionNightsPerShape = 10
+
+/// The counter of UTC wall clock `hour:minute` on the calendar date that counter day `day` starts
+/// on (counter 0 is 12:00 UTC, so hours before 12 are that date's morning).
+func utc(_ day: Int, _ hour: Int, _ minute: Int = 0) -> UInt32 {
+    UInt32(day * 86_400 + (hour - 12) * 3600 + minute * 60)
+}
+
+/// Selection archive `index` (deterministic from its index alone). Times are UTC wall clock; the
+/// other device zones see the same archive shifted.
+func selectionArchive(_ index: Int) -> Night {
+    let shape = selectionShapes[index % selectionShapes.count]
+    var rng = SplitMix64(state: 0x5E1E_C700_0000_0000 &+ UInt64(index))
+    let day = 2700 + index                   // after every synthetic night
+    let hr = rng.int(46, 62)
+    var b = Builder(rng: SplitMix64(state: rng.next()), counter: utc(day, 18))
+    func jump(_ to: UInt32) { b.counter = max(b.counter, to) }
+
+    switch shape {
+    case "two-nights":
+        jump(utc(day, 21, rng.int(0, 59))); b.active(rng.int(4, 12))
+        b.asleep(rng.int(150, 200), hr: hr); b.active(rng.int(8, 24))
+        if rng.chance(50) { b.gap(rng.int(4, 8) * 3600); b.active(rng.int(10, 30)) }
+        else { b.active(rng.int(60, 120)); b.gap(rng.int(3, 6) * 3600); b.active(rng.int(10, 20)) }
+        jump(utc(day + 1, 22, rng.int(0, 59)))
+        b.asleep(rng.int(150, 200), hr: hr); b.active(rng.int(8, 20))
+    case "multi-drain-hole":
+        jump(utc(day, 21, rng.int(0, 59))); b.active(rng.int(8, 16)); b.asleep(rng.int(40, 90), hr: hr)
+        b.gap(rng.pick([1800, 3600, 7200, 10_800, 14_400])); b.asleep(rng.int(40, 100), hr: hr)
+        if rng.chance(50) { b.gap(rng.pick([2400, 5400])); b.asleep(rng.int(20, 60), hr: hr) }
+        b.active(rng.int(8, 16))
+    case "evening-block":
+        jump(utc(day, 20, rng.int(0, 40))); b.active(rng.int(4, 10))
+        b.asleep(rng.int(26, 34), hr: hr); b.active(rng.int(12, 24))
+        b.asleep(rng.int(150, 200), hr: hr); b.active(rng.int(8, 16))
+    case "short-tail":
+        jump(utc(day, 20, rng.int(0, 45))); b.active(rng.int(4, 10))
+        b.asleep(rng.int(130, 170), hr: hr); b.active(rng.int(18, 30))
+        b.asleep(rng.int(40, 70), hr: hr); b.active(rng.int(8, 16))
+    case "morning-continuation":
+        jump(utc(day + 1, 1, rng.int(0, 59))); b.active(rng.int(4, 10))
+        b.asleep(rng.int(150, 190), hr: hr); b.stir(rng.int(2, 22), hr: hr)
+        b.asleep(rng.int(8, 48), hr: hr); b.active(rng.int(8, 16))
+    case "late-nap":
+        jump(utc(day, 23, rng.int(0, 59))); b.active(rng.int(4, 8))
+        b.asleep(rng.int(150, 200), hr: hr); b.active(rng.int(48, 96))
+        b.asleep(rng.int(12, 36), hr: hr + 4); b.active(rng.int(8, 16))
+    case "truncated-tail":
+        jump(utc(day, 8, rng.int(0, 59))); b.active(rng.int(30, 80))
+        jump(utc(day + 1, rng.int(7, 9), rng.int(0, 59)))
+        b.asleep(rng.int(36, 96), hr: hr); b.active(rng.int(8, 16))
+    case "daytime-only":
+        jump(utc(day, 9, rng.int(0, 59))); b.active(rng.int(30, 60))
+        b.asleep(rng.int(30, 80), hr: hr); b.active(rng.int(20, 40))
+    case "all-day-spo2":
+        jump(utc(day + 1, 1, rng.int(0, 59))); b.asleep(rng.int(96, 140), hr: hr); b.active(rng.int(4, 10))
+        jump(utc(day + 1, 14, rng.int(0, 59)))
+        for i in 0..<rng.int(20, 40) {
+            if i % 4 == 0 {
+                b.push(hr: 75, hrv: 0, conf: 6, rr: 0x70, tag: rng.int(95, 99), motion: [1, 1, 1, 1, 1],
+                       tail: [0, 0, 0, 0, 0], trailer: [0, 0, 0x04])
+            } else {
+                b.active(1, hr: 70...90)
+            }
+        }
+    case "leapfrog":
+        jump(utc(day, 21, rng.int(0, 20))); b.asleep(rng.int(26, 34), hr: hr)
+        b.gap(rng.int(5400, 9000)); b.asleep(rng.int(26, 34), hr: hr)
+        b.active(rng.int(18, 30)); b.asleep(rng.int(80, 130), hr: hr); b.active(rng.int(8, 16))
+    case "intra-night-gap":
+        jump(utc(day, 20, rng.int(0, 59))); b.active(rng.int(4, 8)); b.asleep(rng.int(50, 80), hr: hr)
+        b.gap(rng.int(5 * 3600, 7 * 3600)); b.asleep(rng.int(60, 120), hr: hr); b.active(rng.int(8, 16))
+    default:
+        fatalError("unknown selection shape \(shape)")
+    }
+
+    var night = Night(id: "selection-\(padded(index, 3))", shape: shape, records: b.records)
+    // Half the archives carry worn skin temperature every second epoch (cold when off the finger).
+    if rng.chance(50) {
+        for i in stride(from: 0, to: b.records.count, by: 2) {
+            let t = Int(BulkRecord(b.records[i])!.date().timeIntervalSince1970)
+            let tenths = b.offFinger[i] ? 220 + b.rng.int(0, 40) : 315 + b.rng.int(0, 30)
+            night.temps.append((t, Double(tenths) / 10))
+        }
+    }
+    return night
+}
+
+// MARK: - Device time zone
+
+/// Night selection reads the device calendar, so the generator sets the process default zone and
+/// checks that the calendar really follows it before calling in.
+func withDeviceZone<T>(_ zone: String, _ body: () -> T) -> T {
+    let tz = TimeZone(identifier: zone)!
+    NSTimeZone.default = tz
+    precondition(Calendar.current.timeZone.identifier == tz.identifier, "device zone \(zone) not applied")
+    return body()
+}
+let selectionZones = ["UTC", "Asia/Kolkata", "America/New_York"]
+
 // MARK: - Canonical rendering
 
 let hexDigits = Array("0123456789abcdef")
@@ -433,6 +553,7 @@ func golden(_ night: Night) -> [String] {
         }
         hit("onset-unobserved", onset)
     }
+    lines += selection(of: recs, temps: temps)
     lines.append("end")
 
     // Branch coverage — which pipeline paths this night exercised.
@@ -455,6 +576,52 @@ func golden(_ night: Night) -> [String] {
     return lines
 }
 
+/// `count first last` of a selected slice.
+func sliceKey(_ r: [BulkRecord]) -> String {
+    "\(r.count) \(r.first.map { String($0.counter) } ?? "-") \(r.last.map { String($0.counter) } ?? "-")"
+}
+
+/// The `sel` lines for one archive, in every device zone, and the selection branches it reached.
+func selection(of recs: [BulkRecord], temps: [TemperatureSample]) -> [String] {
+    var lines: [String] = []
+    for z in selectionZones {
+        withDeviceZone(z) {
+            let variants: [(String, [BulkRecord])] = [
+                ("default", BulkSleep.latestNightRecords(from: recs, temperatures: temps)),
+                ("cut0", BulkSleep.latestNightRecords(from: recs, temperatures: temps, observedGapCoverageCut: 0)),
+                ("noreanchor", BulkSleep.latestNightRecords(from: recs, temperatures: temps, declinedBridgeMayReanchor: false)),
+                ("nomorning", BulkSleep.latestNightRecords(from: recs, temperatures: temps, morningContinuationGap: 0)),
+            ]
+            lines += variants.map { "sel \(z) \($0.0) \(sliceKey($0.1))" }
+            let key = Dictionary(uniqueKeysWithValues: variants.map { ($0.0, sliceKey($0.1)) })
+            hit("sel-guard-declined", key["default"] != key["cut0"])
+            hit("sel-reanchored", key["default"] != key["noreanchor"])
+            hit("sel-morning-absorbed", key["default"] != key["nomorning"])
+            hit("sel-scoped", variants[0].1.count < recs.count)
+
+            // Which pass of the overnight filter accepted the night (recomputed from the public
+            // pieces, for coverage only — the goldens above come from latestNightRecords itself).
+            let sorted = recs.sorted { $0.counter < $1.counter }
+            let periods = ActivityPeriod.detectFromMotion(BulkSleep.motionTimeline(from: sorted),
+                                                          temperatureSamples: temps,
+                                                          heartRateSamples: BulkSleep.heartRateTimeline(from: sorted),
+                                                          sleepVitalTimes: BulkSleep.sleepVitalTimeline(from: sorted))
+            let blocks = periods.filter { $0.activity == .sleep && $0.duration > ActivityPeriod.minSleepDuration }
+            let plain = blocks.filter { SleepWindow.isOvernightBlock(start: $0.start, end: $0.end) }
+            let corrected = plain.isEmpty ? blocks.filter {
+                SleepWindow.isOvernightBlock(
+                    start: $0.start, end: $0.end,
+                    onsetIsUnobserved: BulkSleep.onsetIsUnobserved(DateInterval(start: $0.start, end: max($0.end, $0.start)),
+                                                                   in: sorted))
+            } : []
+            hit("sel-truncated-correction", !corrected.isEmpty)
+            hit("sel-no-night", plain.isEmpty && corrected.isEmpty)
+            hit("sel-several-nights", plain.count + corrected.count > 1)
+        }
+    }
+    return lines
+}
+
 func inputLines(_ night: Night) -> [String] {
     var lines = ["night \(night.id) \(night.shape)"]
     lines += night.records.map { "r \(hex($0))" }
@@ -473,6 +640,7 @@ guard args.count == 2 else {
 let outDir = URL(fileURLWithPath: args[1], isDirectory: true)
 
 let nights = (0..<(shapes.count * nightsPerShape)).map(synthetic) + fixtures()
+    + (0..<(selectionShapes.count * selectionNightsPerShape)).map(selectionArchive)
 let header = "# Generated by android/tools/sleep-differential from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

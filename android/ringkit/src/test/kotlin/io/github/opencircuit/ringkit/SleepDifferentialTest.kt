@@ -2,6 +2,7 @@ package io.github.opencircuit.ringkit
 
 import io.github.opencircuit.ringkit.SleepDifferentialFixtures.bits
 import io.github.opencircuit.ringkit.SleepDifferentialFixtures.bitsToDouble
+import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import kotlin.math.abs
@@ -28,8 +29,37 @@ class SleepDifferentialTest {
 
         private val OVERNIGHT_ZONES = listOf("UTC", "Asia/Kolkata")
 
+        /** Device zones the generator ran night selection in (upstream reads the device calendar). */
+        private val SELECTION_ZONES = listOf("UTC", "Asia/Kolkata", "America/New_York")
+
         private fun secs(t: Instant): String = t.epochSecond.toString().also { check(t.nano == 0) { "non-integral time $t" } }
         private fun name(a: Activity): String = if (a == Activity.SLEEP) "sleep" else "active"
+
+        /** `count first last` of a selected slice, "-" for an empty one. */
+        private fun sliceKey(r: List<BulkRecord>): String = "${r.size} ${r.firstOrNull()?.counter ?: "-"} ${r.lastOrNull()?.counter ?: "-"}"
+
+        /** The `sel` lines: night selection in every zone, shipped defaults and each switch off. */
+        private fun selectionLines(n: DifferentialNight): List<String> = SELECTION_ZONES.flatMap { z ->
+            val zone = ZoneId.of(z)
+            fun select(
+                cut: Double = BulkSleep.OBSERVED_GAP_ABSORB_COVERAGE_CUT,
+                reanchor: Boolean = BulkSleep.DECLINED_BRIDGE_MAY_REANCHOR,
+                morningGap: Duration = BulkSleep.MORNING_CONTINUATION_MAX_GAP,
+            ) = BulkSleep.latestNightRecords(
+                n.records,
+                zone = zone,
+                temperatures = n.temps,
+                observedGapCoverageCut = cut,
+                declinedBridgeMayReanchor = reanchor,
+                morningContinuationGap = morningGap,
+            )
+            listOf(
+                "default" to select(),
+                "cut0" to select(cut = 0.0),
+                "noreanchor" to select(reanchor = false),
+                "nomorning" to select(morningGap = Duration.ZERO),
+            ).map { (variant, slice) -> "sel $z $variant ${sliceKey(slice)}" }
+        }
 
         /** The Kotlin pipeline's canonical lines for one night, in the generator's format. */
         internal fun render(n: DifferentialNight): List<String> {
@@ -56,6 +86,7 @@ class SleepDifferentialTest {
                     lines += "overnight $z $plain $presumed"
                 }
             }
+            lines += selectionLines(n)
             return lines
         }
     }
@@ -130,6 +161,12 @@ class SleepDifferentialTest {
         for (s in expectedShapes) assertTrue((shapes[s] ?: 0) >= 10, "shape $s has ${shapes[s] ?: 0} nights")
         assertTrue((shapes["fixture"] ?: 0) >= 5, "upstream fixture nights present")
         assertTrue(inputs.size >= 200, "about 200 synthetic nights plus fixtures, got ${inputs.size}")
+        // Multi-block archives built for night selection.
+        val selectionShapes = listOf(
+            "two-nights", "multi-drain-hole", "evening-block", "short-tail", "morning-continuation", "late-nap",
+            "truncated-tail", "daytime-only", "all-day-spo2", "leapfrog", "intra-night-gap",
+        )
+        for (s in selectionShapes) assertTrue((shapes[s] ?: 0) >= 10, "selection shape $s has ${shapes[s] ?: 0} archives")
 
         // Every branch the detection pipeline can take was reached by at least one night.
         val coverage = SleepDifferentialFixtures.coverage()
@@ -137,6 +174,10 @@ class SleepDifferentialTest {
             "wear-gate-changed", "hr-gate-changed", "rescue-changed", "multi-fragment", "main-none", "onset-unobserved",
             "motion-primary", "motion-tail-degenerate", "motion-tail-constant-filler", "overnight-UTC",
             "overnight-presumed-only-UTC",
+            // Night selection: each switch changed at least one result, and both passes of the
+            // overnight filter, several candidate nights and no night at all were all reached.
+            "sel-guard-declined", "sel-reanchored", "sel-morning-absorbed", "sel-scoped", "sel-truncated-correction",
+            "sel-no-night", "sel-several-nights",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }
