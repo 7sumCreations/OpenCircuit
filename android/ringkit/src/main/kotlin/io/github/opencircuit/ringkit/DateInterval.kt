@@ -46,3 +46,9 @@ data class DateInterval(val start: Instant, val end: Instant) {
  * this gives 0, as upstream does.
  */
 internal fun Duration.wholeSecondsTowardZero(): Long = if (isNegative && nano > 0) seconds + 1 else seconds
+
+/**
+ * `to - from` in `Double` seconds — Swift's `to.timeIntervalSince(from)`. The span of `Instant`'s whole
+ * range fits a `Duration`, so this never throws (a Swift `Date` never overflows either).
+ */
+internal fun secondsBetween(from: Instant, to: Instant): Double = SleepStaging.seconds(Duration.between(from, to))
