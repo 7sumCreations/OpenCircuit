@@ -1,5 +1,7 @@
 package io.github.opencircuit.ringkit
 
+import java.time.Duration
+import java.time.ZoneId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -15,8 +17,12 @@ import kotlin.test.assertTrue
  * the decoded `[15:23)` magnitudes — behind a switch that ships OFF.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/FR04RaisedPrimaryFloorTests.swift
- * (@ b1c2fdd) — 11 of 14 tests. The three that stage a night (`:167`, `:191`, `:314`) port with the
- * night half of `BulkSleep`.
+ * (@ b1c2fdd) — all 14 tests. The three that stage a night (`:167`, `:191`, `:314`) arrived with the
+ * night half of `BulkSleep`. Upstream's `latestNightRecords(from:)` reads the device's zone; here it
+ * is named ([deviceZone], America/New_York). Measured on the pinned Swift build, `:314` depends on
+ * that zone: it passes in New York, Chicago, Los Angeles, Buenos Aires, UTC, London and Paris, and
+ * FAILS in Kolkata, Tokyo, Sydney and Honolulu, where selection keeps 354 records reaching back into
+ * the awake day and nothing stages.
  *
  * All data is SYNTHETIC. Every fixture number is typed from upstream. The noise generator is
  * upstream's deterministic xorshift, and the fixtures consume it in upstream's exact order (a
@@ -29,6 +35,9 @@ class FR04RaisedPrimaryFloorTest {
 
     // :43 — the channel under test ships OFF, so every expectation of it asks explicitly.
     private val on = BulkSleep.MotionChannelPolicy(magnitudeChannelEnabled = true)
+
+    /** The device zone upstream's `latestNightRecords(from:)` would read (see the class comment). */
+    private val deviceZone: ZoneId = ZoneId.of("America/New_York")
 
     // :46-50
     private var seed: ULong = 0x2545_F491_4F6C_DD1DuL
@@ -87,8 +96,25 @@ class FR04RaisedPrimaryFloorTest {
         return out
     }
 
-    // :265-287 — flat inside an epoch, wandering between epochs; optionally ~14 h of awake day first.
-    private fun wanderingPedestalNight(includeDay: Boolean): List<BulkRecord> {
+    // :116-127 — the classic Gen-2 night the fix must NOT touch: an `01` baseline that reads still everywhere.
+    private fun baselineNight(): List<BulkRecord> {
+        var c = 0x0c60_0000L
+        val out = mutableListOf<BulkRecord>()
+        repeat(12) { out += awakeEpoch(c); c += step }
+        for (i in 0 until 180) {
+            val still = record(c, hr = 52, hrv = 45, primary = listOf(1, 1, 1, 1, 1), magnitudes = listOf(0, 0, 0, 0, 0), sleepVitals = true)
+            out += if (i % 30 == 17) turnEpoch(c) else still
+            c += step
+        }
+        repeat(12) { out += awakeEpoch(c); c += step }
+        return out
+    }
+
+    /**
+     * :265-287 — flat inside an epoch, wandering between epochs; optionally ~14 h of awake day first.
+     * Internal (not private) so the staging guard test can replay this exact night in other zones.
+     */
+    internal fun wanderingPedestalNight(includeDay: Boolean): List<BulkRecord> {
         var c = 0x0c60_0000L
         val out = mutableListOf<BulkRecord>()
         if (includeDay) repeat(336) { out += awakeEpoch(c); c += step }
@@ -156,6 +182,49 @@ class FR04RaisedPrimaryFloorTest {
         assertEquals(0f, mags[12 + 18], "a still epoch is the channel's own zero")
     }
 
+    // (b) the night stages
+
+    @Test
+    fun raisedFloorNightStagesWithPlausibleOnsetAndEfficiency() { // :167-187
+        val recs = fr04011Night()
+
+        val segments = BulkSleep.stagedSegments(BulkSleep.latestNightRecords(recs, deviceZone, motionPolicy = on), motionPolicy = on)
+        assertFalse(
+            segments.isEmpty(),
+            "the reported failure: every drain ended `noStagedSegments` with 0 staged segments on an archive whose vitals decoded all night",
+        )
+
+        val block = assertNotNull(BulkSleep.mainSleep(recs, motionPolicy = on))
+        val firstStill = recs[12].date(Command.SYNC_EPOCH)
+        assertTrue(
+            Duration.between(firstStill, block.start).abs() < Duration.ofMinutes(45),
+            "onset lands within minutes of the still stretch, not hours into it",
+        )
+        assertTrue(block.duration > Duration.ofHours(5))
+
+        val minutes = SleepStaging.summary(SleepStaging.classify(recs, motionPolicy = on)).minutes
+        assertTrue(minutes.inBed > 0)
+        val efficiency = minutes.asleep.toDouble() / minutes.inBed.toDouble()
+        assertTrue(efficiency > 0.70, "a night of measured stillness is not mostly awake")
+        assertTrue(efficiency <= 1.0)
+    }
+
+    // (c) the classic baseline night is untouched
+
+    @Test
+    fun classicBaselineNightKeepsThePrimaryChannel() { // :191-200
+        val recs = baselineNight()
+        assertFalse(
+            BulkSleep.primaryFloorIsRaised(recs.worn()),
+            "an `01` baseline resolves stillness everywhere, so the shared `degenerateMaxQuietStillFraction` conjunct rejects it before the floor test",
+        )
+        assertEquals(BulkSleep.MotionSource.Primary, BulkSleep.motionSource(recs))
+        assertFalse(
+            BulkSleep.stagedSegments(BulkSleep.latestNightRecords(recs, deviceZone)).isEmpty(),
+            "and it still stages, off the primary channel, exactly as before",
+        )
+    }
+
     @Test
     fun raisedFloorWithoutAZeroMagnitudePopulationStaysOnPrimary() { // :205-217
         var c = 0x0c60_0000L
@@ -219,6 +288,18 @@ class FR04RaisedPrimaryFloorTest {
                 "includeDay=$includeDay: the verdict must not depend on how much daytime is in the archive union",
             )
         }
+    }
+
+    @Test
+    fun wanderingPedestalNightStages() { // :314-323
+        val recs = wanderingPedestalNight(includeDay = true)
+        val segments = BulkSleep.stagedSegments(BulkSleep.latestNightRecords(recs, deviceZone, motionPolicy = on), motionPolicy = on)
+        assertFalse(
+            segments.isEmpty(),
+            "the reported failure: `noStagedSegments` on every drain while HR/HRV/RR/SpO2 decoded all night",
+        )
+        val block = assertNotNull(BulkSleep.mainSleep(recs, motionPolicy = on))
+        assertTrue(block.duration > Duration.ofHours(5))
     }
 
     @Test

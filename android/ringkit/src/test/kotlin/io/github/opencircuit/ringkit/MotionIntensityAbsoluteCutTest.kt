@@ -15,8 +15,8 @@ import kotlin.test.assertTrue
  * twin that pins the legacy behaviour, so the property can never pass vacuously.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/MotionIntensityAbsoluteCutTests.swift
- * (@ b1c2fdd) — 11 of 12 tests. `:133` (`testEmittedMagnitudesStraddleTheDownstreamThresholds`)
- * reads the sleep-staging tuning and ports with it.
+ * (@ b1c2fdd) — all 12 tests. `:133` (`testEmittedMagnitudesStraddleTheDownstreamThresholds`)
+ * reads the sleep-staging tuning and arrived with it.
  */
 class MotionIntensityAbsoluteCutTest {
 
@@ -112,6 +112,15 @@ class MotionIntensityAbsoluteCutTest {
     @Test
     fun anAllZeroTailProducesNoMovementAtAll() { // :125-129
         assertEquals(listOf(0f, 0f, 0f), BulkSleep.motionIntensityFallbackMagnitudes(records(listOf(0, 0, 0)), degenerate = false))
+    }
+
+    @Test
+    fun emittedMagnitudesStraddleTheDownstreamThresholds() { // :133-139
+        // Values must keep straddling the thresholds the rest of the pipeline is calibrated to:
+        // `MOTION_STILL_THRESHOLD == 2` and the staging tuning's `awakeMotion == 15`.
+        val m = BulkSleep.motionIntensityFallbackMagnitudes(records(listOf(100, 500)), degenerate = false)
+        assertTrue(m[0] < ActivityPeriod.MOTION_STILL_THRESHOLD, "still must read below the still bar")
+        assertTrue(m[1].toInt() > SleepStaging.Tuning.DEFAULT.awakeMotion, "active must clear awakeMotion")
     }
 
     @Test
