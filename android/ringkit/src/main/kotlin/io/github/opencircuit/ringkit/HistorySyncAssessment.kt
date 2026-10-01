@@ -19,7 +19,8 @@ import java.util.Locale
 enum class HistoryChannelOutcome(val rawValue: String) {
     /**
      * ⚠️ MEANS "THIS CHANNEL OPEN ENDED CLEANLY" — pages arrived and the drain exited on a `0x50`
-     * end-marker. Going quiet after pages with no `0x50` is [PARTIAL], never this (deviation D-43). It does NOT mean the RING IS EMPTY: the `0x50` reports
+     * end-marker. Going quiet after pages with no `0x50` is [PARTIAL], never this (deviation D-43).
+     * It does NOT mean the RING IS EMPTY: the `0x50` reports
      * where the ring's resume pointer stood at that moment, and the ring keeps recording (upstream
      * saw a clean `complete` followed by two more records within five minutes). It is the one
      * outcome that unlocks [allowsSleepCommit], because a clean exit means what was pulled is

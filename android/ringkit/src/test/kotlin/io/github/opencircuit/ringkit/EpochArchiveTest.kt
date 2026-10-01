@@ -1,6 +1,7 @@
 package io.github.opencircuit.ringkit
 
 import java.time.Duration
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -98,5 +99,31 @@ class EpochArchiveTest {
         val late = listOf(rec(450), rec(600))
         val night = EpochArchive.merge(existing = early, incoming = late, retention = Duration.ofHours(30))
         assertEquals(listOf(0L, 150L, 300L, 450L, 600L), night.map { it.counter })
+    }
+
+    // Kotlin-only (D-44): upstream anchors the retention window on the single largest counter, so one
+    // garbage record with a far-future counter (a 1-byte XOR trailer lets ~1 in 256 garbage frames
+    // through) prunes every genuine record. `notAfter` bounds the anchor.
+    @Test
+    fun aFarFutureRecordCannotPruneGenuineHistoryWhenBounded() {
+        val night = 400_000_000L
+        val genuine = listOf(rec(night), rec(night + 60), rec(night + 120))
+        val bogus = rec(0xF000_0000L)
+        val notAfter = Command.SYNC_EPOCH.let { Instant.ofEpochSecond(it + night + 3_600) }
+
+        val bounded = EpochArchive.merge(existing = genuine, incoming = listOf(bogus), notAfter = notAfter)
+        assertEquals(genuine.map { it.counter }, bounded.map { it.counter })
+
+        // The unbounded default is upstream's behaviour: the bogus counter wins the anchor.
+        val unbounded = EpochArchive.merge(existing = genuine, incoming = listOf(bogus))
+        assertEquals(listOf(0xF000_0000L), unbounded.map { it.counter })
+    }
+
+    @Test
+    fun notAfterKeepsARecordExactlyAtTheBound() {
+        val at = 400_000_000L
+        val bound = Instant.ofEpochSecond(Command.SYNC_EPOCH + at)
+        assertEquals(listOf(at), EpochArchive.merge(listOf(rec(at)), emptyList(), notAfter = bound).map { it.counter })
+        assertTrue(EpochArchive.merge(listOf(rec(at + 1)), emptyList(), notAfter = bound).isEmpty())
     }
 }

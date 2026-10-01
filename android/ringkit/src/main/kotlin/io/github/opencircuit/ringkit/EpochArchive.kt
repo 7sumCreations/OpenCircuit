@@ -14,6 +14,7 @@ package io.github.opencircuit.ringkit
 // used for a live page. Where that blob lives is the persistence layer's business.
 
 import java.time.Duration
+import java.time.Instant
 
 object EpochArchive {
 
@@ -32,17 +33,28 @@ object EpochArchive {
      * collision), sort ascending by counter, and prune anything older than [retention] before the
      * newest record. Returns the new archive.
      *
+     * [notAfter] (Kotlin-only, PORTING D-44) drops every record dated later than it, from the
+     * result AND from the retention anchor. Without it one garbage record with a far-future counter
+     * (the 1-byte XOR trailer lets ~1 in 256 garbage frames through) becomes the "newest" and prunes
+     * every genuine record more than [retention] older — upstream's behaviour, kept when `null`.
+     * A caller passes the current time plus a clock-skew allowance.
+     *
      * [retention] is truncated to whole seconds and must be 0 … 2³²−1 s, the range upstream's
      * unsigned 32-bit conversion accepts.
      */
-    fun merge(existing: List<BulkRecord>, incoming: List<BulkRecord>, retention: Duration = RETENTION): List<BulkRecord> {
+    fun merge(
+        existing: List<BulkRecord>,
+        incoming: List<BulkRecord>,
+        retention: Duration = RETENTION,
+        notAfter: Instant? = null,
+    ): List<BulkRecord> {
         val span = retention.seconds
         require(!retention.isNegative && span <= UINT32_MAX) { "retention must be 0..2^32-1 seconds: $retention" }
         if (existing.isEmpty() && incoming.isEmpty()) return emptyList()
         val byCounter = HashMap<Long, BulkRecord>(existing.size + incoming.size)
         for (r in existing) byCounter[r.counter] = r
         for (r in incoming) byCounter[r.counter] = r // a fresher drain overrides an older copy
-        val all = byCounter.values.sortedBy { it.counter }
+        val all = byCounter.values.filter { notAfter == null || !it.date().isAfter(notAfter) }.sortedBy { it.counter }
         val newest = all.lastOrNull()?.counter ?: return emptyList()
         // Counters are unsigned: a newest counter smaller than the span must clamp to 0, never go
         // negative (upstream guards the same subtraction against UInt32 underflow).
