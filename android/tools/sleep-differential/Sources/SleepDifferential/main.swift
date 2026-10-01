@@ -1,0 +1,496 @@
+// SleepDifferential — runs upstream's sleep pipeline over seeded synthetic nights and over the
+// fixture nights from upstream's own tests, and writes three files into the directory given as the
+// only argument:
+//
+//   inputs.txt    every night's 23-byte 0x4c records and skin-temperature samples
+//   goldens.txt   upstream's canonical outputs for each night
+//   coverage.txt  how many nights reached each pipeline branch
+//
+// Everything is deterministic (SplitMix64 from fixed seeds), synthetic and locale-free: single
+// spaces, '\n' line ends, lowercase hex, times as integer Unix epoch seconds, doubles as their
+// IEEE-754 bit pattern in 16 hex digits. Rerunning on the same upstream commit reproduces every
+// byte. `SleepDifferentialTest` (Kotlin) reads these files; Gradle never runs this program.
+//
+// inputs.txt, per night:
+//   night <id> <shape>
+//   r <46 hex digits>                  one record, in archive order
+//   t <epoch seconds> <celsius bits>   one skin-temperature sample (optional)
+//   end
+// goldens.txt, per night:
+//   night <id>
+//   p <sleep|active> <start> <end>     detectFromMotion over the whole night, gates applied
+//   main <start> <end> | main none     BulkSleep.mainSleep(from:temperatures:)
+//   seg <stage> <start> <end>          BulkSleep.sleepSegments(from:temperatures:)
+//   score <bits>                       SleepScore.score(start:end:) of the main block
+//   onset <true|false>                 BulkSleep.onsetIsUnobserved(main block, in: the night)
+//   overnight <zone> <plain> <presumed>  SleepWindow.isOvernightBlock without / with onsetIsUnobserved
+//   end
+// (score, onset and overnight lines appear only when there is a main block.)
+
+import Foundation
+@testable import OpenCircuitKit
+
+// MARK: - Deterministic randomness
+
+struct SplitMix64 {
+    var state: UInt64
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+
+    /// An integer in `lo...hi`. Modulo bias does not matter here; only determinism does.
+    mutating func int(_ lo: Int, _ hi: Int) -> Int { lo + Int(next() % UInt64(hi - lo + 1)) }
+    mutating func int(_ r: ClosedRange<Int>) -> Int { int(r.lowerBound, r.upperBound) }
+    mutating func chance(_ percent: Int) -> Bool { int(0, 99) < percent }
+    mutating func pick<T>(_ xs: [T]) -> T { xs[int(0, xs.count - 1)] }
+}
+
+// MARK: - Night construction
+
+struct Night {
+    let id: String
+    let shape: String
+    var records: [[UInt8]] = []
+    var temps: [(Int, Double)] = []
+}
+
+/// Builds a night epoch by epoch; every epoch advances the counter by 150 s.
+struct Builder {
+    var rng: SplitMix64
+    var counter: UInt32
+    var records: [[UInt8]] = []
+    /// Per record: was the ring off the finger (idle / charging) — drives "cold" temperatures.
+    var offFinger: [Bool] = []
+
+    mutating func push(hr: Int, hrv: Int, conf: Int, rr: Int, tag: Int,
+                       motion: [Int], tail: [Int], trailer: [Int], offFinger off: Bool = false) {
+        var b = [UInt8](repeating: 0, count: 23)
+        b[0] = UInt8(counter >> 24); b[1] = UInt8((counter >> 16) & 0xFF)
+        b[2] = UInt8((counter >> 8) & 0xFF); b[3] = UInt8(counter & 0xFF)
+        b[4] = UInt8(hr); b[5] = UInt8(hrv); b[6] = UInt8(conf); b[7] = UInt8(rr)
+        b[8] = UInt8(tag); b[9] = 0x0a
+        for k in 0..<5 { b[10 + k] = UInt8(motion[k]); b[15 + k] = UInt8(tail[k]) }
+        for k in 0..<3 { b[20 + k] = UInt8(trailer[k]) }
+        records.append(b)
+        offFinger.append(off)
+        counter &+= 150
+    }
+
+    mutating func gap(_ seconds: Int) { counter &+= UInt32(seconds) }
+
+    /// Awake and moving: varying motion, a non-zero intensity tail, daytime HR.
+    mutating func active(_ n: Int, hr: ClosedRange<Int> = 72...110) {
+        for _ in 0..<n {
+            let motion = (0..<5).map { _ in rng.int(3, 140) }
+            let tail = (0..<5).map { _ in rng.int(1, 255) }
+            push(hr: rng.int(hr), hrv: rng.chance(50) ? 0 : rng.int(22, 60), conf: rng.int(4, 12),
+                 rr: rng.int(0x60, 0x98), tag: rng.chance(85) ? 0x12 : 0x13,
+                 motion: motion, tail: tail, trailer: [0x04, 0, 0])
+        }
+    }
+
+    /// Asleep: still motion with rare twitches, sleep-vitals epochs interleaved with quiet
+    /// activity epochs, HR around `base`. `dipPercent` of sleep-vitals epochs carry an SpO2 dip.
+    mutating func asleep(_ n: Int, hr base: Int, dipPercent: Int = 0, twitchPercent: Int = 4) {
+        for _ in 0..<n {
+            var motion = [1, 1, 1, 1, 1]
+            var tail = [0, 0, 0, 0, 0]
+            if rng.chance(twitchPercent) {
+                motion[rng.int(0, 4)] = rng.int(2, 7)
+                tail[rng.int(0, 4)] = rng.int(1, 40)
+            }
+            let hr = base + rng.int(-3, 4)
+            if rng.chance(55) {
+                let spo2 = rng.chance(dipPercent) ? rng.int(84, 89) : rng.int(94, 99)
+                push(hr: hr, hrv: rng.int(20, 90), conf: rng.int(2, 9), rr: rng.int(0x60, 0x88), tag: spo2,
+                     motion: motion, tail: tail, trailer: [0, 0, 0x04])
+            } else {
+                push(hr: hr, hrv: rng.chance(40) ? 0 : rng.int(30, 70), conf: rng.int(3, 10), rr: rng.int(0x60, 0x88),
+                     tag: 0x12, motion: motion, tail: tail, trailer: [0x04, 0, 0])
+            }
+        }
+    }
+
+    /// A short awakening inside the night: moderate movement, HR up.
+    mutating func stir(_ n: Int, hr base: Int) {
+        for _ in 0..<n {
+            let motion = (0..<5).map { _ in rng.int(6, 90) }
+            let tail = (0..<5).map { _ in rng.int(1, 200) }
+            push(hr: base + rng.int(12, 28), hrv: 0, conf: rng.int(4, 10), rr: rng.int(0x60, 0x90), tag: 0x12,
+                 motion: motion, tail: tail, trailer: [0x04, 0, 0])
+        }
+    }
+
+    /// The unworn / charging idle template (layout idle).
+    mutating func idle(_ n: Int) {
+        for _ in 0..<n {
+            push(hr: 0x05, hrv: 0, conf: 0x0c, rr: 0, tag: 0x12, motion: [1, 1, 1, 1, 1], tail: [0, 0, 0, 0, 0],
+                 trailer: [0, 0, 0], offFinger: true)
+        }
+    }
+
+    /// Still but awake (sitting out late): still motion, quiet tail, high HR.
+    mutating func awakeStill(_ n: Int, hr: ClosedRange<Int>) {
+        for _ in 0..<n {
+            var motion = [1, 1, 1, 1, 1]
+            if rng.chance(10) { motion[rng.int(0, 4)] = 2 }
+            push(hr: rng.int(hr), hrv: 0, conf: rng.int(4, 10), rr: rng.int(0x68, 0x90), tag: 0x12,
+                 motion: motion, tail: [0, 0, 0, 0, 0], trailer: [0x04, 0, 0])
+        }
+    }
+
+    /// A restless morning while still asleep: spiky motion, sleep-vitals epochs, low HR.
+    mutating func restless(_ n: Int, hr base: Int) {
+        for _ in 0..<n {
+            let motion = (0..<5).map { k in k % 2 == 0 ? rng.int(1, 3) : rng.int(60, 200) }
+            let tail = (0..<5).map { _ in rng.int(1, 30) }
+            push(hr: base + rng.int(-2, 4), hrv: rng.int(25, 70), conf: rng.int(2, 8), rr: rng.int(0x60, 0x80),
+                 tag: rng.int(95, 98), motion: motion, tail: tail, trailer: [0, 0, 0x04])
+        }
+    }
+
+    /// Gen-3 style raised, drifting idle floor (16 → 24 → 39 across the night).
+    mutating func raisedFloor(_ n: Int, hr base: Int) {
+        for i in 0..<n {
+            let floor = i < n / 3 ? 16 : (i < 2 * n / 3 ? 24 : 39)
+            let motion = (0..<5).map { _ in floor + rng.int(0, 2) }
+            let sv = rng.chance(55)
+            push(hr: base + rng.int(-3, 4), hrv: sv ? rng.int(20, 90) : 0, conf: rng.int(2, 9), rr: rng.int(0x60, 0x88),
+                 tag: sv ? rng.int(94, 99) : 0x12, motion: motion, tail: [0, 0, 0, 0, 0],
+                 trailer: sv ? [0, 0, 0x04] : [0x04, 0, 0])
+        }
+    }
+
+    /// A primary channel that never reads still: a fixed intra-epoch template on quiet epochs.
+    mutating func degenerateQuiet(_ n: Int, hr base: Int) {
+        let template = [3, 9, 5, 12, 4]
+        for _ in 0..<n {
+            let motion = template.map { $0 + rng.int(0, 1) }
+            let sv = rng.chance(55)
+            push(hr: base + rng.int(-3, 4), hrv: sv ? rng.int(20, 90) : 0, conf: rng.int(2, 9), rr: rng.int(0x60, 0x88),
+                 tag: sv ? rng.int(94, 99) : 0x12, motion: motion, tail: [0, 0, 0, 0, 0],
+                 trailer: sv ? [0, 0, 0x04] : [0x04, 0, 0])
+        }
+    }
+
+    /// Constant-filler epochs: all five primary slots equal; the tail carries movement when moving.
+    mutating func constantFiller(_ n: Int, moving: Bool, hr base: Int) {
+        for _ in 0..<n {
+            let c = moving ? rng.int(5, 60) : rng.int(1, 3)
+            let tail = moving ? (0..<5).map { _ in rng.int(1, 200) } : [0, 0, 0, 0, 0]
+            push(hr: base + rng.int(-3, 6), hrv: 0, conf: rng.int(3, 10), rr: rng.int(0x60, 0x90), tag: 0x12,
+                 motion: [c, c, c, c, c], tail: tail, trailer: [0x04, 0, 0])
+        }
+    }
+}
+
+let shapes = [
+    "normal", "fragmented", "gapped", "raised-floor", "degenerate-primary", "constant-filler", "cold",
+    "charging-gap", "all-active", "nap-bearing", "spo2-dip", "awake-evening", "restless-morning",
+    "truncated-onset", "short",
+]
+let nightsPerShape = 14
+
+func padded(_ n: Int, _ width: Int) -> String {
+    let s = String(n)
+    return String(repeating: "0", count: max(0, width - s.count)) + s
+}
+
+/// Synthetic night `index` (deterministic from its index alone).
+func synthetic(_ index: Int) -> Night {
+    let shape = shapes[index % shapes.count]
+    var rng = SplitMix64(state: 0x5EED_0000_0000_0000 &+ UInt64(index))
+    // One night per day from counter day 2350, starting 20:00–24:00 UTC (counter 0 is 12:00 UTC).
+    let day = 2350 + index
+    let start = UInt32(day * 86_400 + 8 * 3600 + rng.int(0, 4 * 3600))
+    var b = Builder(rng: SplitMix64(state: rng.next()), counter: start)
+    let hr = rng.int(46, 62)
+    var tempMode = rng.pick(["none", "none", "worn", "worn", "mixed"])
+
+    switch shape {
+    case "normal":
+        b.active(rng.int(8, 30)); b.asleep(rng.int(150, 230), hr: hr); b.active(rng.int(8, 30))
+    case "fragmented":
+        b.active(rng.int(10, 25))
+        for _ in 0..<rng.int(2, 5) { b.asleep(rng.int(25, 60), hr: hr); b.stir(rng.int(3, 8), hr: hr) }
+        b.asleep(rng.int(30, 60), hr: hr); b.active(rng.int(10, 20))
+    case "gapped":
+        b.active(rng.int(8, 20)); b.asleep(rng.int(50, 110), hr: hr)
+        b.gap(rng.pick([600, 1100, 1300, 2000, 5400, 10_800]))
+        b.asleep(rng.int(40, 100), hr: hr)
+        if rng.chance(50) { b.gap(rng.pick([900, 1300, 3600])); b.asleep(rng.int(20, 60), hr: hr) }
+        b.active(rng.int(8, 20))
+    case "raised-floor":
+        b.active(rng.int(8, 20)); b.raisedFloor(rng.int(160, 220), hr: hr); b.active(rng.int(8, 20))
+    case "degenerate-primary":
+        b.active(rng.int(10, 20)); b.degenerateQuiet(rng.int(150, 200), hr: hr); b.active(rng.int(10, 20))
+    case "constant-filler":
+        b.constantFiller(rng.int(10, 20), moving: true, hr: hr + 30)
+        b.constantFiller(rng.int(150, 200), moving: false, hr: hr)
+        b.constantFiller(rng.int(10, 20), moving: true, hr: hr + 30)
+    case "cold":
+        b.active(rng.int(8, 20)); b.asleep(rng.int(150, 220), hr: hr); b.active(rng.int(8, 20))
+        tempMode = rng.pick(["cold", "cold-first-half"])
+    case "charging-gap":
+        b.active(rng.int(8, 20)); b.asleep(rng.int(60, 120), hr: hr); b.idle(rng.int(6, 30))
+        b.asleep(rng.int(60, 120), hr: hr); b.active(rng.int(8, 20))
+        tempMode = "worn"
+    case "all-active":
+        b.active(rng.int(150, 250))
+    case "nap-bearing":
+        b.active(rng.int(10, 20)); b.asleep(rng.int(150, 200), hr: hr); b.active(rng.int(60, 120))
+        b.asleep(rng.int(30, 60), hr: hr + 4); b.active(rng.int(20, 40))
+    case "spo2-dip":
+        b.active(rng.int(8, 20)); b.asleep(rng.int(150, 220), hr: hr, dipPercent: 15); b.active(rng.int(8, 20))
+    case "awake-evening":
+        b.active(rng.int(8, 15)); b.awakeStill(rng.int(40, 70), hr: 96...112); b.stir(rng.int(4, 8), hr: hr + 20)
+        b.asleep(rng.int(150, 200), hr: hr); b.active(rng.int(8, 15))
+    case "restless-morning":
+        b.active(rng.int(8, 15)); b.asleep(rng.int(150, 200), hr: hr); b.restless(rng.int(20, 40), hr: hr)
+        b.active(rng.int(8, 15))
+    case "truncated-onset":
+        // Yesterday's evening activity, then hours with nothing recorded, then only the night's tail.
+        b.active(rng.int(20, 40)); b.gap(rng.int(5, 9) * 3600); b.asleep(rng.int(40, 140), hr: hr)
+        b.active(rng.int(10, 20))
+    case "short":
+        b.active(rng.int(10, 20)); b.asleep(rng.int(18, 30), hr: hr); b.active(rng.int(10, 20))
+    default:
+        fatalError("unknown shape \(shape)")
+    }
+
+    var night = Night(id: "synthetic-\(padded(index, 3))", shape: shape, records: b.records)
+    // Skin temperature every second epoch (5 min) at the epoch's own time.
+    if tempMode != "none" {
+        let n = b.records.count
+        for i in stride(from: 0, to: n, by: 2) {
+            let t = Int(BulkRecord(b.records[i])!.date().timeIntervalSince1970)
+            let cold: Bool
+            switch tempMode {
+            case "cold": cold = true
+            case "cold-first-half": cold = i < n / 2
+            case "mixed": cold = b.offFinger[i] || (i * 7 / n) == 3
+            default: cold = b.offFinger[i]
+            }
+            let tenths = cold ? 220 + b.rng.int(0, 40) : 315 + b.rng.int(0, 30)
+            night.temps.append((t, Double(tenths) / 10))
+        }
+    }
+    return night
+}
+
+// MARK: - Fixture nights from upstream's own tests (built exactly as there)
+
+/// DeviceStatusTests.rec / RingKitVerify bulkRec: counter, [8] sub, motion [10:15], rest zero.
+func bulkRec(_ c: UInt32, motion: UInt8, sub: UInt8) -> [UInt8] {
+    var b = [UInt8](repeating: 0, count: 23)
+    b[0] = UInt8(c >> 24); b[1] = UInt8((c >> 16) & 0xFF)
+    b[2] = UInt8((c >> 8) & 0xFF); b[3] = UInt8(c & 0xFF)
+    b[8] = sub
+    for k in 0..<5 { b[10 + k] = motion }
+    return b
+}
+func vrec(_ c: UInt32, motion: UInt8, hr: UInt8) -> [UInt8] { var b = bulkRec(c, motion: motion, sub: 0x62); b[4] = hr; return b }
+func vrecHRV(_ c: UInt32, hr: UInt8, hrv: UInt8) -> [UInt8] { var b = vrec(c, motion: 0x01, hr: hr); b[5] = hrv; return b }
+func hexBytes(_ s: String) -> [UInt8] {
+    var out = [UInt8](); var i = s.startIndex
+    while i < s.endIndex { let j = s.index(i, offsetBy: 2); out.append(UInt8(s[i..<j], radix: 16)!); i = j }
+    return out
+}
+func recordDate(_ r: [UInt8]) -> Int { Int(BulkRecord(r)!.date().timeIntervalSince1970) }
+
+func fixtures() -> [Night] {
+    var out: [Night] = []
+
+    // RingKitVerify main.swift:356-364 — active (varying) -> still 9 h -> active.
+    var night: [[UInt8]] = []; var cc: UInt32 = 0x0c22_0000
+    let activeMotion: [UInt8] = [0x0a, 0x28, 0x50]
+    for i in 0..<20 { night.append(bulkRec(cc, motion: activeMotion[i % 3], sub: 0x12)); cc += 150 }
+    for _ in 0..<216 { night.append(bulkRec(cc, motion: 0x01, sub: 0x62)); cc += 150 }
+    for i in 0..<20 { night.append(bulkRec(cc, motion: activeMotion[i % 3], sub: 0x12)); cc += 150 }
+    out.append(Night(id: "fixture-verify-night", shape: "fixture", records: night))
+
+    // DeviceStatusTests.swift:232-284 — constant 0x14 flanks; cold, warm and no temperatures.
+    var ds: [[UInt8]] = []; var c: UInt32 = 0x0c22_0000
+    for _ in 0..<20 { ds.append(bulkRec(c, motion: 0x14, sub: 0x12)); c += 150 }
+    for _ in 0..<216 { ds.append(bulkRec(c, motion: 0x01, sub: 0x62)); c += 150 }
+    for _ in 0..<20 { ds.append(bulkRec(c, motion: 0x14, sub: 0x12)); c += 150 }
+    out.append(Night(id: "fixture-device-status-night", shape: "fixture", records: ds))
+    out.append(Night(id: "fixture-device-status-cold", shape: "fixture", records: ds, temps: ds.map { (recordDate($0), 22.0) }))
+    out.append(Night(id: "fixture-device-status-warm", shape: "fixture", records: ds, temps: ds.map { (recordDate($0), 32.0) }))
+
+    // RingKitVerify main.swift:377-386 — the staged night (REM / Deep / Light bands).
+    var staged: [[UInt8]] = []; var sc: UInt32 = 0x0c22_0000
+    for _ in 0..<20 { staged.append(bulkRec(sc, motion: 0x14, sub: 0x12)); sc += 150 }
+    for k in 0..<60 { staged.append(vrec(sc, motion: 0x01, hr: k % 2 == 0 ? 62 : 70)); sc += 150 }
+    for _ in 0..<60 { staged.append(vrec(sc, motion: 0x01, hr: 50)); sc += 150 }
+    for k in 0..<60 { staged.append(vrec(sc, motion: 0x01, hr: k % 2 == 0 ? 56 : 62)); sc += 150 }
+    for _ in 0..<20 { staged.append(bulkRec(sc, motion: 0x14, sub: 0x12)); sc += 150 }
+    out.append(Night(id: "fixture-verify-staged", shape: "fixture", records: staged))
+
+    // RingKitVerify main.swift:392-400 — two sleep cores split by a 2 h hole.
+    var frag: [[UInt8]] = []; var fc: UInt32 = 0x0c22_0000
+    for _ in 0..<8 { frag.append(bulkRec(fc, motion: 0x14, sub: 0x12)); fc += 150 }
+    for _ in 0..<60 { frag.append(vrec(fc, motion: 0x01, hr: 52)); fc += 150 }
+    for _ in 0..<8 { frag.append(bulkRec(fc, motion: 0x14, sub: 0x12)); fc += 150 }
+    fc += 2 * 3600
+    for _ in 0..<8 { frag.append(bulkRec(fc, motion: 0x14, sub: 0x12)); fc += 150 }
+    for _ in 0..<60 { frag.append(vrec(fc, motion: 0x01, hr: 52)); fc += 150 }
+    for _ in 0..<8 { frag.append(bulkRec(fc, motion: 0x14, sub: 0x12)); fc += 150 }
+    out.append(Night(id: "fixture-verify-frag", shape: "fixture", records: frag))
+
+    // RingKitVerify main.swift:419-423 — calm flat low HR.
+    var deep: [[UInt8]] = []; var dc: UInt32 = 0x0c22_0000
+    for _ in 0..<12 { deep.append(bulkRec(dc, motion: 0x14, sub: 0x12)); dc += 150 }
+    for _ in 0..<120 { deep.append(vrec(dc, motion: 0x01, hr: 50)); dc += 150 }
+    for _ in 0..<12 { deep.append(bulkRec(dc, motion: 0x14, sub: 0x12)); dc += 150 }
+    out.append(Night(id: "fixture-verify-deep", shape: "fixture", records: deep))
+
+    // RingKitVerify main.swift:435-446 — constructed multi-cycle night.
+    var n2: [[UInt8]] = []; var nc: UInt32 = 0x0c22_0000
+    for _ in 0..<8 { n2.append(bulkRec(nc, motion: 0x14, sub: 0x12)); nc += 150 }
+    for cycle in 0..<5 {
+        for k in 0..<10 { n2.append(vrecHRV(nc, hr: k % 2 == 0 ? 54 : 62, hrv: 60)); nc += 150 }
+        for _ in 0..<8 { n2.append(vrecHRV(nc, hr: 50, hrv: 70)); nc += 150 }
+        for k in 0..<8 { n2.append(vrecHRV(nc, hr: k % 2 == 0 ? 54 : 62, hrv: 60)); nc += 150 }
+        for k in 0..<10 { n2.append(vrecHRV(nc, hr: k % 2 == 0 ? 64 : 78, hrv: 45)); nc += 150 }
+        if cycle < 4 { for _ in 0..<2 { n2.append(bulkRec(nc, motion: 0x15, sub: 0x12)); nc += 150 } }
+    }
+    for _ in 0..<8 { n2.append(bulkRec(nc, motion: 0x14, sub: 0x12)); nc += 150 }
+    out.append(Night(id: "fixture-verify-night2", shape: "fixture", records: n2))
+
+    // RingKitVerify main.swift:306-310 — the real 0x4c page's six records, plus the :316 and :409
+    // single epochs: too short to hold a night, they pin the empty path.
+    let page = hexBytes("4c00260c22a16b55210a7d120a010101010100000402400400000c22a20155000300"
+        + "120a010101010100003c00000d01200c22a297540001005f0a010101010100001101b00f"
+        + "00440c22a32d6027077b120a010101010100402501c02235a00c22a3c351260577120b01"
+        + "0101010108a01000000401300c22a459502d0378120a01010101010160200000040ff0cc")
+    var pageRecs = (0..<6).map { Array(page[(3 + 23 * $0)..<(3 + 23 * ($0 + 1))]) }
+    pageRecs.append(hexBytes("0c22d5bf444d057a620a01010101012aa0000090000004"))
+    pageRecs.append(hexBytes("0c22cd8b38520973620a01010101010000000000000004"))
+    out.append(Night(id: "fixture-verify-page", shape: "fixture", records: pageRecs))
+    return out
+}
+
+// MARK: - Canonical rendering
+
+let hexDigits = Array("0123456789abcdef")
+func hex(_ bytes: [UInt8]) -> String {
+    var s = ""
+    s.reserveCapacity(bytes.count * 2)
+    for b in bytes { s.append(hexDigits[Int(b >> 4)]); s.append(hexDigits[Int(b & 0x0f)]) }
+    return s
+}
+func bits(_ d: Double) -> String {
+    let h = String(d.bitPattern, radix: 16)
+    return String(repeating: "0", count: 16 - h.count) + h
+}
+func secs(_ d: Date) -> String {
+    let t = d.timeIntervalSince1970
+    precondition(t == t.rounded(), "non-integral time \(t)")
+    return String(Int64(t))
+}
+func name(_ a: Activity) -> String { a == .sleep ? "sleep" : "active" }
+
+func calendar(_ zone: String) -> Calendar {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: zone)!
+    return c
+}
+let overnightZones = ["UTC", "Asia/Kolkata"]
+
+var coverage: [String: Int] = [:]
+func hit(_ branch: String, _ yes: Bool = true) { if yes { coverage[branch, default: 0] += 1 } }
+
+func golden(_ night: Night) -> [String] {
+    let recs = night.records.map { BulkRecord($0)! }
+    let temps = night.temps.map { TemperatureSample(time: Date(timeIntervalSince1970: TimeInterval($0.0)), celsius: $0.1) }
+    let motion = BulkSleep.motionTimeline(from: recs)
+    let hr = BulkSleep.heartRateTimeline(from: recs)
+    let sv = BulkSleep.sleepVitalTimeline(from: recs)
+    let periods = ActivityPeriod.detectFromMotion(motion, temperatureSamples: temps, heartRateSamples: hr, sleepVitalTimes: sv)
+    let main = BulkSleep.mainSleep(from: recs, temperatures: temps)
+    let segs = BulkSleep.sleepSegments(from: recs, temperatures: temps)
+
+    var lines = ["night \(night.id)"]
+    lines += periods.map { "p \(name($0.activity)) \(secs($0.start)) \(secs($0.end))" }
+    lines.append(main.map { "main \(secs($0.start)) \(secs($0.end))" } ?? "main none")
+    lines += segs.map { "seg \($0.stage.rawValue) \(secs($0.start)) \(secs($0.end))" }
+    if let m = main {
+        lines.append("score \(bits(SleepScore.score(start: m.start, end: m.end)))")
+        let onset = BulkSleep.onsetIsUnobserved(DateInterval(start: m.start, end: m.end), in: recs)
+        lines.append("onset \(onset)")
+        for z in overnightZones {
+            let plain = SleepWindow.isOvernightBlock(start: m.start, end: m.end, calendar: calendar(z))
+            let presumed = SleepWindow.isOvernightBlock(start: m.start, end: m.end, onsetIsUnobserved: true, calendar: calendar(z))
+            lines.append("overnight \(z) \(plain) \(presumed)")
+            hit("overnight-\(z)", plain)
+            hit("overnight-presumed-only-\(z)", presumed && !plain)
+        }
+        hit("onset-unobserved", onset)
+    }
+    lines.append("end")
+
+    // Branch coverage — which pipeline paths this night exercised.
+    hit("nights")
+    hit("shape-\(night.shape)")
+    hit("main-none", main == nil)
+    hit("multi-fragment", BulkSleep.contiguousFragments(recs).count > 1)
+    let noGates = ActivityPeriod.detectFromMotion(motion)
+    let wearOnly = ActivityPeriod.detectFromMotion(motion, temperatureSamples: temps)
+    let wearHR = ActivityPeriod.detectFromMotion(motion, temperatureSamples: temps, heartRateSamples: hr)
+    hit("wear-gate-changed", wearOnly != noGates)
+    hit("hr-gate-changed", wearHR != wearOnly)
+    hit("rescue-changed", periods != wearHR)
+    switch BulkSleep.motionSource(recs) {
+    case .primary: hit("motion-primary")
+    case .intensityTail(let degenerate): hit(degenerate ? "motion-tail-degenerate" : "motion-tail-constant-filler")
+    case .activityMagnitudes: hit("motion-activity-magnitudes")
+    }
+    hit("has-temperatures", !temps.isEmpty)
+    return lines
+}
+
+func inputLines(_ night: Night) -> [String] {
+    var lines = ["night \(night.id) \(night.shape)"]
+    lines += night.records.map { "r \(hex($0))" }
+    lines += night.temps.map { "t \($0.0) \(bits($0.1))" }
+    lines.append("end")
+    return lines
+}
+
+// MARK: - Main
+
+let args = CommandLine.arguments
+guard args.count == 2 else {
+    FileHandle.standardError.write("usage: SleepDifferential <output directory>\n".data(using: .utf8)!)
+    exit(2)
+}
+let outDir = URL(fileURLWithPath: args[1], isDirectory: true)
+
+let nights = (0..<(shapes.count * nightsPerShape)).map(synthetic) + fixtures()
+let header = "# Generated by android/tools/sleep-differential from upstream OpenCircuitKit; do not edit by hand."
+var inputs = [header]
+var goldens = [header]
+for n in nights {
+    inputs += inputLines(n)
+    goldens += golden(n)
+}
+let coverageLines = [header] + coverage.keys.sorted().map { "branch \($0) \(coverage[$0]!)" }
+
+func write(_ lines: [String], _ file: String) throws {
+    try (lines.joined(separator: "\n") + "\n").write(to: outDir.appendingPathComponent(file), atomically: true, encoding: .utf8)
+}
+do {
+    try write(inputs, "inputs.txt")
+    try write(goldens, "goldens.txt")
+    try write(coverageLines, "coverage.txt")
+} catch {
+    FileHandle.standardError.write("write failed: \(error)\n".data(using: .utf8)!)
+    exit(1)
+}
+for l in coverageLines.dropFirst() { print(l) }
