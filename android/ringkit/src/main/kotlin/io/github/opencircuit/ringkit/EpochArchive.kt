@@ -37,7 +37,9 @@ object EpochArchive {
      * result AND from the retention anchor. Without it one garbage record with a far-future counter
      * (the 1-byte XOR trailer lets ~1 in 256 garbage frames through) becomes the "newest" and prunes
      * every genuine record more than [retention] older — upstream's behaviour, kept when `null`.
-     * A caller passes the current time plus a clock-skew allowance.
+     * A caller passes the current time plus a clock-skew allowance. A bound set too tight (the phone
+     * clock behind the ring's by more than the allowance) drops genuine records, and the merge result
+     * is what gets persisted, so size the allowance generously.
      *
      * [retention] is truncated to whole seconds and must be 0 … 2³²−1 s, the range upstream's
      * unsigned 32-bit conversion accepts.
