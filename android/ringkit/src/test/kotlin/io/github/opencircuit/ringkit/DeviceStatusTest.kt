@@ -3,6 +3,7 @@ package io.github.opencircuit.ringkit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -11,10 +12,9 @@ import kotlin.test.assertTrue
  * (upstream #41, #60, #61, #89).
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/DeviceStatusTests.swift (@ b1c2fdd):
- * 30 of 33 tests (:34-214). NOT ported here: the 3 BulkSleep-backed tests at :232-285
- * (`testChargingNightNotCommittedAsSleep`, `testWornNightWithStillMotionIsKeptAsSleep`,
- * `testNoTemperatureSamplesLeavesDetectionUnchanged`) — they need `BulkRecord`/`BulkSleep` and port
- * with E3 (PORTING.md D-5). `steps` / `battery` / `skinTemperature` are checked by the
+ * all 33 tests. E1 ported the 30 descriptor tests (:34-214); E3 added the 3 that run the sleep wear
+ * gate through `BulkRecord` / `BulkSleep` (:217-285, with their `rec(_:motion:sub:)` helper; this
+ * closes PORTING.md D-5). `steps` / `battery` / `skinTemperature` are checked by the
  * `RingKitVerify` port (E1 slice 5), as upstream does.
  *
  * Key design rule: isWorn/isCharging are CONSERVATIVE.
@@ -259,5 +259,72 @@ class DeviceStatusTest {
     fun caseBatteryNullForNonDescriptor() { // :212-215
         val f = frame(case17 = 0x46); f[0] = 0x4C
         assertNull(DeviceStatus.caseBattery(f))
+    }
+
+    // Combined: still + ambient temp + battery-rising → NOT sleep (#41 core case) — :217-285
+    //
+    // This is the key regression guard: a ring on the charger produces a still motion timeline AND
+    // cold skin temps AND a rising battery %. All three proxies fire. The sleep wear-gate must drop
+    // the block — it must NOT be committed to the health store.
+
+    /** :223-230 — a 23-byte `0x4c` record: BE counter, `[8]` sub-type, motion `[10:15]`, rest zero. */
+    private fun rec(counter: Long, motion: Int, sub: Int): BulkRecord {
+        val b = ByteArray(23)
+        b[0] = (counter shr 24).toByte(); b[1] = ((counter shr 16) and 0xFF).toByte()
+        b[2] = ((counter shr 8) and 0xFF).toByte(); b[3] = (counter and 0xFF).toByte()
+        b[8] = sub.toByte()
+        for (k in 0 until 5) b[10 + k] = motion.toByte()
+        return assertNotNull(BulkRecord.of(b))
+    }
+
+    /** 20 active (0x14) → 216 still (0x01, sleep-vitals 0x62) → 20 active, 150 s apart. */
+    private fun stillNightRecords(): List<BulkRecord> {
+        val recs = mutableListOf<BulkRecord>()
+        var c = 0x0c220000L
+        repeat(20) { recs += rec(c, motion = 0x14, sub = 0x12); c += 150 } // active
+        repeat(216) { recs += rec(c, motion = 0x01, sub = 0x62); c += 150 } // still
+        repeat(20) { recs += rec(c, motion = 0x14, sub = 0x12); c += 150 } // active
+        return recs
+    }
+
+    @Test
+    fun chargingNightNotCommittedAsSleep() { // :232-260
+        // 9 h of still, sleep-vitals epochs (ring on charger: motion=01, sub=0x62)
+        val recs = stillNightRecords()
+
+        // Motion-only: the still block looks like sleep.
+        assertNotNull(BulkSleep.mainSleep(recs), "motion-only: still block reads as sleep (expected baseline)")
+
+        // Confirm isWorn returns false for an ambient-temp descriptor frame.
+        val coldFrame = descriptorFrame(tempA = tempInt(22.0), tempB = tempInt(22.0))
+        assertEquals(false, DeviceStatus.isWorn(coldFrame), "22 °C frame reads as unworn")
+
+        // Confirm isCharging returns true for a rising battery trend.
+        assertTrue(DeviceStatus.isCharging(batteryTrend = listOf(70, 72, 74, 76)), "rising trend reads as charging")
+
+        // With cold (off-wrist / charging) temperature samples covering the entire night, the sleep
+        // wear-gate must reclassify the still block as active → no sleep block.
+        val coldTemps = recs.map { TemperatureSample(it.date(), 22.0) }
+        assertNull(BulkSleep.mainSleep(recs, temperatures = coldTemps), "ambient-temp still block must NOT be committed as a night of sleep (#41)")
+        assertTrue(BulkSleep.sleepSegments(recs, temperatures = coldTemps).isEmpty(), "no sleep segments for a cold-temp still night (#41)")
+    }
+
+    /** A warm (worn) ring with the same still motion must STILL be detected as sleep. */
+    @Test
+    fun wornNightWithStillMotionIsKeptAsSleep() { // :263-272
+        val recs = stillNightRecords()
+        val warmTemps = recs.map { TemperatureSample(it.date(), 32.0) }
+        assertNotNull(BulkSleep.mainSleep(recs, temperatures = warmTemps), "worn (32 °C) still night must survive the wear gate")
+    }
+
+    /** No temperature data → detection falls back to motion alone (absence ≠ unworn). */
+    @Test
+    fun noTemperatureSamplesLeavesDetectionUnchanged() { // :275-284
+        val recs = stillNightRecords()
+        assertEquals(
+            BulkSleep.mainSleep(recs) != null,
+            BulkSleep.mainSleep(recs, temperatures = emptyList()) != null,
+            "empty temperatures → same result as motion-only (absence ≠ unworn)",
+        )
     }
 }

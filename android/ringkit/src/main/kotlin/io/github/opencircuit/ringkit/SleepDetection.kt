@@ -1,11 +1,26 @@
 package io.github.opencircuit.ringkit
 
 // The timeline sample types of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/Analytics/
-// SleepDetection.swift:28-58 (@ b1c2fdd). PARTIAL port: the motion timeline and the history
-// decoder build these today; the detector that consumes them (and the gravity sample type) ports
-// with sleep detection.
+// SleepDetection.swift:15-59 (@ b1c2fdd). The detector that consumes them, and the `Activity` /
+// `ActivityPeriod` types, are in `ActivityPeriod.kt`.
 
 import java.time.Instant
+
+/**
+ * A 3-axis gravity vector, in g — upstream's `SIMD3<Float>`. A value: equal components compare
+ * equal, and nothing can change a vector after construction.
+ *
+ * Equality is Kotlin's data-class equality, not IEEE `==`: `Gravity(NaN, …)` equals itself and
+ * `0.0f` differs from `-0.0f`, where Swift's SIMD `==` says the opposite. Only equality differs;
+ * the detector reads the components, never compares vectors.
+ */
+data class Gravity(val x: Float, val y: Float, val z: Float)
+
+/**
+ * One reading on the gravity timeline. `gravity == null` means no gravity data, which the detector
+ * treats as movement (active), matching openwhoop.
+ */
+data class GravitySample(val time: Instant, val gravity: Gravity?)
 
 /**
  * One reading on the motion timeline: a per-30 s movement magnitude (the `0x4c` `[10:15]` motion

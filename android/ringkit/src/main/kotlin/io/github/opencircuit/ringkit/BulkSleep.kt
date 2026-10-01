@@ -3,12 +3,14 @@ package io.github.opencircuit.ringkit
 // Reassembles `0x4c` history pages into records and maps them to health samples. PARTIAL port of
 // upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/BulkSleep.swift (@ b1c2fdd): the page/stream
 // split (`:368-396`), the motion timeline and motion-channel selection (`:398-803`, `:915-1140`),
-// the HRV pooling gate (`:804-913`) and the sample path (`:1656-1722`).
+// the HRV pooling gate (`:804-913`), the sample path (`:1656-1722`), and from the night half the
+// main sleep block and coarse sleep segments (`:1129-1201`), `onsetContiguityGap` (`:1250`) and
+// `onsetIsUnobserved` (`:1278-1291`).
 //
 // A 0x4c page is `[0x4c][0x00][countdown][N × 23-byte record][xor]` (../docs/PROTOCOL.md §5.3).
 // Records align to page boundaries — each page body is a whole number of records.
 //
-// Not ported here: the night half — main sleep, sleep segments and staging (`:1141-1655`).
+// Not ported yet: the rest of the night half — night selection and staging.
 
 import java.time.Duration
 import java.time.Instant
@@ -528,6 +530,94 @@ object BulkSleep {
     fun records(records: List<BulkRecord>, within: DateInterval?, epoch: Long = Command.SYNC_EPOCH): List<BulkRecord> {
         if (within == null) return records.toList()
         return records.filter { within.containsClosed(it.date(epoch)) }
+    }
+
+    // Night half — main sleep and coarse segments
+
+    /**
+     * The main sleep block (in-bed window) detected from the motion channel, or null. [within]
+     * bounds detection to a scheduled sleep window; [temperatures] (the night's stored skin-temperature
+     * samples) drop off-wrist / charging blocks — empty means motion only. HR and sleep-vitals
+     * timelines come from the same records. The result is the CLUSTERED span (brief awakenings
+     * bridged), not just the longest fragment.
+     */
+    fun mainSleep(
+        records: List<BulkRecord>,
+        within: DateInterval? = null,
+        temperatures: List<TemperatureSample> = emptyList(),
+        epoch: Long = Command.SYNC_EPOCH,
+        motionPolicy: MotionChannelPolicy = MotionChannelPolicy.DEFAULT,
+    ): ActivityPeriod? {
+        val scoped = this.records(records, within, epoch)
+        val periods = ActivityPeriod.detectFromMotion(
+            motionTimeline(scoped, epoch, motionPolicy),
+            temperatureSamples = temperatures,
+            heartRateSamples = heartRateTimeline(scoped, epoch),
+            sleepVitalTimes = sleepVitalTimeline(scoped, epoch),
+        )
+        return ActivityPeriod.mainSleepBlock(periods)
+    }
+
+    /**
+     * Health-store sleep segments for the detected night: an [SleepStage.IN_BED] span plus
+     * [SleepStage.ASLEEP_CORE] / [SleepStage.AWAKE] sub-segments from the stillness detection (no
+     * Light/Deep/REM here — that is staging). A night handed off across several drains arrives as
+     * contiguous runs separated by data gaps; each run is segmented on its own and the results are
+     * merged in start order, so the whole captured night is kept. A single run takes the plain path.
+     */
+    fun sleepSegments(
+        records: List<BulkRecord>,
+        within: DateInterval? = null,
+        temperatures: List<TemperatureSample> = emptyList(),
+        epoch: Long = Command.SYNC_EPOCH,
+    ): List<SleepSegment> {
+        val scoped = this.records(records, within, epoch)
+        val frags = contiguousFragments(scoped)
+        if (frags.size <= 1) return sleepSegmentsContiguous(scoped, temperatures, epoch)
+        return frags.flatMap { sleepSegmentsContiguous(it, temperatures, epoch) }.sortedBy { it.start }
+    }
+
+    /** Coarse asleep/awake segmentation of ONE contiguous record run (upstream `:1181-1201`). */
+    private fun sleepSegmentsContiguous(scoped: List<BulkRecord>, temperatures: List<TemperatureSample>, epoch: Long): List<SleepSegment> {
+        val periods = ActivityPeriod.detectFromMotion(
+            motionTimeline(scoped, epoch),
+            temperatureSamples = temperatures,
+            heartRateSamples = heartRateTimeline(scoped, epoch),
+            sleepVitalTimes = sleepVitalTimeline(scoped, epoch),
+        )
+        val block = ActivityPeriod.mainSleepBlock(periods) ?: return emptyList()
+        val segs = mutableListOf(SleepSegment(block.start, block.end, SleepStage.IN_BED))
+        for (p in periods) {
+            if (!(p.start.isBefore(block.end) && p.end.isAfter(block.start))) continue
+            val s = maxOf(p.start, block.start)
+            val e = minOf(p.end, block.end)
+            if (!e.isAfter(s)) continue
+            segs += SleepSegment(s, e, if (p.activity == Activity.SLEEP) SleepStage.ASLEEP_CORE else SleepStage.AWAKE)
+        }
+        return segs
+    }
+
+    /**
+     * Floor on the hole [onsetIsUnobserved] demands: three 150 s epochs. Below it a gap is ordinary
+     * recording jitter, not missing data. Not the load-bearing test — the size requirement in
+     * [onsetIsUnobserved], measured in hours, is.
+     */
+    val ONSET_CONTIGUITY_GAP: Duration = Duration.ofSeconds(3L * BulkRecord.EPOCH_SECONDS)
+
+    /**
+     * Whether [block]'s ONSET is genuinely absent from [records] — the first of the two gates on
+     * presuming a 7 h night in `SleepWindow.isOvernightBlock(..., onsetIsUnobserved = true, ...)`.
+     *
+     * The rule: you may only presume data that is actually missing. Calling a `d`-long block the tail
+     * of a [SleepWindow.PRESUMED_TRUNCATED_NIGHT_SPAN] night claims `7 h - d` of recording was lost,
+     * so the hole back to the previous record must EXCEED that (never less than
+     * [ONSET_CONTIGUITY_GAP]). No record before the block at all is an unbounded hole and passes.
+     * Judge it against the FULL archive union, never a night-scoped slice.
+     */
+    fun onsetIsUnobserved(block: DateInterval, records: List<BulkRecord>, epoch: Long = Command.SYNC_EPOCH): Boolean {
+        val requiredHole = maxOf(ONSET_CONTIGUITY_GAP, SleepWindow.PRESUMED_TRUNCATED_NIGHT_SPAN.minus(block.duration))
+        val previous = records.map { it.date(epoch) }.filter { it.isBefore(block.start) }.maxOrNull() ?: return true
+        return Duration.between(previous, block.start) > requiredHole
     }
 
     /**

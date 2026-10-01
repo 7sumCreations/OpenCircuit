@@ -39,3 +39,10 @@ data class DateInterval(val start: Instant, val end: Instant) {
         fun of(start: Instant, duration: Duration): DateInterval = DateInterval(start, start.plus(duration))
     }
 }
+
+/**
+ * Whole seconds in this duration, truncated TOWARD ZERO — what Swift's `Int(_:)` does to a
+ * `TimeInterval`. [Duration.getSeconds] alone floors a negative fractional span (-0.5 s → -1);
+ * this gives 0, as upstream does.
+ */
+internal fun Duration.wholeSecondsTowardZero(): Long = if (isNegative && nano > 0) seconds + 1 else seconds
