@@ -14,8 +14,9 @@ import kotlin.test.assertTrue
  * accessors and the HealthKit-bound sample path (../docs/PROTOCOL.md §5.3).
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/BulkSleepTests.swift (@ b1c2fdd)
- * — the 19 decode/sample tests. The motion-timeline test (`:215`) ports with the motion half of
- * `BulkSleep`; the eight sleep-detection/staging tests port with the night half.
+ * — all 28: the 19 decode/sample tests, the motion-timeline test (`:215`, with the motion half of
+ * `BulkSleep`) and the eight night-half tests (`:124`, `:223`, `:253`, `:278`, `:285`, `:378`,
+ * `:392`, `:400`: the isolation pin on stress, detection, staging and the wear gate).
  *
  * Fixtures are REAL `0x4c` frames/records from the 2026-06-13 overnight sync (FW FR02.018), typed
  * as the hex literals upstream uses. They are full of bytes ≥ 0x80, so a signed byte read breaks
@@ -145,6 +146,15 @@ class BulkSleepTest {
             setOf(MetricKind.HEART_RATE, MetricKind.HRV_SDNN, MetricKind.RESPIRATORY_RATE),
             BulkSleep.samples(listOf(r)).kinds(),
         )
+    }
+
+    /** THE ISOLATION PIN: a recovered epoch must be invisible to every sleep-pipeline entry point. */
+    @Test
+    fun recoveredVitalsAreInvisibleToSleepPipeline() { // :124-131
+        val quiet = record(quietActivityRec)
+        assertTrue(BulkSleep.sleepVitalTimeline(listOf(quiet)).isEmpty(), "recovered HRV must never seed the sleep-vitals rescue")
+        assertNull(SleepStress.overnightScore(listOf(quiet)), "recovered HRV must never enter the stress median")
+        assertTrue(SleepStress.stateDurations(listOf(quiet)).isEmpty())
     }
 
     @Test
@@ -277,5 +287,140 @@ class BulkSleepTest {
         assertEquals(5, tl.size, "5 sub-samples per 150 s epoch")
         assertEquals(java.time.Duration.ofSeconds(30), java.time.Duration.between(tl[0].time, tl[1].time), "30 s spacing")
         assertEquals(1f, tl[0].movement, "motion baseline 01 = still")
+    }
+
+    // Night half — detection, staging and the wear gate (:200-213, :223-291, :360-405)
+
+    /** :300-305 — a synthetic 23-byte record: counter, motion byte (×5), subtype [8]. */
+    private fun rec(counter: Long, motion: Int, sub: Int): BulkRecord {
+        val b = ByteArray(23)
+        b[0] = (counter shr 24).toByte(); b[1] = (counter shr 16).toByte()
+        b[2] = (counter shr 8).toByte(); b[3] = counter.toByte()
+        b[8] = sub.toByte()
+        for (k in 0 until 5) b[10 + k] = motion.toByte()
+        return record(b)
+    }
+
+    /** :245-250 — the same, with an explicit HR (sleep-vitals layout). */
+    private fun rec(counter: Long, motion: Int, sub: Int, hr: Int): BulkRecord {
+        val b = rec(counter, motion, sub).raw
+        b[4] = hr.toByte()
+        return record(b)
+    }
+
+    /**
+     * :213 — realistic "active" motion: a MOVING wrist VARIES; a constant reading at any level is an
+     * idle/off-wrist signature, which the device-agnostic detector reads as still.
+     */
+    private fun activeMotion(i: Int): Int = listOf(0x0a, 0x28, 0x50)[i % 3]
+
+    @Test
+    fun sleepDetectionFindsNight() { // :223-243
+        // 20 active epochs, then ~9 h still (216 epochs @150 s), then 20 active.
+        val recs = mutableListOf<BulkRecord>()
+        var c = 0x0c220000L
+        for (i in 0 until 20) { recs += rec(c, motion = activeMotion(i), sub = 0x12); c += 150 }
+        val onset = c
+        repeat(216) { recs += rec(c, motion = 0x01, sub = 0x62); c += 150 }
+        val wake = c
+        for (i in 0 until 20) { recs += rec(c, motion = activeMotion(i), sub = 0x12); c += 150 }
+
+        val block = assertNotNull(BulkSleep.mainSleep(recs))
+        assertEquals(Activity.SLEEP, block.activity)
+        // ~9 h block, boundaries near onset/wake (within the 15-min merge window).
+        assertEquals(216.0 * 150, block.duration.seconds.toDouble(), 30.0 * 60)
+        val segs = BulkSleep.sleepSegments(recs)
+        assertTrue(segs.any { it.stage == SleepStage.ASLEEP_CORE }, "emits asleep core")
+        val inBed = assertNotNull(segs.firstOrNull { it.stage == SleepStage.IN_BED }, "emits an inBed span")
+        assertEquals(wallClock(onset).epochSecond.toDouble(), inBed.start.epochSecond.toDouble(), 20.0 * 60)
+        assertEquals(wallClock(wake).epochSecond.toDouble(), inBed.end.epochSecond.toDouble(), 20.0 * 60)
+    }
+
+    @Test
+    fun stagingSeparatesDeepRemLight() { // :253-276
+        val recs = mutableListOf<BulkRecord>()
+        var c = 0x0c220000L
+        repeat(20) { recs += rec(c, motion = 0x14, sub = 0x12); c += 150 } // awake
+        // Still block: 60 elevated-HR (REM), 60 low-HR (Deep, FLAT), 60 mid-HR (Light). REM/Light carry
+        // HR jitter — that variability keeps them out of Deep. REM stays below the wake threshold.
+        for (k in 0 until 60) { recs += rec(c, motion = 0x01, sub = 0x62, hr = if (k % 2 == 0) 62 else 70); c += 150 } // REM
+        repeat(60) { recs += rec(c, motion = 0x01, sub = 0x62, hr = 50); c += 150 } // Deep (flat)
+        for (k in 0 until 60) { recs += rec(c, motion = 0x01, sub = 0x62, hr = if (k % 2 == 0) 56 else 62); c += 150 } // Light (jittery)
+        repeat(20) { recs += rec(c, motion = 0x14, sub = 0x12); c += 150 } // awake
+
+        val segs = BulkSleep.stagedSegments(recs)
+        val stages = segs.map { it.stage }.toSet()
+        assertTrue(SleepStage.IN_BED in stages)
+        assertTrue(SleepStage.ASLEEP_DEEP in stages, "low-HR region -> deep")
+        assertTrue(SleepStage.ASLEEP_REM in stages, "elevated-HR region -> REM")
+        assertTrue(SleepStage.ASLEEP_CORE in stages, "mid-HR region -> light/core")
+        // Deep should fall in the low-HR (middle) third of the night.
+        val deep = segs.filter { it.stage == SleepStage.ASLEEP_DEEP }.maxBy { it.duration }
+        val remSeg = segs.filter { it.stage == SleepStage.ASLEEP_REM }.maxBy { it.duration }
+        assertTrue(remSeg.start < deep.start, "REM region (HR ~66) precedes Deep region (HR 50) as constructed")
+    }
+
+    @Test
+    fun stagingEmptyWithoutSleep() { // :278-283
+        val recs = mutableListOf<BulkRecord>()
+        var c = 0x0c220000L
+        for (i in 0 until 50) { recs += rec(c, motion = activeMotion(i), sub = 0x12, hr = 70); c += 150 }
+        assertTrue(BulkSleep.stagedSegments(recs).isEmpty(), "no sleep block -> no staging")
+    }
+
+    @Test
+    fun noSleepWhenAllActive() { // :285-291
+        val recs = mutableListOf<BulkRecord>()
+        var c = 0x0c220000L
+        for (i in 0 until 100) { recs += rec(c, motion = activeMotion(i), sub = 0x12); c += 150 }
+        assertNull(BulkSleep.mainSleep(recs))
+        assertTrue(BulkSleep.sleepSegments(recs).isEmpty())
+    }
+
+    /** :365-372 — 20 active epochs, ~9 h still (216 epochs), 20 active. */
+    private fun night(): List<BulkRecord> {
+        val recs = mutableListOf<BulkRecord>()
+        var c = 0x0c220000L
+        repeat(20) { recs += rec(c, motion = 0x14, sub = 0x12); c += 150 }
+        repeat(216) { recs += rec(c, motion = 0x01, sub = 0x62); c += 150 }
+        repeat(20) { recs += rec(c, motion = 0x14, sub = 0x12); c += 150 }
+        return recs
+    }
+
+    /** :373-375 — one temperature sample per epoch at [celsius], spanning the records' real time range. */
+    private fun temps(recs: List<BulkRecord>, celsius: Double): List<TemperatureSample> = recs.map { TemperatureSample(it.date(), celsius) }
+
+    @Test
+    fun sleepSegmentsWearGateDropsColdNight() { // :378-390
+        val recs = night()
+        // Motion-only (status quo): the still block reads as a night of sleep.
+        assertTrue(BulkSleep.sleepSegments(recs).any { it.stage == SleepStage.IN_BED }, "motion-only: still block reads as sleep")
+        // Worn (32 °C): still a night of sleep.
+        assertTrue(
+            BulkSleep.sleepSegments(recs, temperatures = temps(recs, 32.0)).any { it.stage == SleepStage.IN_BED },
+            "worn temps keep the night",
+        )
+        // Cold (22 °C, off-wrist / charging): no sleep night survives the gate.
+        assertTrue(
+            BulkSleep.sleepSegments(recs, temperatures = temps(recs, 22.0)).isEmpty(),
+            "cold (unworn) still block must not produce a sleep night",
+        )
+    }
+
+    @Test
+    fun mainSleepWearGateDropsColdNight() { // :392-398
+        val recs = night()
+        assertNotNull(BulkSleep.mainSleep(recs, temperatures = temps(recs, 32.0)), "worn night has a main sleep block")
+        assertNull(BulkSleep.mainSleep(recs, temperatures = temps(recs, 22.0)), "cold night yields no main sleep block")
+    }
+
+    @Test
+    fun sleepSegmentsEmptyTemperaturesUnchanged() { // :400-405
+        val recs = night()
+        assertEquals(
+            BulkSleep.sleepSegments(recs).size,
+            BulkSleep.sleepSegments(recs, temperatures = emptyList()).size,
+            "no temp coverage ⇒ identical to motion-only (absence ≠ unworn)",
+        )
     }
 }

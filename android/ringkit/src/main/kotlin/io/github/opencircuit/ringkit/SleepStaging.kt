@@ -29,10 +29,7 @@ package io.github.opencircuit.ringkit
 
 import java.time.Duration
 import java.time.Instant
-import kotlin.math.abs
-import kotlin.math.sign
 import kotlin.math.sqrt
-import kotlin.math.truncate
 
 /**
  * Stage-by-stage classifier over a night's `0x4c` [BulkRecord]s. Pure: it takes records, returns
@@ -897,25 +894,6 @@ object SleepStaging {
             else -> r.toInt()
         }
         return sorted[idx]
-    }
-
-    /** Swift's `min(x, y)`: `y < x ? y : x` — a NaN operand never wins over a number. */
-    private fun swiftMin(x: Double, y: Double): Double = if (y < x) y else x
-
-    /** Swift's `max(x, y)`: `y >= x ? y : x`. */
-    private fun swiftMax(x: Double, y: Double): Double = if (y >= x) y else x
-
-    /** Swift's `Sequence.min()` over a non-empty list: the first element, replaced by any later one that compares smaller. */
-    private fun swiftSequenceMin(xs: List<Double>): Double {
-        var result = xs[0]
-        for (k in 1 until xs.size) if (xs[k] < result) result = xs[k]
-        return result
-    }
-
-    /** Swift's `rounded()` (to nearest, ties away from zero). */
-    private fun roundHalfAwayFromZero(x: Double): Double {
-        val t = truncate(x)
-        return if (abs(x - t) >= 0.5) t + sign(x) else t
     }
 
     private fun seconds(d: Duration): Double = d.seconds + d.nano / 1e9

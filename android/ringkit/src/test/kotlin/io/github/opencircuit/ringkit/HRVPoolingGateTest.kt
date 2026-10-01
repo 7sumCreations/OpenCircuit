@@ -14,8 +14,8 @@ import kotlin.test.assertTrue
  * and that ONLY the recovered activity-epoch HRV is gated.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/HRVPoolingGateTests.swift
- * (@ b1c2fdd) — 11 of 12 tests. `:279` (`testGateNeverTouchesStrictAccessors`) pins the sleep
- * pipeline (segments, staging, naps, stress) and ports with it.
+ * (@ b1c2fdd) — all 12 tests; `:279` (`testGateNeverTouchesStrictAccessors`) pins the sleep
+ * pipeline (segments, staging, naps, stress) and arrived with it.
  *
  * Synthetic records only. Fixture trap kept from upstream: the canonical sleep-vitals hex elsewhere
  * in the suite has a MOVING `[15:20]` tail, so every sleep-vitals epoch here zeroes `[15:20]`
@@ -193,6 +193,68 @@ class HRVPoolingGateTest {
         val b = big.mapNotNull { it.hrvRMSSD }
         assertEquals(BulkSleep.hrvShift(a, b), BulkSleep.hrvShift(a, b))
         assertEquals(0.0, BulkSleep.hrvShift(a, a), 1e-9, "self-shift is 0 even when capped")
+    }
+
+    /** :105-112 — the SAME records with `[5]` zeroed on every ACTIVITY epoch (the world before recovery). */
+    private fun zeroedOnActivity(records: List<BulkRecord>): List<BulkRecord> = records.map { r ->
+        if (r.layout != BulkRecord.Layout.ACTIVITY) {
+            r
+        } else {
+            val b = r.raw
+            b[5] = 0
+            assertNotNull(BulkRecord.of(b))
+        }
+    }
+
+    /**
+     * `hrvPooling` reads records and never mutates them, and nothing outside `BulkSleep.samples`
+     * consumes its verdict. Pin every sleep consumer across all three verdicts AND against the
+     * activity-HRV-zeroed input, the only input the strict accessors can tell apart from this one.
+     * Naps are judged in a named zone (upstream reads the device calendar); both sides use it.
+     */
+    @Test
+    fun gateNeverTouchesStrictAccessors() { // :279-322
+        val zone = java.time.ZoneId.of("America/New_York")
+        for (delta in listOf(0, -15)) {
+            val r = night(activityHRVDelta = delta)
+            val pre = zeroedOnActivity(r)
+
+            // Compute the sleep pipeline BEFORE any gate call…
+            val timelineBefore = BulkSleep.sleepVitalTimeline(r)
+            val coarseBefore = BulkSleep.sleepSegments(r)
+            val stagedBefore = BulkSleep.stagedSegments(r)
+            val mainSleep = BulkSleep.mainSleep(r)
+            val napsBefore = NapDetection.naps(r, mainSleep = mainSleep, zone = zone)
+            val stressBefore = SleepStress.overnightScore(r)
+            val strictHRVBefore = r.mapNotNull { it.hrvRMSSD }
+            val strictRRBefore = r.mapNotNull { it.respiratoryRate }
+
+            // …exercise every verdict…
+            BulkSleep.hrvPooling(r)
+            BulkSleep.samples(r, calibratedBy = r)
+            BulkSleep.samples(r, calibratedBy = null)
+            BulkSleep.samples(r, calibratedBy = night(activityHRVDelta = -15))
+
+            // …and assert nothing moved, in either direction.
+            assertEquals(timelineBefore, BulkSleep.sleepVitalTimeline(r))
+            assertEquals(coarseBefore, BulkSleep.sleepSegments(r))
+            assertEquals(stagedBefore, BulkSleep.stagedSegments(r))
+            assertEquals(napsBefore, NapDetection.naps(r, mainSleep = mainSleep, zone = zone))
+            assertEquals(stressBefore, SleepStress.overnightScore(r))
+            assertEquals(strictHRVBefore, r.mapNotNull { it.hrvRMSSD })
+            assertEquals(strictRRBefore, r.mapNotNull { it.respiratoryRate })
+
+            // The strict accessors cannot even see the recovery, gated or not.
+            assertEquals(timelineBefore, BulkSleep.sleepVitalTimeline(pre))
+            assertEquals(coarseBefore, BulkSleep.sleepSegments(pre))
+            assertEquals(stagedBefore, BulkSleep.stagedSegments(pre))
+            assertEquals(napsBefore, NapDetection.naps(pre, mainSleep = BulkSleep.mainSleep(pre), zone = zone))
+            assertEquals(stressBefore, SleepStress.overnightScore(pre))
+            assertEquals(strictHRVBefore, pre.mapNotNull { it.hrvRMSSD })
+
+            // Anti-vacuity: the pinned pipeline is not empty.
+            assertTrue(timelineBefore.isNotEmpty(), "sleepVitalTimeline must be non-empty to pin anything")
+        }
     }
 
     @Test
