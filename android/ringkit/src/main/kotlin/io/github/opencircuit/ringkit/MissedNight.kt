@@ -46,10 +46,14 @@ object MissedNight {
      * CALENDAR day from that window's wake.
      *
      * Deliberately not upstream's step: upstream steps `now` back a fixed 24 h and takes the nearest
-     * window again. On a spring-forward evening that lands on the day before, so for up to 30 minutes
-     * it answered yesterday's wake, and a sync made yesterday evening then read as "after this
-     * morning's wake" (the banner could say MISSING where "not synced yet" was meant). Every other
-     * instant gives upstream's answer, fall-back evenings included (stepping `now` itself back a
+     * window again. The two differ only in the 56 hours after a clock change that loses time:
+     *  - on the evening of that day, and of the day after, 24 h back lands where a stale wake is the
+     *    nearer one, so upstream answered yesterday's wake, and a sync made yesterday evening then read
+     *    as "after this morning's wake" (the banner could say MISSING where "not synced yet" was meant);
+     *  - where the lost hour is the one after midnight, upstream placed the next morning's wake an hour
+     *    late in the evening, though it gave the scheduled one at noon.
+     * Here the answer is always a wake [SleepWindow.interval] itself gives, the same all day. Every
+     * other instant gives upstream's answer, fall-back evenings included (stepping `now` itself back a
      * calendar day would there land 25 h back and skip to yesterday's wake). Null for a degenerate
      * zero-length schedule (`bed == wake`) or an instant the calendar cannot place.
      */
