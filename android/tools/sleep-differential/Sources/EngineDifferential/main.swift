@@ -46,6 +46,10 @@
 //   kind se:    n <nPos> <nNeg>         a <aucs>
 //   kind tail:  q <observed> <flagged> <positives> <total>   (one line each)
 //               w <successes> <trials> <z>                   (one line each)
+//   kind cycle (a period history; every date is a double of seconds since 2001, Foundation's own form):
+//     e <start> <end|->                 one period entry, in the order given (may be unsorted)
+//     t <night> <offsetC>               one skin-temperature night (none, or several)
+//     n <nows>                          the clocks `predict` is asked at
 //   end
 // goldens.txt, per case:
 //   case <id>
@@ -72,6 +76,10 @@
 //   se:     se <hanleyMcNeilSE(auc, nPos, nNeg)|-> per auc
 //   tail:   tl (<hypergeometricUpperTail|-> <w if ≤ 0.01, n if not, - if nil>)* per q line
 //           wl <wilsonUpperBound|-> per w line
+//   cycle:  st <avgCycleLengthDays> <sampleCount> <avgPeriodDurationDays|->   or "st - - -"
+//           pr <k> <nextPeriodStart> <nextPeriodEnd> <fertileWindowStart> <ovulationEstimate> <1|0>
+//                                       CyclePredictor.predict at the k-th clock (dates as seconds since
+//                                       2001; the last token is tempCorroborated), or "pr <k> -"
 //   end
 // coverage.txt: "branch <name> <count>" for every name reached, sorted.
 //
@@ -754,6 +762,178 @@ func tailCase(_ index: Int) -> Case {
     return c
 }
 
+// MARK: - Cycle prediction: Foundation's Double-seconds date arithmetic
+//
+// `cycleStats` and `predict` add, subtract and compare `Date`s, i.e. doubles of seconds since 2001,
+// rounding at every step of the roll-forward. Histories are whole-day, fractional-second, stale (rolled
+// forward for centuries, to Foundation's distant future), across both 2026 New York clock changes,
+// hostile (unsorted, duplicated, backwards, overlapping, out of range), with skin-temperature nights at
+// and around the corroboration window's edges, and at the length, duration and roll-forward edges.
+
+/// New York, named explicitly (never the machine's zone): the clock-change histories are its local times.
+let cycleNY: Calendar = {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: "America/New_York")!
+    return c
+}()
+let cycleShapes = ["regular", "fractional", "stale", "clock", "hostile", "skin", "edges"]
+let cycleCasesPerShape = 4
+let cycleDay = 86_400.0
+typealias CycleEntry = CyclePredictor.PeriodEntry
+
+func nyDate(_ y: Int, _ m: Int, _ day: Int, _ h: Int = 0, _ mi: Int = 0) -> Date {
+    cycleNY.date(from: DateComponents(year: y, month: m, day: day, hour: h, minute: mi))!
+}
+
+/// How many additions upstream's roll-forward makes for this history and clock (its loop, counted).
+func rollCount(_ entries: [CycleEntry], now: Date) -> Int {
+    guard let stats = CyclePredictor.cycleStats(from: entries),
+          let last = entries.sorted(by: { $0.start < $1.start }).last else { return -1 }
+    let interval = stats.avgCycleLengthDays * cycleDay
+    var next = last.start.addingTimeInterval(interval)
+    var n = 0
+    while next < now { next = next.addingTimeInterval(interval); n += 1 }
+    return n
+}
+
+/// A history of `count` periods from `start`, gaps of `gap()` seconds, each ended with chance `endChance`.
+func cycleHistory(_ rng: inout SplitMix64, from start: Date, count: Int, endChance: Int,
+                  gap: (inout SplitMix64) -> Double, length: (inout SplitMix64) -> Double) -> [CycleEntry] {
+    var t = start
+    var out: [CycleEntry] = []
+    for _ in 0..<count {
+        let end: Date? = rng.chance(endChance) ? t.addingTimeInterval(length(&rng)) : nil
+        out.append(CycleEntry(start: t, end: end))
+        t = t.addingTimeInterval(gap(&rng))
+    }
+    return out
+}
+
+func cycleCase(_ index: Int) -> Case {
+    let shape = cycleShapes[index / cycleCasesPerShape]
+    let k = index % cycleCasesPerShape
+    var rng = SplitMix64(state: 0x4359_434C &+ UInt64(index))
+    // Whole days from 2023-11-14 00:00 UTC onward.
+    let base = Date(timeIntervalSince1970: 1_699_920_000 + Double(rng.int(0, 400)) * cycleDay)
+    var entries: [CycleEntry] = []
+    var nights: [(night: Date, offsetC: Double)] = []
+    var nows: [Date] = []
+    switch shape {
+    case "regular":
+        entries = cycleHistory(&rng, from: base, count: rng.int(2, 8), endChance: 60,
+                               gap: { Double($0.int(24, 36)) * cycleDay }, length: { Double($0.int(2, 8)) * cycleDay })
+        let last = entries.last!.start
+        nows = [last, last.addingTimeInterval(10 * cycleDay), last.addingTimeInterval(200 * cycleDay),
+                last.addingTimeInterval(3 * 365 * cycleDay)]
+    case "fractional":
+        entries = cycleHistory(&rng, from: base.addingTimeInterval(rng.real(0, 86_399)), count: rng.int(3, 8), endChance: 70,
+                               gap: { Double($0.int(23, 34)) * cycleDay + $0.real(0, 86_399) }, length: { $0.real(1, 10) * cycleDay })
+        let last = entries.last!.start
+        nows = [last.addingTimeInterval(rng.real(0, 3) * cycleDay), last.addingTimeInterval(rng.real(0, 30) * cycleDay),
+                last.addingTimeInterval(400 * cycleDay), last.addingTimeInterval(30 * 365.25 * cycleDay)]
+    case "stale":
+        entries = cycleHistory(&rng, from: base.addingTimeInterval(rng.real(0, 86_399)), count: rng.int(2, 4), endChance: 50,
+                               gap: { Double($0.int(25, 32)) * cycleDay + $0.real(0, 86_399) }, length: { $0.real(2, 7) * cycleDay })
+        let last = entries.last!.start
+        nows = [last.addingTimeInterval(100 * 365.25 * cycleDay), last.addingTimeInterval(1_000 * 365.25 * cycleDay),
+                .distantFuture, last.addingTimeInterval(Double(k + 1) * 3_000 * cycleDay)]
+    case "clock":
+        // Local midnights and evenings in New York around both 2026 clock changes.
+        let starts: [[Date]] = [
+            [nyDate(2026, 2, 8), nyDate(2026, 3, 8), nyDate(2026, 4, 5)],
+            [nyDate(2026, 10, 4), nyDate(2026, 11, 1), nyDate(2026, 11, 29)],
+            [nyDate(2025, 12, 20, 21, 30), nyDate(2026, 1, 17, 22), nyDate(2026, 2, 14, 23, 45)],
+            [nyDate(2026, 9, 5, 1, 30), nyDate(2026, 10, 3, 1, 30), nyDate(2026, 10, 31, 1, 30)],
+        ]
+        entries = starts[k].enumerated().map { i, s in
+            CycleEntry(start: s, end: i % 2 == 0 ? cycleNY.date(byAdding: .day, value: 4 + i, to: s) : nil)
+        }
+        let last = entries.last!.start
+        nows = [last, nyDate(2026, 3, 8, 3), nyDate(2026, 11, 1, 1, 30), last.addingTimeInterval(70 * cycleDay)]
+        hit("cycle-clock-change", cycleNY.timeZone.secondsFromGMT(for: entries.first!.start) != cycleNY.timeZone.secondsFromGMT(for: last))
+    case "hostile":
+        let a = base
+        switch k {
+        case 0: // unsorted, a duplicated start
+            entries = [CycleEntry(start: a.addingTimeInterval(56 * cycleDay)), CycleEntry(start: a),
+                       CycleEntry(start: a.addingTimeInterval(28 * cycleDay), end: a.addingTimeInterval(33 * cycleDay)),
+                       CycleEntry(start: a), CycleEntry(start: a.addingTimeInterval(85 * cycleDay))]
+        case 1: // ends before their starts, overlapping periods, durations out of range
+            entries = [CycleEntry(start: a, end: a.addingTimeInterval(-5 * cycleDay)),
+                       CycleEntry(start: a.addingTimeInterval(27 * cycleDay), end: a.addingTimeInterval(67 * cycleDay)),
+                       CycleEntry(start: a.addingTimeInterval(58 * cycleDay), end: a.addingTimeInterval(58.5 * cycleDay)),
+                       CycleEntry(start: a.addingTimeInterval(86 * cycleDay), end: a.addingTimeInterval(90.25 * cycleDay))]
+        case 2: // every interval out of range → no statistics
+            entries = [0.0, 15, 65, 115].map { CycleEntry(start: a.addingTimeInterval($0 * cycleDay)) }
+        default: // a single period
+            entries = [CycleEntry(start: a, end: a.addingTimeInterval(4 * cycleDay))]
+        }
+        nows = [a, a.addingTimeInterval(120 * cycleDay), a.addingTimeInterval(1_000 * cycleDay)]
+    case "skin":
+        entries = cycleHistory(&rng, from: base, count: 3, endChance: 50,
+                               gap: { Double($0.int(26, 31)) * cycleDay }, length: { Double($0.int(3, 6)) * cycleDay })
+        let now = entries.last!.start
+        let ov = CyclePredictor.predict(from: entries, now: now)!.ovulationEstimate
+        let offsets: [[(Double, Double)]] = [
+            [(-3 * cycleDay, 0.2), (3 * cycleDay, 0.2)], // both window edges, at the threshold
+            [(-3 * cycleDay - 1e-3, 0.5), (3 * cycleDay + 1e-3, 0.5), (0, 0.19999999999999998), (cycleDay, .nan)], // just outside, just under
+            [(0, 0.3), (0, 0.3), (-7 * cycleDay, 1), (2 * cycleDay, -.infinity)], // one night twice
+            [(-cycleDay, .infinity), (cycleDay, 0.25), (-2 * cycleDay, 0.1)],
+        ]
+        nights = offsets[k].map { (night: ov.addingTimeInterval($0.0), offsetC: $0.1) }
+        nows = [now, now.addingTimeInterval(1), now.addingTimeInterval(45 * cycleDay)]
+    default: // "edges"
+        let a = base
+        switch k {
+        case 0: // intervals exactly 21 and 45 days, and a second either side
+            entries = [0.0, 21, 66].map { CycleEntry(start: a.addingTimeInterval($0 * cycleDay)) }
+                + [CycleEntry(start: a.addingTimeInterval(87 * cycleDay - 1)), CycleEntry(start: a.addingTimeInterval(132 * cycleDay))]
+                + [CycleEntry(start: a.addingTimeInterval(177 * cycleDay + 1))]
+        case 1: // durations exactly 1 and 10 days, and a second either side
+            entries = [(0.0, 1.0), (28, 10), (56, 1 - 1 / cycleDay), (84, 10 + 1 / cycleDay)].map {
+                CycleEntry(start: a.addingTimeInterval($0.0 * cycleDay), end: a.addingTimeInterval(($0.0 + $0.1) * cycleDay))
+            }
+        case 2: // `now` exactly at the next start, a millisecond either side, and one cycle on
+            entries = [CycleEntry(start: a), CycleEntry(start: a.addingTimeInterval(28 * cycleDay))]
+        default: // a long fractional history (12 periods)
+            entries = cycleHistory(&rng, from: a.addingTimeInterval(0.5), count: 12, endChance: 80,
+                                   gap: { Double($0.int(21, 45)) * cycleDay + $0.real(0, 3_600) }, length: { $0.real(1, 10) * cycleDay })
+        }
+        let next = entries.sorted(by: { $0.start < $1.start }).last!.start
+            .addingTimeInterval((CyclePredictor.cycleStats(from: entries)?.avgCycleLengthDays ?? 28) * cycleDay)
+        nows = [next, next.addingTimeInterval(-1e-3), next.addingTimeInterval(1e-3), next.addingTimeInterval(28 * cycleDay)]
+    }
+
+    var c = Case(id: String(format: "cyc-%03d", index), kind: "cycle", shape: shape)
+    c.inputs = entries.map { "e \(d($0.start.timeIntervalSinceReferenceDate)) \($0.end.map { d($0.timeIntervalSinceReferenceDate) } ?? "-")" }
+        + nights.map { "t \(d($0.night.timeIntervalSinceReferenceDate)) \(d($0.offsetC))" }
+        + ["n" + nows.map { " " + d($0.timeIntervalSinceReferenceDate) }.joined()]
+    let stats = CyclePredictor.cycleStats(from: entries)
+    c.goldens = ["st " + (stats.map { "\(d($0.avgCycleLengthDays)) \($0.sampleCount) \(optD($0.avgPeriodDurationDays))" } ?? "- - -")]
+    hit("cycle-stats-nil", stats == nil)
+    hit("cycle-stats-value", stats != nil)
+    hit("cycle-interval-excluded", entries.count >= 2 && (stats?.sampleCount ?? 0) < entries.count - 1)
+    hit("cycle-duration-logged", stats?.avgPeriodDurationDays != nil)
+    hit("cycle-duration-default", stats != nil && stats?.avgPeriodDurationDays == nil)
+    hit("cycle-fractional-interval", stats.map { let x = $0.avgCycleLengthDays * cycleDay; return x != x.rounded() } ?? false)
+    for (i, now) in nows.enumerated() {
+        guard let p = CyclePredictor.predict(from: entries, skinTempDeviations: nights, now: now) else {
+            c.goldens.append("pr \(i) -")
+            continue
+        }
+        let dates = [p.nextPeriodStart, p.nextPeriodEnd, p.fertileWindowStart, p.ovulationEstimate]
+        c.goldens.append("pr \(i) " + dates.map { d($0.timeIntervalSinceReferenceDate) }.joined(separator: " ") + (p.tempCorroborated ? " 1" : " 0"))
+        let rolls = rollCount(entries, now: now)
+        hit("cycle-roll-none", rolls == 0)
+        hit("cycle-roll-few", rolls >= 1 && rolls <= 100)
+        hit("cycle-roll-many", rolls > 100)
+        hit("cycle-now-at-next", p.nextPeriodStart == now)
+        hit("cycle-corroborated", p.tempCorroborated)
+        hit("cycle-not-corroborated", !p.tempCorroborated && !nights.isEmpty)
+    }
+    return c
+}
+
 // MARK: - Swift's random draws, as the headache evaluation tests make them
 //
 // Upstream's HeadacheEvaluationTests build their synthetic years from a test-local SplitMix64 driving
@@ -896,6 +1076,7 @@ let cases = (0..<(dayShapes.count * dayCasesPerShape)).map(dayCase)
     + (0..<(rankShapes.count * 4)).map(rankCase)
     + (0..<4).map(seCase)
     + (0..<(tailShapes.count * 4)).map(tailCase)
+    + (0..<(cycleShapes.count * cycleCasesPerShape)).map(cycleCase)
 let header = "# Generated by android/tools/sleep-differential (EngineDifferential) from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

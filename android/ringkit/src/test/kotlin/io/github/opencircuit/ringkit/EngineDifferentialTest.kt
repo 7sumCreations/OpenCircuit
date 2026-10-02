@@ -30,12 +30,16 @@ import kotlin.test.assertTrue
  * every half of the index's rounding, and the band's percentile. Its evaluation: midranks over ties,
  * signed zeros and NaN (past Swift's insertion-sort size too), the AUC and its Hanley-McNeil error,
  * the exact hypergeometric tail (`log` / `exp`, with whether each value clears the 0.01 working
- * alpha, so a last-bit difference that flipped it would show) and the Wilson bound. The format is
- * documented at the top of the generator's `main.swift`.
+ * alpha, so a last-bit difference that flipped it would show) and the Wilson bound. Cycle prediction:
+ * the statistics and the predicted dates of whole-day, fractional-second, stale (rolled forward for
+ * centuries, to Foundation's distant future), clock-change (New York 2026), hostile, skin-temperature
+ * and edge histories — every date as Foundation holds it, a double of seconds since 2001, converted to
+ * and from the port's `Instant`s by `FoundationDate`. The format is documented at the top of the
+ * generator's `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
- * `d` + 16 hex digits), which must agree within 1e-9; every double that is not bit-identical is
- * listed in the report this test prints. The goldens come only from the Swift generator, never from
+ * `d` + 16 hex digits), which must agree within 1e-9 — or, for a predicted date (a `pr` line), within
+ * 1e-6 s; every double that is not bit-identical is listed in the report this test prints. The goldens come only from the Swift generator, never from
  * this code's output. Where the port deliberately differs from upstream, the lines that move are
  * named in [DELIBERATE_DIVERGENCES] (case + line kind, with the `PORTING.md` D-row) and reported; no
  * other line may differ, and a listed line that stops differing fails as stale.
@@ -135,7 +139,34 @@ class EngineDifferentialTest {
         "rank" -> renderRank(c)
         "se" -> renderStandardErrors(c)
         "tail" -> renderTail(c)
+        "cycle" -> renderCycle(c)
         else -> error("unknown kind ${c.kind}")
+    }
+
+    // --- cycle prediction (dates are doubles of seconds since 2001, Foundation's own form) ---
+
+    private fun renderCycle(c: ECase): List<String> {
+        fun date(t: String): java.time.Instant = FoundationDate.reference(toDouble(t))
+        val entries = c.lines.filter { it.startsWith("e ") }.map { line ->
+            val t = line.split(' ')
+            CyclePredictor.PeriodEntry(start = date(t[1]), end = if (t[2] == "-") null else date(t[2]))
+        }
+        val nights = c.lines.filter { it.startsWith("t ") }.map { line ->
+            val t = line.split(' ')
+            CyclePredictor.SkinTempNight(night = date(t[1]), offsetC = toDouble(t[2]))
+        }
+        val stats = CyclePredictor.cycleStats(entries)
+        val out = mutableListOf("st " + (stats?.let { "${d(it.avgCycleLengthDays)} ${it.sampleCount} ${optD(it.avgPeriodDurationDays)}" } ?: "- - -"))
+        doubles(c, "n").forEachIndexed { k, now ->
+            val p = CyclePredictor.predict(entries, nights, now = FoundationDate.reference(now))
+            out += "pr $k " + (
+                p?.let {
+                    listOf(it.nextPeriodStart, it.nextPeriodEnd, it.fertileWindowStart, it.ovulationEstimate)
+                        .joinToString(" ") { t -> d(FoundationDate.referenceSeconds(t)) } + if (it.tempCorroborated) " 1" else " 0"
+                } ?: "-"
+                )
+        }
+        return out
     }
 
     // --- the headache signals index and its evaluation ---
@@ -347,10 +378,16 @@ class EngineDifferentialTest {
         }.toSet(),
     )
 
+    /**
+     * How far a double may sit from upstream's: 1e-9, except a predicted date (a `pr` line), a double of
+     * about 1e9 seconds whose last bit is about 1e-7 s, compared within a microsecond.
+     */
+    private fun tolerance(lineHead: String): Double = if (lineHead == "pr") 1e-6 else 1e-9
+
     /** The tokens that identify a golden line among its case's lines: the first two for indexed kinds, else the first. */
     private fun lineKind(line: String): String {
         val t = line.split(' ')
-        val indexed = t[0] in setOf("avg", "tr", "fl", "ix", "iq") || (t[0] == "cs" && t.size > 1 && t[1].all { it in '0'..'9' })
+        val indexed = t[0] in setOf("avg", "tr", "fl", "ix", "iq", "pr") || (t[0] == "cs" && t.size > 1 && t[1].all { it in '0'..'9' })
         return if (indexed) t.take(2).joinToString(" ") else t[0]
     }
 
@@ -401,7 +438,7 @@ class EngineDifferentialTest {
                     if (et[j] == at[j]) continue
                     val ed = toDouble(et[j])
                     val ad = toDouble(at[j])
-                    if ((ed.isNaN() && ad.isNaN()) || abs(ed - ad) <= 1e-9) {
+                    if ((ed.isNaN() && ad.isNaN()) || abs(ed - ad) <= tolerance(et[0])) {
                         report.nonIdentical += "$id ${et[0]}: golden $ed (${et[j]}) kotlin $ad (${at[j]}) |Δ| ${abs(ed - ad)}"
                     } else {
                         report.mismatches += "$id line ${k + 1}: golden '$e' ($ed) vs kotlin '$a' ($ad)"
@@ -429,7 +466,8 @@ class EngineDifferentialTest {
 
         println(
             "engine differential: ${inputs.size} cases, ${report.lines} golden lines, ${report.doubles} doubles, " +
-                "${report.nonIdentical.size} not bit-identical (tolerated within 1e-9), ${report.mismatches.size} mismatches",
+                "${report.nonIdentical.size} not bit-identical (tolerated within 1e-9, a predicted date within 1e-6 s), " +
+                "${report.mismatches.size} mismatches",
         )
         report.nonIdentical.forEach { println("  not bit-identical: $it") }
         for ((improvement, entries) in DELIBERATE_DIVERGENCES) {
@@ -494,5 +532,15 @@ class EngineDifferentialTest {
         assertTrue(moved.mismatches.isEmpty() && staleEntries(moved, listed).isEmpty(), "a listed line may differ")
         assertEquals(1, staleEntries(run(golden, listed), listed).size, "a listed line that no longer differs is stale")
         assertEquals(1, run(listOf(golden[0], "avg 7 ${d(0.5)} -", golden[2])).mismatches.size, "an unlisted line may not differ")
+
+        // A predicted date is compared within a microsecond, and only a date line is.
+        val date = 8.123456789e8
+        val dates = listOf("pr 0 ${d(date)} 1", "st ${d(28.5)} 2 -")
+        fun runDates(actual: List<String>) = Report().also { compare("y", dates, actual, it) }
+        val closeDate = runDates(listOf("pr 0 ${d(date + 9e-7)} 1", dates[1]))
+        assertTrue(closeDate.mismatches.isEmpty() && closeDate.nonIdentical.size == 1, "a date within 1e-6 s is tolerated and listed")
+        assertEquals(1, runDates(listOf("pr 0 ${d(date + 2e-6)} 1", dates[1])).mismatches.size, "a date off by more than 1e-6 s fails")
+        assertEquals(1, runDates(listOf("pr 0 ${d(date)} 0", dates[1])).mismatches.size, "a changed corroboration flag fails")
+        assertEquals(1, runDates(listOf(dates[0], "st ${d(28.5 + 1e-7)} 2 -")).mismatches.size, "a statistic keeps the 1e-9 tolerance")
     }
 }
