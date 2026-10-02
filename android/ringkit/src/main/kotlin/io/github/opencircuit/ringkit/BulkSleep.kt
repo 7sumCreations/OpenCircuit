@@ -690,7 +690,8 @@ object BulkSleep {
      *     night ([declinedBridgeMayReanchor]) — the guard may separate two bouts but may never make
      *     the smaller one the night;
      *  4. cluster earlier nights back from the anchor within [MAX_INTRA_NIGHT_GAP] of the running
-     *     cluster start (a declined bridge is skipped, not a chain break), then cap the window at
+     *     cluster start (a declined bridge ends the chain — upstream skips it, see PORTING D-69),
+     *     then cap the window at
      *     [MAX_NIGHT_SPAN] before the anchor's end;
      *  5. chain FORWARD over later sleep periods of at least [NapDetection.MIN_NAP_DURATION] within
      *     [morningContinuationGap], while the envelope stays inside [MAX_NIGHT_SPAN] and overnight;
@@ -750,13 +751,14 @@ object BulkSleep {
             }
         }
 
-        // Backward cluster chain from the anchor. A declined bridge is skipped (upstream `continue`),
-        // not a chain break.
+        // Backward cluster chain from the anchor. A declined bridge ENDS the chain (PORTING D-69, an
+        // owner decision): upstream `continue`s past it, so a block behind an unobserved hole further
+        // back could be absorbed and pull the declined block's records back into the window.
         var clusterStart = anchor.start
         for (p in nights.sortedByDescending { it.start }) {
             if (p.end.isAfter(anchor.end)) continue
             if (Duration.between(p.end, clusterStart) <= MAX_INTRA_NIGHT_GAP) {
-                if (guardOn && bridgeIsDeclined(clusterStart, p.end, times, observedGapCoverageCut)) continue
+                if (guardOn && bridgeIsDeclined(clusterStart, p.end, times, observedGapCoverageCut)) break
                 clusterStart = minOf(clusterStart, p.start)
             }
         }

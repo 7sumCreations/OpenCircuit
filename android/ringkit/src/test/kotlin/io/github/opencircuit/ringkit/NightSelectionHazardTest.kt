@@ -21,7 +21,9 @@ import kotlin.test.assertTrue
  * upstream-port classes so their counts stay exact.
  *
  * Every expected value here was measured on upstream's pinned Swift build with the same records
- * (`count first last` of the returned slice), so each test pins upstream's outcome.
+ * (`count first last` of the returned slice), so each test pins upstream's outcome — except where
+ * a test says it pins a deliberate, owner-approved improvement (PORTING D-69 onward); there the
+ * upstream value is quoted beside the new one.
  */
 class NightSelectionHazardTest {
 
@@ -127,16 +129,33 @@ class NightSelectionHazardTest {
     }
 
     @Test
-    fun aDeclinedBridgeIsSkippedNotAChainBreak() {
+    fun aDeclinedBridgeStopsTheChain() {
         // Three overnight blocks: A (75 min) — an EMPTY 2 h hole — B (75 min) — a fully observed
-        // awake hour — C (4 h, the anchor). The bridge C→B is declined, but upstream `continue`s, so
-        // the chain still reaches A across the unobserved hole (only 0.53 covered) and the window
-        // re-includes B's records. Upstream flags this leapfrog as untested and chose `continue`
-        // over `break`; measured on the pinned build it is identical to the guard switched off.
-        val leap = still(at(21), at(22, 15)) + still(at(0, 15, day = 1), at(1, 30, day = 1)) +
-            moving(at(1, 30, day = 1), at(2, 30, day = 1)) + still(at(2, 30, day = 1), at(6, 30, day = 1))
-        assertEquals(Triple(180, 202_208_400L, 202_242_450L), shape(select(leap)))
-        assertEquals(select(leap, cut = 0.0), select(leap))
+        // awake hour — C (4 h, the anchor). The bridge C→B is declined. Upstream `continue`s past it,
+        // so the chain still reaches A across the unobserved hole and the window pulls B's records
+        // back in (measured on the pinned build: 180 records from A's start, identical to the guard
+        // switched off). Here a declined bridge ends the chain (an owner decision, PORTING D-69):
+        // the night is C alone, with its 30 min margin.
+        val a = still(at(21), at(22, 15))
+        val b = still(at(0, 15, day = 1), at(1, 30, day = 1))
+        val leap = a + b + moving(at(1, 30, day = 1), at(2, 30, day = 1)) + still(at(2, 30, day = 1), at(6, 30, day = 1))
+        val night = select(leap)
+        assertEquals(106, night.size, "upstream's leapfrog returned 180")
+        assertTrue(night.none { it in a || it in b }, "neither block behind the declined bridge joins the night")
+        assertEquals(Triple(180, 202_208_400L, 202_242_450L), shape(select(leap, cut = 0.0)), "with the guard off the chain still reaches A")
+    }
+
+    @Test
+    fun aBridgeThatIsNotDeclinedStillChainsAcrossAnEmptyHole() {
+        // The break is the only change: the same archive with B's awake hour left UNOBSERVED (an
+        // empty hole, so the bridge C→B is not declined) still chains C → B → A across both holes,
+        // exactly as upstream.
+        val a = still(at(21), at(22, 15))
+        val b = still(at(0, 15, day = 1), at(1, 30, day = 1))
+        val c = still(at(2, 30, day = 1), at(6, 30, day = 1))
+        val night = select(a + b + c)
+        assertEquals(select(a + b + c, cut = 0.0), night, "no declined bridge, so the guard changes nothing")
+        assertTrue(night.containsAll(a) && night.containsAll(b), "the whole cluster is kept")
     }
 
     @Test

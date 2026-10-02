@@ -26,7 +26,10 @@ import kotlin.test.assertTrue
  * Comparison rule: every line is compared WHOLE and exactly (times, stages, counts, flags), except
  * floating-point fields, which must agree within 1e-9; every double that is not bit-identical is
  * listed in the report this test prints, so a drift is visible even when it is tolerated. The
- * goldens come only from the Swift generator, never from this code's output.
+ * goldens come only from the Swift generator, never from this code's output. Where the port
+ * improves on upstream by an owner decision, the lines that move are named in
+ * `DELIBERATE_DIVERGENCES` (night + line kind, with the `PORTING.md` D-row) and reported; no other
+ * line may differ, and a listed line that stops differing fails as stale.
  */
 class SleepDifferentialTest {
 
@@ -228,14 +231,52 @@ class SleepDifferentialTest {
         }
     }
 
+    /** One golden line the Kotlin port renders differently ON PURPOSE: a night id and a [lineKind]. */
+    private data class Divergence(val night: String, val kind: String)
+
+    /**
+     * DELIBERATE DIVERGENCES from upstream — owner-approved improvements, each keyed by its name with
+     * the `PORTING.md` D-row in a comment. Only the lines listed here may differ from the goldens
+     * (which stay exactly as upstream's Swift wrote them); each allowed divergence is reported, an
+     * unlisted one fails, and a listed one that no longer diverges fails as stale.
+     */
+    private val DELIBERATE_DIVERGENCES: Map<String, Set<Divergence>> = mapOf(
+        // PORTING D-69: a declined bridge ends night selection's backward chain. Every leapfrog
+        // archive, in UTC (the other zones read none of its blocks as a night), with the guard on.
+        "declined-bridge-stops-the-chain" to listOf(
+            "selection-009", "selection-020", "selection-031", "selection-042", "selection-053",
+            "selection-064", "selection-075", "selection-086", "selection-097", "selection-108",
+        ).flatMap { night ->
+            listOf("default", "noreanchor", "nomorning").map { Divergence(night, "sel UTC $it") }
+        }.toSet(),
+    )
+
+    /** The tokens that identify a golden line among its night's lines: `sel <zone> <variant>`, `selstg <zone>`, else the first token. */
+    private fun lineKind(line: String): String {
+        val t = line.split(' ')
+        val n = when (t[0]) {
+            "sel" -> 3
+            "selstg", "overnight", "stgv", "naps" -> 2
+            else -> 1
+        }
+        return t.take(n).joinToString(" ")
+    }
+
     private class Report {
         val mismatches = mutableListOf<String>()
         val nonIdentical = mutableListOf<String>()
+        /** Allowed divergences seen: improvement name → the lines that diverged. */
+        val allowed = mutableMapOf<String, MutableList<String>>()
+        val allowedSeen = mutableSetOf<Divergence>()
         var doubles = 0
         var lines = 0
     }
 
-    /** Compare one night; whole lines, exact, except tolerated double fields. */
+    /** The improvement that allows [id]'s line [kind] to diverge, or null. */
+    private fun allowedBy(id: String, kind: String): String? =
+        DELIBERATE_DIVERGENCES.entries.firstOrNull { Divergence(id, kind) in it.value }?.key
+
+    /** Compare one night; whole lines, exact, except tolerated double fields and listed deliberate divergences. */
     private fun compare(id: String, expected: List<String>, actual: List<String>, report: Report) {
         report.lines += expected.size
         if (expected.size != actual.size) {
@@ -245,6 +286,13 @@ class SleepDifferentialTest {
         for (k in expected.indices) {
             val e = expected[k]
             val a = actual[k]
+            val kind = lineKind(e)
+            val improvement = allowedBy(id, kind)
+            if (improvement != null && e != a && lineKind(a) == kind) {
+                report.allowed.getOrPut(improvement) { mutableListOf() } += "$id: golden '$e' kotlin '$a'"
+                report.allowedSeen += Divergence(id, kind)
+                continue
+            }
             val eTokens = e.split(' ')
             if (eTokens[0] in DOUBLE_FIELDS) {
                 val aTokens = a.split(' ')
@@ -302,12 +350,19 @@ class SleepDifferentialTest {
                 "${report.nonIdentical.size} not bit-identical (tolerated within 1e-9), ${report.mismatches.size} mismatches",
         )
         report.nonIdentical.forEach { println("  not bit-identical: $it") }
+        for ((improvement, entries) in DELIBERATE_DIVERGENCES) {
+            val seen = report.allowed[improvement].orEmpty()
+            println("  deliberate divergence $improvement: ${seen.size} golden line(s) in ${entries.size} listed night line kind(s)")
+            seen.forEach { println("    $it") }
+        }
         val nightsDiffering = report.mismatches.map { it.substringBefore(' ').trimEnd(':') }.toSet().size
         assertTrue(
             report.mismatches.isEmpty(),
             "${report.mismatches.size} mismatch(es) in $nightsDiffering night(s) differ from upstream:\n" +
-                report.mismatches.take(20).joinToString("\n"),
+                report.mismatches.joinToString("\n"),
         )
+        val stale = DELIBERATE_DIVERGENCES.flatMap { (improvement, entries) -> entries.filter { it !in report.allowedSeen }.map { "$improvement: $it" } }
+        assertTrue(stale.isEmpty(), "${stale.size} listed deliberate divergence(s) no longer diverge — remove them:\n" + stale.joinToString("\n"))
     }
 
     @Test
