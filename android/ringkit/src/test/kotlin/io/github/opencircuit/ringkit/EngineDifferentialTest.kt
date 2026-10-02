@@ -309,9 +309,9 @@ class EngineDifferentialTest {
 
     @Test
     fun everyBranchTheGeneratorNamesIsReachedWithinTheSizeBound() {
-        val inputLines = lines("inputs.txt").size
-        val goldenLines = lines("goldens.txt").size
-        assertTrue(inputLines + goldenLines < 6_000, "inputs + goldens must stay under 6 000 lines, got ${inputLines + goldenLines}")
+        // The Swift random draws (`SwiftRandomTest`'s golden) count toward the same bound.
+        val dataLines = lines("inputs.txt").size + lines("goldens.txt").size + lines("random.txt").size
+        assertTrue(dataLines < 6_000, "inputs + goldens + random draws must stay under 6 000 lines, got $dataLines")
 
         // Every shape the inputs hold has at least three cases.
         val shapes = inputs().groupingBy { "${it.kind}/${it.shape}" }.eachCount()

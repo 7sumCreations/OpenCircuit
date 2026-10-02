@@ -1,8 +1,10 @@
-// EngineDifferential — runs upstream's engine functions over seeded synthetic inputs and writes three
+// EngineDifferential — runs upstream's engine functions over seeded synthetic inputs and writes four
 // files into the directory given as the only argument:
 //
 //   inputs.txt    every case's inputs
 //   goldens.txt   upstream's canonical outputs for each case
+//   random.txt    the Swift standard library's random draws the headache evaluation tests are built
+//                 from, read by `SwiftRandomTest` (format with the code, "Swift's random draws" below)
 //   coverage.txt  how many cases reached each named branch
 //
 // It is narrow by design: only the named sites where a line-for-line port can silently differ —
@@ -62,7 +64,7 @@ import Foundation
 
 // MARK: - Deterministic randomness
 
-struct SplitMix64 {
+struct SplitMix64: RandomNumberGenerator {
     var state: UInt64
 
     mutating func next() -> UInt64 {
@@ -396,6 +398,128 @@ func anglesCase(_ index: Int) -> Case {
     return c
 }
 
+// MARK: - Swift's random draws, as the headache evaluation tests make them
+//
+// Upstream's HeadacheEvaluationTests build their synthetic years from a test-local SplitMix64 driving
+// the standard library's `Double.random(in:using:)`, `Int.random(in:using:)` and `shuffle(using:)`,
+// plus a Box-Muller `gaussian` over Foundation's `log` and `cos`. The Kotlin port reproduces those
+// draws in a test helper; random.txt is what it is checked against. Each line starts a FRESH generator
+// from its seed, draws the shape a number of times and records the generator's state afterwards, so a
+// draw that consumed a different number of words (a rejected integer, a retried double) shows.
+
+/// The upstream test's `gaussian`, verbatim.
+func gaussian(_ rng: inout SplitMix64) -> Double {
+    let u1 = Double.random(in: 1e-12..<1, using: &rng)
+    let u2 = Double.random(in: 0..<1, using: &rng)
+    return (-2 * Foundation.log(u1)).squareRoot() * Foundation.cos(2 * .pi * u2)
+}
+
+/// The random half of the upstream test's `makeYear`, verbatim: which days are positive, then each
+/// day's index from a latent N(0, 1) shifted by `dPrime` on positive days.
+func yearDraws(count: Int, positives: Int, dPrime: Double, rng: inout SplitMix64) -> (positive: [Bool], indices: [Int]) {
+    var isPositive = [Bool](repeating: false, count: count)
+    for i in 0..<min(positives, count) { isPositive[i] = true }
+    isPositive.shuffle(using: &rng)
+    var indices = [Int](repeating: 0, count: count)
+    for i in 0..<count {
+        let latent = gaussian(&rng) + (isPositive[i] ? dPrime : 0)
+        indices[i] = max(0, Int((20 * latent + 5).rounded()))
+    }
+    return (isPositive, indices)
+}
+
+func u64(_ x: UInt64) -> String {
+    let h = String(x, radix: 16)
+    return String(repeating: "0", count: 16 - h.count) + h
+}
+
+/// The seeds of three of the upstream tests, with the d' each of them draws its year at.
+let rngSeeds: [(seed: UInt64, dPrime: Double)] = [(0x5EED_1234, 0), (0x1234_5678, 1.40), (0xFACE_0001, 0.55)]
+let rngDraws = 24
+
+/// One line: `<shape> <state after> <values>`, from a fresh generator seeded with `seed`.
+func rngLine(_ shape: String, _ seed: UInt64, _ draw: (inout SplitMix64) -> String) -> String {
+    var rng = SplitMix64(state: seed)
+    var values: [String] = []
+    for _ in 0..<rngDraws { values.append(draw(&rng)) }
+    return "\(shape) \(u64(rng.state)) " + values.joined(separator: " ")
+}
+
+/// A generator that counts the words drawn from it.
+struct CountingGenerator: RandomNumberGenerator {
+    var inner: SplitMix64
+    var calls = 0
+    mutating func next() -> UInt64 {
+        calls += 1
+        return inner.next()
+    }
+}
+
+/// How many words each of the first draws consumed, to name the rejection and retry branches.
+func words(_ seed: UInt64, _ draw: (inout CountingGenerator) -> Void) -> [Int] {
+    var rng = CountingGenerator(inner: SplitMix64(state: seed))
+    var out: [Int] = []
+    for _ in 0..<rngDraws {
+        let before = rng.calls
+        draw(&rng)
+        out.append(rng.calls - before)
+    }
+    return out
+}
+
+func randomLines() -> [String] {
+    var lines: [String] = []
+    // The upper half of Int: a draw is rejected about a quarter of the time (Lemire's method).
+    let wideLo = Int.min, wideHi = Int.max / 2
+    // One ulp wide: delta · u rounds up to the upper bound about half the time, and is drawn again.
+    let narrowLo = 1.0, narrowHi = 1.0.nextUp
+    for (seed, dPrime) in rngSeeds {
+        lines.append("seed \(u64(seed))")
+        lines.append(rngLine("next", seed) { u64($0.next()) })
+        lines.append(rngLine("unit", seed) { d(Double.random(in: 0..<1, using: &$0)) })
+        lines.append(rngLine("u1", seed) { d(Double.random(in: 1e-12..<1, using: &$0)) })
+        lines.append(rngLine("wide-double", seed) { d(Double.random(in: -1e300..<1e300, using: &$0)) })
+        lines.append(rngLine("narrow-double", seed) { d(Double.random(in: narrowLo..<narrowHi, using: &$0)) })
+        lines.append(rngLine("int-1-12", seed) { String(Int.random(in: 1...12, using: &$0)) })
+        lines.append(rngLine("int-0-4", seed) { String(Int.random(in: 0...4, using: &$0)) })
+        lines.append(rngLine("int-0-360", seed) { String(Int.random(in: 0..<360, using: &$0)) })
+        lines.append(rngLine("int-wide", seed) { String(Int.random(in: wideLo...wideHi, using: &$0)) })
+        lines.append(rngLine("int-full", seed) { String(Int.random(in: Int.min...Int.max, using: &$0)) })
+        lines.append(rngLine("gauss", seed) { d(gaussian(&$0)) })
+        var shuffled = SplitMix64(state: seed)
+        var xs = Array(0..<360)
+        xs.shuffle(using: &shuffled)
+        lines.append("shuffle-360 \(u64(shuffled.state))" + ints(xs))
+        var year = SplitMix64(state: seed)
+        let (positive, indices) = yearDraws(count: 360, positives: 48, dPrime: dPrime, rng: &year)
+        lines.append("year \(d(dPrime)) \(u64(year.state)) positive"
+            + ints(positive.indices.filter { positive[$0] }) + " index" + ints(indices))
+
+        let wide = words(seed) { _ = Int.random(in: wideLo...wideHi, using: &$0) }
+        hit("rng-int-accepted-first", wide.contains(1))
+        hit("rng-int-rejected", wide.contains { $0 > 1 })
+        let narrow = words(seed) { _ = Double.random(in: narrowLo..<narrowHi, using: &$0) }
+        hit("rng-double-accepted-first", narrow.contains(1))
+        hit("rng-double-redrawn", narrow.contains { $0 > 1 })
+        hit("rng-year-index-zero", indices.contains(0))
+        hit("rng-year-index-positive", indices.contains { $0 > 0 })
+    }
+    // Foundation's erfc, which the upstream p-value test calls: whole and half steps over -4…8, the
+    // tails, and the argument that test passes.
+    let total = 180.0, positives = 24.0, flagged = 18.0, observed = 6.0
+    let p = positives / total
+    let mean = flagged * p
+    let variance = flagged * p * (1 - p) * (total - flagged) / (total - 1)
+    let testArgument = ((observed - 0.5 - mean) / variance.squareRoot()) / 2.0.squareRoot()
+    let erfcArgs = stride(from: -4.0, through: 8.0, by: 0.125).map { $0 } + [-30, -6, 1e-9, -1e-9, 0, 12, 20, 26, 27.25, testArgument]
+    for chunk in stride(from: 0, to: erfcArgs.count, by: 25) {
+        let xs = erfcArgs[chunk..<min(chunk + 25, erfcArgs.count)]
+        lines.append("erfc" + xs.map { " " + d($0) + " " + d(erfc($0)) }.joined())
+        hit("rng-erfc")
+    }
+    return lines
+}
+
 // MARK: - Main
 
 let args = CommandLine.arguments
@@ -421,6 +545,7 @@ for c in cases {
     goldens += c.goldens
     goldens.append("end")
 }
+let random = [header] + randomLines()
 let coverageLines = [header] + coverage.keys.sorted().map { "branch \($0) \(coverage[$0]!)" }
 
 func write(_ lines: [String], _ file: String) throws {
@@ -429,11 +554,12 @@ func write(_ lines: [String], _ file: String) throws {
 do {
     try write(inputs, "inputs.txt")
     try write(goldens, "goldens.txt")
+    try write(random, "random.txt")
     try write(coverageLines, "coverage.txt")
 } catch {
     FileHandle.standardError.write("write failed: \(error)\n".data(using: .utf8)!)
     exit(1)
 }
 let elapsed = Date().timeIntervalSince(started)
-print("cases \(cases.count), input lines \(inputs.count), golden lines \(goldens.count), generated in \(Int((elapsed * 1000).rounded())) ms")
+print("cases \(cases.count), input lines \(inputs.count), golden lines \(goldens.count), random lines \(random.count), generated in \(Int((elapsed * 1000).rounded())) ms")
 for l in coverageLines.dropFirst() { print(l) }

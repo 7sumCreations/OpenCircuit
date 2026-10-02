@@ -10,6 +10,13 @@ branch reg-midnight-wrap 22
 branch reg-nil 34
 branch reg-outside-day 28
 branch reg-tiny-r 14
+branch rng-double-accepted-first 3
+branch rng-double-redrawn 3
+branch rng-erfc 5
+branch rng-int-accepted-first 3
+branch rng-int-rejected 3
+branch rng-year-index-positive 3
+branch rng-year-index-zero 3
 branch roll-all-nil 2
 branch roll-empty-list 6
 branch roll-hr-guarded 49

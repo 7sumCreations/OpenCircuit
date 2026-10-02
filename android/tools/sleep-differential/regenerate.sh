@@ -21,7 +21,8 @@
 #   4. copies this tool next to it and builds the target's generator alone with
 #      `swift build --product <generator> -j 4`, scratch space inside the temporary directory
 #      (debug, so the generator may count internal branches);
-#   5. runs the generator, which writes inputs.txt, goldens.txt and coverage.txt into the target's
+#   5. runs the generator, which writes inputs.txt, goldens.txt and coverage.txt (the engine target
+#      also random.txt, the Swift random draws the headache tests are built from) into the target's
 #      directory under android/ringkit/src/test/resources/ and prints the branch counts. The vitals
 #      and engine generators run with SWIFT_DETERMINISTIC_HASHING=1: upstream's energy ledger (and
 #      some engines) iterate a dictionary or set, whose order Swift seeds per process, and without a
@@ -87,4 +88,4 @@ if [ "$HASHING" = 1 ]; then
 else
   "$bin/$GENERATOR" "$OUT_DIR"
 fi
-echo "regenerate: wrote $(cd "$OUT_DIR" && ls inputs.txt goldens.txt coverage.txt | tr '\n' ' ')" >&2
+echo "regenerate: wrote $(cd "$OUT_DIR" && ls ./*.txt | tr '\n' ' ')" >&2
