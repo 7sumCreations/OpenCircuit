@@ -14,8 +14,8 @@ import kotlin.test.assertTrue
  *  • `[15:23)` is five 12-bit big-endian magnitudes, nibble-packed, plus a 4-bit `info` flag.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/BulkRecordTailAndSentinelTests.swift
- * (@ b1c2fdd) — 9 of 10 tests. Not ported here: the SpO2-cadence test (`:132`), which exercises
- * sleep staging and ports with it.
+ * (@ b1c2fdd) — all 10 tests. The SpO2-cadence test (`:132`) exercises sleep staging and arrived
+ * with it.
  *
  * Known-answer tests over hand-built bytes: the nibbles are chosen so that field order, nibble
  * order, field width and the flag's position are each pinned by a value no other packing produces.
@@ -145,5 +145,30 @@ class BulkRecordTailAndSentinelTest {
         assertEquals(BulkRecord.Layout.SLEEP_VITALS, r.layout)
         assertEquals(80, r.spo2Percent)
         assertEquals(61, r.hrvRMSSD)
+    }
+
+    // Interaction with the SpO2-cadence wake locator
+
+    @Test
+    fun zero11BreaksTheSpO2CadenceInsteadOfExtendingIt() { // :132-147
+        // The ring alternates sleepVitals/activity 1:1 while it measures sleep. A 0x11 record read as
+        // sleep-vitals looks like the next SpO2 read and EXTENDS the trusted run past the point the
+        // ring actually stopped; read as the sentinel it is, two consecutive no-SpO2 epochs are the
+        // violation they really are. Every 0x11 in upstream's corpus follows an ACTIVITY epoch.
+        val t0 = java.time.Instant.ofEpochSecond(1_700_000_000L)
+        val times = (0 until 5).map { t0.plusSeconds(it * BulkRecord.EPOCH_SECONDS.toLong()) }
+        val dead = record(
+            head = bytes(0x04, 0, 0, 0), spo2Byte = 0x11,
+            motion = bytes(0x8a, 0x8a, 0x8a, 0x8a, 0x8a), tail = bytes(0, 0, 0, 0, 0, 0, 0, 0x04),
+        )
+        val layouts = listOf(
+            BulkRecord.Layout.SLEEP_VITALS, BulkRecord.Layout.ACTIVITY, BulkRecord.Layout.SLEEP_VITALS,
+            BulkRecord.Layout.ACTIVITY, dead.layout,
+        )
+        val steps = SleepStaging.cadenceSteps(times, layouts)
+        assertEquals(
+            List(3) { SleepStaging.CadenceStep.ALTERNATING }, steps.drop(1).take(3),
+        )
+        assertEquals(SleepStaging.CadenceStep.VIOLATION, steps[4], "activity → 0x11 is two no-SpO2 epochs in a row")
     }
 }

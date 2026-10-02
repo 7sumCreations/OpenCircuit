@@ -1,9 +1,13 @@
 package io.github.opencircuit.ringkit
 
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -13,8 +17,10 @@ import kotlin.test.assertTrue
  * inside one epoch, so `motionSource` must fall through to the `[15:20]` intensity tail.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/FR04DegeneratePrimaryMotionTests.swift
- * (@ b1c2fdd) — 10 of 13 tests. The three that need sleep detection and staging (`:103`, `:115`,
- * `:228`) port with the night half of `BulkSleep`.
+ * (@ b1c2fdd) — all 13 tests. The three that need sleep detection and staging (`:103`, `:115`,
+ * `:228`) arrived with the night half of `BulkSleep`. Upstream's `latestNightRecords(from:)` reads
+ * the device's zone; here it is named ([deviceZone], America/New_York — measured on the pinned Swift
+ * build, `:103` passes there and in every other zone tried).
  *
  * All data is SYNTHETIC: it reproduces the failure shape, not a person's night. Every fixture
  * number is typed from upstream. The noise generator is upstream's deterministic xorshift; JUnit
@@ -23,6 +29,9 @@ import kotlin.test.assertTrue
 class FR04DegeneratePrimaryMotionTest {
 
     private val step = BulkRecord.EPOCH_SECONDS.toLong()
+
+    /** The device zone upstream's `latestNightRecords(from:)` would read. */
+    private val deviceZone: ZoneId = ZoneId.of("America/New_York")
 
     // :20-24 — deterministic small noise, never `random`, so the suite never flakes.
     private var seed: ULong = 0x9E3779B97F4A7C15uL
@@ -104,6 +113,33 @@ class FR04DegeneratePrimaryMotionTest {
             "a fixed intra-epoch step that never resolves stillness is a non-expressive channel",
         )
         assertEquals(BulkSleep.MotionSource.IntensityTail(degenerate = true), BulkSleep.motionSource(recs))
+    }
+
+    @Test
+    fun fixedIntraEpochStepStagesANight() { // :103-110
+        val recs = fr04Night()
+        val block = assertNotNull(
+            BulkSleep.mainSleep(recs),
+            "#184: a complete FR04 archive must not stage zero sleep (blank card)",
+        )
+        assertTrue(block.duration > Duration.ofHours(5), "the ~6.25 h still block is recovered")
+        assertFalse(BulkSleep.stagedSegments(BulkSleep.latestNightRecords(recs, deviceZone)).isEmpty())
+        assertFalse(BulkSleep.sleepSegments(recs).isEmpty())
+    }
+
+    /**
+     * :112-121 — the primary channel must still WIN when it can express stillness: the awake epochs
+     * vary hugely, but their tails are non-zero, so they are not "quiet" and the predicate never
+     * judges them.
+     */
+    @Test
+    fun allMovingRunIsNotJudgedNonExpressive() {
+        var c = 0x0c50_0000L
+        val out = mutableListOf<BulkRecord>()
+        for (i in 0 until 200) { out += awakeEpoch(c, i); c += step }
+        assertFalse(BulkSleep.primaryMotionIsDegenerate(out))
+        assertEquals(BulkSleep.MotionSource.Primary, BulkSleep.motionSource(out))
+        assertNull(BulkSleep.mainSleep(out), "a moving run is never a night")
     }
 
     @Test
@@ -191,5 +227,43 @@ class FR04DegeneratePrimaryMotionTest {
     fun otsuNeverSplitsATie() { // :219-222
         assertEquals(64, BulkSleep.otsuIntensityCut(listOf(64, 64)))
         assertEquals(7, BulkSleep.otsuIntensityCut(listOf(7)))
+    }
+
+    /**
+     * :224-252 — a sedentary-but-AWAKE evening on this ring reads still on the (non-expressive)
+     * primary channel and only the tail can reject it. With the 0.80 quantile those epochs map to `1`,
+     * below the still threshold, and detection swallows the evening into the night. Onset must land
+     * after it.
+     */
+    @Test
+    fun sedentaryEveningIsNotSwallowedIntoTheNight() {
+        var c = 0x0c50_0000L
+        val out = mutableListOf<BulkRecord>()
+        for (i in 0 until 8) { out += awakeEpoch(c, i); c += step }
+        val eveningStart = out.last().date(Command.SYNC_EPOCH)
+        // 60 epochs (2.5 h) of sedentary evening: FR04 still-shaped primary, but a MODERATE non-zero
+        // tail — the ring says movement happened.
+        for (i in 0 until 60) {
+            val level = 60 + (i * 7) % 90
+            out += record(
+                c, hr = 84, primary = listOf(27, 27, 34, 34, 35).map { maxOf(0, it + jitter(2)) },
+                tail = List(5) { level }, sleepVitals = false,
+            )
+            c += step
+        }
+        val nightStart = c
+        repeat(150) { out += steppedStillEpoch(c); c += step }
+        for (i in 0 until 8) { out += awakeEpoch(c, i); c += step }
+
+        val block = assertNotNull(BulkSleep.mainSleep(out))
+        val nightStartDate = Instant.ofEpochSecond(nightStart + Command.SYNC_EPOCH)
+        assertTrue(
+            Duration.between(eveningStart, block.start) > Duration.ofHours(1),
+            "onset must not sit in the awake evening",
+        )
+        assertTrue(
+            Duration.between(nightStartDate, block.start).abs() < Duration.ofHours(1),
+            "onset lands at the start of the genuinely still stretch",
+        )
     }
 }

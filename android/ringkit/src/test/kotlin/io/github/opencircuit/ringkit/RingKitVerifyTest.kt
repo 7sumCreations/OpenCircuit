@@ -1,5 +1,6 @@
 package io.github.opencircuit.ringkit
 
+import java.time.Duration
 import java.time.Instant
 import kotlin.math.abs
 import kotlin.test.Test
@@ -18,9 +19,11 @@ import kotlin.test.assertTrue
  * :72-83, SpO₂ :85-92, descriptor steps :94-101, skin temperature :103-110, battery + zero-temp
  * :112-117, metric models :155-158, SM3/auth :264-276. E2: helpers `makeFrame` :22-25 and
  * `makeEpochRecord` :26-34, epoch sync Layer A :119-152, `SyncCursor` :160-185, cumulative
- * counters :187-204, bulk `0x4c` decode :305-343. Each upstream `check` becomes one assertion
- * carrying its message; each area is one named test. The rest of the file (analytics, sleep
- * detection …) moves with the epic that ports the code it checks.
+ * counters :187-204, bulk `0x4c` decode :305-343. E3: motion-channel sleep detection :347-371, the
+ * experimental staging check :373-389, the data-gap fragment and stitch checks :390-407, the
+ * zero-payload regression :408-411 and the sleep-stage classifier :413-451. Each upstream `check`
+ * becomes one assertion carrying its message; each area is one named test. The rest of the file
+ * moves with the epic that ports the code it checks.
  *
  * Upstream builds the :104/:113/:116 fixtures with an embedded space removed
  * (`"…1019 02ffaf".replacingOccurrences(of: " ", with: "")`); the strings below are the result.
@@ -369,5 +372,163 @@ class RingKitVerifyTest {
             RingAuth.macFromSystemID(bytes(0xf8, 0x79, 0x99, 0xff, 0xfe, 0xf7, 0x03, 0xad)),
             "macFromSystemID parses EUI-64",
         )
+    }
+
+    // E3: motion-channel sleep detection :347-371, staging :373-389, the data-gap fragment and
+    // stitch checks :390-407, the zero-payload decode regression :408-411 and the classifier
+    // checks :413-451.
+
+    /** :348-355 — a 23-byte `0x4c` record: BE counter, `[8]` sub-type, motion `[10:15]`, rest zero. */
+    private fun bulkRec(c: Long, motion: Int, sub: Int): BulkRecord {
+        val b = ByteArray(23)
+        b[0] = (c shr 24).toByte(); b[1] = ((c shr 16) and 0xFF).toByte()
+        b[2] = ((c shr 8) and 0xFF).toByte(); b[3] = (c and 0xFF).toByte()
+        b[8] = sub.toByte()
+        for (k in 0 until 5) b[10 + k] = motion.toByte()
+        return assertNotNull(BulkRecord.of(b))
+    }
+
+    /** :374-376 — a still sleep-vitals epoch (`0x62`) carrying an HR in `[4]`. */
+    private fun vrec(c: Long, motion: Int, hr: Int): BulkRecord {
+        val b = bulkRec(c, motion, sub = 0x62).raw
+        b[4] = hr.toByte()
+        return assertNotNull(BulkRecord.of(b))
+    }
+
+    @Test
+    fun motionChannelSleepDetection() { // :347-371 — active -> still (9 h) -> active finds the night.
+        // Active flanks use VARYING motion — a constant reading at any level is an idle/still
+        // signature under the local floor, and constant flanks would bridge into the block.
+        fun activeMotion(i: Int): Int = intArrayOf(0x0a, 0x28, 0x50)[i % 3]
+        val night = mutableListOf<BulkRecord>()
+        var cc = 0x0c220000L
+        for (i in 0 until 20) { night += bulkRec(cc, activeMotion(i), sub = 0x12); cc += 150 }
+        repeat(216) { night += bulkRec(cc, motion = 0x01, sub = 0x62); cc += 150 }
+        for (i in 0 until 20) { night += bulkRec(cc, activeMotion(i), sub = 0x12); cc += 150 }
+
+        val block = BulkSleep.mainSleep(night)
+        assertTrue(block?.activity == Activity.SLEEP, "motion detection finds the sleep block")
+        assertTrue(abs((block?.duration?.seconds ?: 0L) - 216 * 150) < 30 * 60, "sleep block ~9 h")
+        assertTrue(BulkSleep.sleepSegments(night).any { it.stage == SleepStage.IN_BED }, "sleepSegments emits inBed")
+        assertNull(BulkSleep.mainSleep(night.take(20)), "all-active -> no sleep block")
+    }
+
+    /**
+     * :377-386 — the experimental staging night: Deep is FLAT; REM/Light carry HR jitter (that
+     * variability keeps them out of Deep). REM stays below the wake threshold (floor 50 + 18).
+     */
+    private fun stagedNight(): List<BulkRecord> {
+        val staged = mutableListOf<BulkRecord>()
+        var sc = 0x0c220000L
+        repeat(20) { staged += bulkRec(sc, motion = 0x14, sub = 0x12); sc += 150 }
+        for (k in 0 until 60) { staged += vrec(sc, motion = 0x01, hr = if (k % 2 == 0) 62 else 70); sc += 150 } // REM band
+        repeat(60) { staged += vrec(sc, motion = 0x01, hr = 50); sc += 150 } // Deep band (flat)
+        for (k in 0 until 60) { staged += vrec(sc, motion = 0x01, hr = if (k % 2 == 0) 56 else 62); sc += 150 } // Light (jittery)
+        repeat(20) { staged += bulkRec(sc, motion = 0x14, sub = 0x12); sc += 150 }
+        return staged
+    }
+
+    /** :392-400 — two ~2.5 h sleep cores separated by a 2 h hole (the "sleep shrinks on every sync" fix). */
+    private fun stitchedNight(): List<BulkRecord> {
+        val frag = mutableListOf<BulkRecord>()
+        var fc = 0x0c220000L
+        repeat(8) { frag += bulkRec(fc, motion = 0x14, sub = 0x12); fc += 150 }
+        repeat(60) { frag += vrec(fc, motion = 0x01, hr = 52); fc += 150 }
+        repeat(8) { frag += bulkRec(fc, motion = 0x14, sub = 0x12); fc += 150 }
+        fc += 2 * 3600 // data gap (dropped epochs)
+        repeat(8) { frag += bulkRec(fc, motion = 0x14, sub = 0x12); fc += 150 }
+        repeat(60) { frag += vrec(fc, motion = 0x01, hr = 52); fc += 150 }
+        repeat(8) { frag += bulkRec(fc, motion = 0x14, sub = 0x12); fc += 150 }
+        return frag
+    }
+
+    private fun secs(d: Duration?): Double = if (d == null) 0.0 else d.seconds + d.nano / 1e9
+
+    @Test
+    fun stagingSeparatesDeepRemLightByHeartRateBand() { // :373-389 — experimental staging (sleep-vitals sub 0x62).
+        val stages = BulkSleep.stagedSegments(stagedNight()).map { it.stage }.toSet()
+        assertTrue(
+            SleepStage.ASLEEP_DEEP in stages && SleepStage.ASLEEP_REM in stages && SleepStage.ASLEEP_CORE in stages,
+            "staging separates Deep/REM/Light by HR band (experimental)",
+        )
+    }
+
+    @Test
+    fun dataGapSplitsIntoTwoFragments() { // :390-401
+        assertEquals(2, BulkSleep.contiguousFragments(stitchedNight()).size, "data gap splits into two fragments")
+    }
+
+    @Test
+    fun stitchedNightIsStagedAcrossBothFragments() { // :402-407
+        val stitched = SleepStaging.classify(stitchedNight())
+        assertEquals(2, stitched.count { it.stage == SleepStage.IN_BED }, "stitch: one inBed segment per fragment")
+        val stitchedSummary = SleepStaging.summary(stitched)
+        assertTrue(
+            abs(secs(stitchedSummary.totalAsleep) - 120 * 150) < 30 * 60,
+            "stitch: asleep spans BOTH fragments (~2×2.5 h), not just one",
+        )
+    }
+
+    @Test
+    fun zeroPayloadSleepEpochKeepsHeartRate() { // :408-411 — baseline motion + zero payload is NOT idle.
+        val zeroPayloadSleep = assertNotNull(BulkRecord.of(hex("0c22cd8b38520973620a01010101010000000000000004")))
+        assertTrue(
+            zeroPayloadSleep.layout == BulkRecord.Layout.SLEEP_VITALS && zeroPayloadSleep.heartRate == 0x38,
+            "zero-payload sleep epoch keeps HR (not mistaken for idle)",
+        )
+    }
+
+    // Sleep-stage classifier (SleepStaging, PROTOCOL.md §5.3) :413-451
+
+    @Test
+    fun stagedSegmentsDelegatesToClassify() { // :413-416
+        val staged = stagedNight()
+        assertEquals(
+            SleepStaging.classify(staged), BulkSleep.stagedSegments(staged),
+            "BulkSleep.stagedSegments delegates to SleepStaging.classify",
+        )
+    }
+
+    @Test
+    fun calmFlatLowHeartRateIsMostlyDeep() { // :418-428
+        val deepNight = mutableListOf<BulkRecord>()
+        var dc = 0x0c220000L
+        repeat(12) { deepNight += bulkRec(dc, motion = 0x14, sub = 0x12); dc += 150 }
+        repeat(120) { deepNight += vrec(dc, motion = 0x01, hr = 50); dc += 150 }
+        repeat(12) { deepNight += bulkRec(dc, motion = 0x14, sub = 0x12); dc += 150 }
+        val deepTotals = SleepStaging.stageTotals(SleepStaging.classify(deepNight))
+        val deep = secs(deepTotals[SleepStage.ASLEEP_DEEP])
+        val deepAsleep = deep + secs(deepTotals[SleepStage.ASLEEP_CORE]) + secs(deepTotals[SleepStage.ASLEEP_REM])
+        assertTrue(deepAsleep > 0 && deep / deepAsleep > 0.8, "calm flat low HR -> mostly Deep")
+        assertEquals(0.0, secs(deepTotals[SleepStage.ASLEEP_REM]), "calm flat HR -> no REM")
+    }
+
+    @Test
+    fun constructedNightPartitionsLikeATracker() { // :430-451 — Light ≫ REM > Deep, modest awake.
+        fun vrecHRV(c: Long, hr: Int, hrv: Int): BulkRecord {
+            val b = vrec(c, motion = 0x01, hr = hr).raw
+            b[5] = hrv.toByte()
+            return assertNotNull(BulkRecord.of(b))
+        }
+        val night2 = mutableListOf<BulkRecord>()
+        var nc = 0x0c220000L
+        repeat(8) { night2 += bulkRec(nc, motion = 0x14, sub = 0x12); nc += 150 }
+        for (cycle in 0 until 5) {
+            // Light/REM jitter, Deep flat — the model separates Deep by FLATNESS, not just low HR.
+            for (k in 0 until 10) { night2 += vrecHRV(nc, hr = if (k % 2 == 0) 54 else 62, hrv = 60); nc += 150 } // Light (jittery)
+            repeat(8) { night2 += vrecHRV(nc, hr = 50, hrv = 70); nc += 150 } // Deep (flat)
+            for (k in 0 until 8) { night2 += vrecHRV(nc, hr = if (k % 2 == 0) 54 else 62, hrv = 60); nc += 150 } // Light (jittery)
+            for (k in 0 until 10) { night2 += vrecHRV(nc, hr = if (k % 2 == 0) 64 else 78, hrv = 45); nc += 150 } // REM (elevated, jittery)
+            if (cycle < 4) repeat(2) { night2 += bulkRec(nc, motion = 0x15, sub = 0x12); nc += 150 }
+        }
+        repeat(8) { night2 += bulkRec(nc, motion = 0x14, sub = 0x12); nc += 150 }
+        val s = SleepStaging.summary(SleepStaging.classify(night2))
+        assertTrue(
+            s.deep > Duration.ZERO && s.rem > Duration.ZERO && s.light > Duration.ZERO && s.awake > Duration.ZERO,
+            "constructed night has all 4 stages",
+        )
+        assertTrue(s.light > s.rem && s.rem > s.deep, "architecture sanity: Light ≫ REM > Deep")
+        assertTrue(abs(secs(s.inBed) - (secs(s.totalAsleep) + secs(s.awake))) < 150, "inBed ≈ asleep + awake (partition)")
+        assertTrue(s.efficiency > 0.6 && s.efficiency <= 1.0, "plausible sleep efficiency")
     }
 }
