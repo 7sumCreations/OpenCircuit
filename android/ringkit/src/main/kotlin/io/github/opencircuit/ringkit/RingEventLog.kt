@@ -149,8 +149,12 @@ class RingActivityEventLedger(
 
     companion object {
         /**
-         * How long a marker is kept. Upstream's alert engine looks back at most ~24 h, so 48 h keeps
-         * every marker it can ask about with a day of margin, and bounds the stored blob.
+         * How long a marker is kept. The alert look-back ([HealthAlertLookback.instantLookback]) reaches
+         * back at most 35 h 59 min (12 h plus quiet hours of up to 23 h 59 min), and a session's start
+         * marker can sit the 4 h [RingEventLog.OPEN_SESSION_CAP] plus the 10 min lead and the 10 min
+         * recovery pad before the oldest reading it must still suppress — 40 h 19 min in all. So 48 h
+         * keeps every marker the alert gate can ask about, and bounds the stored blob.
+         * `AlertLookbackRetentionTest` pins this over every quiet-hours window.
          */
         val RETENTION: Duration = Duration.ofHours(48)
 
