@@ -67,7 +67,9 @@ class CyclePredictorHazardTest {
         val atTheEnd = assertNotNull(CyclePredictor.predict(base, now = Instant.MAX))
         assertEquals(Instant.MAX, atTheEnd.nextPeriodStart, "a step past the last instant saturates")
         assertEquals(Instant.MAX, atTheEnd.nextPeriodEnd)
-        assertTrue(atTheEnd.ovulationEstimate.isBefore(Instant.MAX))
+        // Every date saturates in the same direction, so their order is kept.
+        assertFalse(atTheEnd.fertileWindowStart.isAfter(atTheEnd.ovulationEstimate))
+        assertFalse(atTheEnd.ovulationEstimate.isAfter(atTheEnd.nextPeriodStart))
         val now = unix(1_786_400_000.0)
         val cycle = 28 * day
         for (start in listOf(Instant.MIN, Instant.MIN.plusSeconds(12_345))) {
