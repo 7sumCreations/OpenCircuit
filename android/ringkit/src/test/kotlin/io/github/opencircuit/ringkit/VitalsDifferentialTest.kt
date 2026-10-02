@@ -22,8 +22,10 @@ import kotlin.test.assertTrue
  * the derived resting baseline, the thresholds, the elevated pieces, exercise minutes, the legacy
  * daily estimate and the attributed estimate with every bucket at several widths — including days
  * across both 2026 New York clock changes and a day without a midnight, duplicated and unsorted
- * samples, windows that straddle the day's edges, and hostile windows and widths).
- * The format is documented at the top of the generator's `main.swift`.
+ * samples, windows that straddle the day's edges, and hostile windows and widths), and on each of
+ * those days the energy write ledger and write window: flushes replayed in order and out of order
+ * with each plan's state committed, upgrade-day seeding, write-window queries, and (hostile days)
+ * unreadable stored states. The format is documented at the top of the generator's `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
  * `d` + 16 hex digits), which must agree within 1e-9; every double that is not bit-identical is
