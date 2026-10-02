@@ -34,8 +34,9 @@ import kotlin.test.assertTrue
  * the statistics and the predicted dates of whole-day, fractional-second, stale (rolled forward for
  * centuries, to Foundation's distant future), clock-change (New York 2026), hostile, skin-temperature
  * and edge histories — every date as Foundation holds it, a double of seconds since 2001, converted to
- * and from the port's `Instant`s by `FoundationDate`. The format is documented at the top of the
- * generator's `main.swift`.
+ * and from the port's `Instant`s by `FoundationDate`. Ring proximity: the path-loss distance (`pow`) in
+ * metres and feet and its display text, at every reading from −110 to +10 dBm and at the sentinels and
+ * 32-bit ends. The format is documented at the top of the generator's `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
  * `d` + 16 hex digits), which must agree within 1e-9 — or, for a predicted date (a `pr` line), within
@@ -140,7 +141,21 @@ class EngineDifferentialTest {
         "se" -> renderStandardErrors(c)
         "tail" -> renderTail(c)
         "cycle" -> renderCycle(c)
+        "prox" -> renderProximity(c)
         else -> error("unknown kind ${c.kind}")
+    }
+
+    // --- ring proximity (the path-loss distance through `pow`, and its text as UTF-8 bytes) ---
+
+    private fun utf8Token(s: String): String = "u" + s.toByteArray(Charsets.UTF_8).joinToString("") { b -> Integer.toHexString(b.toInt() and 0xff).padStart(2, '0') }
+
+    private fun renderProximity(c: ECase): List<String> {
+        val readings = c.lines.single { it.startsWith("r ") }.split(' ').drop(1).map(::inInt)
+        return listOf(
+            "pm" + readings.joinToString("") { " " + optD(RingProximity.approximateMeters(it)) },
+            "pf" + readings.joinToString("") { " " + optD(RingProximity.approximateFeet(it)) },
+            "pt" + readings.joinToString("") { " " + (RingProximity.distanceText(it)?.let(::utf8Token) ?: "-") },
+        )
     }
 
     // --- cycle prediction (dates are doubles of seconds since 2001, Foundation's own form) ---

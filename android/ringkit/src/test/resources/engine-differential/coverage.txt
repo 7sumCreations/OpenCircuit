@@ -29,6 +29,11 @@ branch libm-log 3
 branch pct-empty 1
 branch pct-interpolated 10
 branch pct-single 1
+branch prox-feet-rounded-down 13
+branch prox-feet-rounded-up 16
+branch prox-no-distance 31
+branch prox-right-here 52
+branch prox-twenty-plus 24
 branch rank-nan 6
 branch rank-past-insertion-sort 4
 branch rank-signed-zero 8
