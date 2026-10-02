@@ -568,10 +568,3 @@ object WorkoutBufferedSportFill {
         return Fill(hrSamples = hr.sortedWith(compareBy { it.start }), steps = steps, cursors = used)
     }
 }
-
-/** Swift's `Sequence.max()` over a non-empty list: the first element, replaced by any later one that compares greater. */
-private fun swiftSequenceMax(xs: List<Double>): Double {
-    var result = xs[0]
-    for (k in 1 until xs.size) if (result < xs[k]) result = xs[k]
-    return result
-}

@@ -27,6 +27,13 @@ internal fun swiftSequenceMin(xs: List<Double>): Double {
     return result
 }
 
+/** Swift's `Sequence.max()` over a non-empty list: the first element, replaced by any later one that compares greater. */
+internal fun swiftSequenceMax(xs: List<Double>): Double {
+    var result = xs[0]
+    for (k in 1 until xs.size) if (result < xs[k]) result = xs[k]
+    return result
+}
+
 /** Swift's `rounded()` (to nearest, ties away from zero). */
 internal fun roundHalfAwayFromZero(x: Double): Double {
     val t = truncate(x)
@@ -58,6 +65,15 @@ internal fun swiftSortedIndices(values: DoubleArray): IntArray {
     val order = IntArray(values.size) { it }
     SwiftStableSort.sort(order) { x, y -> values[x] < values[y] }
     return order
+}
+
+/**
+ * Strict `<` on two positions. A `fun interface` over primitive `Int`s, not a `(Int, Int) -> Boolean`
+ * lambda: the generic function type boxes both arguments on every comparison (megabytes per sort of a
+ * night-sized series).
+ */
+private fun interface PositionLess {
+    fun less(x: Int, y: Int): Boolean
 }
 
 /**
@@ -102,11 +118,13 @@ internal const val SWIFT_FIXED_EXACT_DIGITS = 1_100
  * the elements are positions into the caller's values, so one algorithm serves `sorted()` and
  * `indices.sorted(by:)`.
  */
-private class SwiftStableSort(private val less: (Int, Int) -> Boolean) {
+private class SwiftStableSort(private val order: PositionLess) {
 
     companion object {
-        fun sort(a: IntArray, less: (Int, Int) -> Boolean) = SwiftStableSort(less).sort(a)
+        fun sort(a: IntArray, less: PositionLess) = SwiftStableSort(less).sort(a)
     }
+
+    private fun less(x: Int, y: Int): Boolean = order.less(x, y)
 
     fun sort(a: IntArray) {
         val count = a.size
