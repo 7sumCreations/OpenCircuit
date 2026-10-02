@@ -5,6 +5,7 @@ import io.github.opencircuit.ringkit.SleepDifferentialFixtures.bitsToDouble
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.test.Test
@@ -283,7 +284,13 @@ class SleepDifferentialTest {
         // fixed pool (the machine's per-run worker cap) and are compared one by one, in file order.
         val pool = Executors.newFixedThreadPool(RENDER_THREADS)
         val rendered = try {
-            inputs.map { n -> pool.submit<List<String>> { render(n) } }.map { it.get() }
+            inputs.map { n -> n.id to pool.submit<List<String>> { render(n) } }.map { (id, f) ->
+                try {
+                    f.get()
+                } catch (e: ExecutionException) {
+                    throw AssertionError("night $id failed to render", e.cause ?: e)
+                }
+            }
         } finally {
             pool.shutdownNow()
         }

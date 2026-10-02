@@ -18,6 +18,7 @@ package io.github.opencircuit.ringkit
 //    JVM's intrinsic `Math.cos`/`Math.sin` left 4 of 8731 differential values one ulp off; fdlibm
 //    left none.
 
+import java.util.Collections
 import kotlin.math.PI
 import kotlin.math.sqrt
 
@@ -121,7 +122,9 @@ object OSASpO2 {
     const val FREQ_COUNT: Int = 60
 
     /** [FREQ_COUNT] frequencies evenly spaced from [F_MIN] to [F_MAX], as upstream computes them. */
-    val FREQS: List<Double> = List(FREQ_COUNT) { F_MIN + (F_MAX - F_MIN) * it.toDouble() / (FREQ_COUNT - 1).toDouble() }
+    val FREQS: List<Double> = Collections.unmodifiableList(
+        List(FREQ_COUNT) { F_MIN + (F_MAX - F_MIN) * it.toDouble() / (FREQ_COUNT - 1).toDouble() },
+    )
 
     // Windowing and gating.
 

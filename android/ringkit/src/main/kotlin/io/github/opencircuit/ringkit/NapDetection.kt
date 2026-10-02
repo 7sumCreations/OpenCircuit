@@ -13,6 +13,7 @@ package io.github.opencircuit.ringkit
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
+import java.util.Collections
 
 /**
  * Automatic nap detection. The ring app auto-records naps longer than 15 minutes and folds them into
@@ -42,8 +43,21 @@ object NapDetection {
      */
     const val MIN_NAP_SLEEP_VITALS_SHARE: Double = 0.35
 
-    /** One nap: its span and its health-store segments (in-bed + asleep/awake or staged sub-segments). */
-    data class Nap(val start: Instant, val end: Instant, val segments: List<SleepSegment>) {
+    /**
+     * One nap: its span and its health-store segments (in-bed + asleep/awake or staged sub-segments).
+     * A value, as upstream's struct is: the segment list is copied in and read-only out, so a caller
+     * mutating the list it passed cannot change a nap already built.
+     */
+    class Nap(val start: Instant, val end: Instant, segments: List<SleepSegment>) {
+        val segments: List<SleepSegment> = Collections.unmodifiableList(ArrayList(segments))
+
+        override fun equals(other: Any?): Boolean =
+            other is Nap && start == other.start && end == other.end && segments == other.segments
+
+        override fun hashCode(): Int = listOf(start, end, segments).hashCode()
+
+        override fun toString(): String = "Nap(start=$start, end=$end, segments=$segments)"
+
         val duration: Duration get() = Duration.between(start, end)
 
         val isLongNap: Boolean get() = duration >= LONG_NAP_DURATION

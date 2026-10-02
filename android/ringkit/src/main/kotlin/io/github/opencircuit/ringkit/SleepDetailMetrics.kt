@@ -10,6 +10,7 @@ package io.github.opencircuit.ringkit
 //  • Averages and the percentile index round half away from zero, as Swift's `rounded()`.
 
 import java.time.Instant
+import java.util.Collections
 
 /**
  * Sleep-detail metrics: per-stage average HR and a 2.5-min, 3-level body-movement chart. Both are
@@ -135,9 +136,20 @@ object SleepDetailMetrics {
 
     /**
      * Compact movement summary for persistence and display: the per-epoch level series
-     * ([MovementLevel.rawValue] per epoch, a few hundred bytes a night) plus the counts.
+     * ([MovementLevel.rawValue] per epoch, a few hundred bytes a night) plus the counts. A value, as
+     * upstream's struct is: [levels] is copied in and read-only out.
      */
-    data class MovementSummary(val levels: List<Int>, val still: Int, val light: Int, val active: Int) {
+    class MovementSummary(levels: List<Int>, val still: Int, val light: Int, val active: Int) {
+        val levels: List<Int> = Collections.unmodifiableList(ArrayList(levels))
+
+        override fun equals(other: Any?): Boolean =
+            other is MovementSummary && levels == other.levels && still == other.still &&
+                light == other.light && active == other.active
+
+        override fun hashCode(): Int = listOf(levels, still, light, active).hashCode()
+
+        override fun toString(): String = "MovementSummary(levels=$levels, still=$still, light=$light, active=$active)"
+
         val total: Int get() = still + light + active
 
         /** Share of epochs with any movement (light or active), 0…1 — a one-glance "restlessness". */

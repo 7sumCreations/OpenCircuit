@@ -355,9 +355,10 @@ object BulkSleep {
         val x = thinned(a)
         val y = thinned(b)
         if (x.isEmpty() || y.isEmpty()) return 0.0
-        val diffs = IntArray(x.size * y.size)
+        // 64-bit differences and midpoint sum, as upstream's `Int`: an `Int` subtraction would wrap.
+        val diffs = LongArray(x.size * y.size)
         var k = 0
-        for (i in x) for (j in y) diffs[k++] = i - j
+        for (i in x) for (j in y) diffs[k++] = i.toLong() - j.toLong()
         diffs.sort()
         val n = diffs.size
         return if (n % 2 == 1) diffs[n / 2].toDouble() else (diffs[n / 2 - 1] + diffs[n / 2]) / 2.0

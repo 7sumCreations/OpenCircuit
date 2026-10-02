@@ -15,6 +15,7 @@ package io.github.opencircuit.ringkit
 
 import java.time.Duration
 import java.time.Instant
+import java.util.Collections
 import kotlin.math.abs
 
 /** Sleep score, 0…100: the duration score and the 6-factor composite. */
@@ -85,8 +86,20 @@ object SleepScore {
         val sleepGoal: Double = IDEAL_DURATION_SECONDS.toDouble(),
     )
 
-    /** The composite result plus each present factor's 0…1 sub-score (for a breakdown view). */
-    data class Composite(val score: Int, val tier: Tier, val factors: Map<Factor, Double>) {
+    /**
+     * The composite result plus each present factor's 0…1 sub-score (for a breakdown view). A value,
+     * as upstream's struct is: [factors] is copied in (iteration order kept) and read-only out.
+     */
+    class Composite(val score: Int, val tier: Tier, factors: Map<Factor, Double>) {
+        val factors: Map<Factor, Double> = Collections.unmodifiableMap(LinkedHashMap(factors))
+
+        override fun equals(other: Any?): Boolean =
+            other is Composite && score == other.score && tier == other.tier && factors == other.factors
+
+        override fun hashCode(): Int = listOf(score, tier, factors).hashCode()
+
+        override fun toString(): String = "Composite(score=$score, tier=$tier, factors=$factors)"
+
         /** The six factors; [rawValue] is upstream's case name. */
         enum class Factor(val rawValue: String) {
             TIME_ASLEEP("timeAsleep"),

@@ -141,11 +141,15 @@ data class ActivityPeriod(val activity: Activity, val start: Instant, val end: I
          * everything before it — the caller's list is consumed exactly as Swift's `inout` array was.
          */
         fun findSleep(events: MutableList<ActivityPeriod>): ActivityPeriod? {
-            while (events.isNotEmpty()) {
-                val event = events.removeAt(0)
-                if (event.activity == Activity.SLEEP && event.duration > MIN_SLEEP_DURATION) return event
+            // One scan, one bulk removal: draining with removeAt(0) would be quadratic on a long prefix.
+            val at = events.indexOfFirst { it.activity == Activity.SLEEP && it.duration > MIN_SLEEP_DURATION }
+            if (at < 0) {
+                events.clear()
+                return null
             }
-            return null
+            val event = events[at]
+            events.subList(0, at + 1).clear()
+            return event
         }
 
         /**
@@ -472,7 +476,8 @@ data class ActivityPeriod(val activity: Activity, val start: Instant, val end: I
             if (n == 0) return emptyList()
             val half = window.dividedBy(2)
             val out = FloatArray(n)
-            // Window bounds advance monotonically with i (times are sorted), so this is ~O(n) amortised.
+            // Window bounds advance monotonically with i (times are sorted); each window is still
+            // filtered and sorted, so the cost is O(n·w log w) — w is a few dozen 30-s samples.
             var lo = 0
             var hi = 0
             for (i in 0 until n) {

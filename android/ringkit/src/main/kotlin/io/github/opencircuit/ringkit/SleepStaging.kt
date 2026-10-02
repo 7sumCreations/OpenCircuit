@@ -282,7 +282,7 @@ object SleepStaging {
         var prevHR = onsetHR
         for (r in pre) {
             val t = r.date(epoch)
-            val hr = r.heartRate!!.toDouble()
+            val hr = checkNotNull(r.heartRate) { "pre-onset records are filtered to those with a heart rate" }.toDouble()
             val contiguous = Duration.between(t, prevTime) <= maxShortGap
             val asleepBridge = hr <= wakeThreshold && prevHR <= wakeThreshold
             if (!(contiguous || asleepBridge)) break

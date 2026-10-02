@@ -103,6 +103,40 @@ class NightMetricsGuardTest {
     }
 
     /**
+     * Swift's structs copy their arrays and dictionaries; a Kotlin value that kept the caller's list
+     * would change under its holder. Each list-holding result copies in and is read-only out.
+     */
+    @Test
+    fun listHoldingResultsCopyTheCallersCollection() {
+        val t0 = java.time.Instant.ofEpochSecond(1_700_000_000)
+        val seg = SleepSegment(t0, t0.plusSeconds(600), SleepStage.ASLEEP_CORE)
+        val segs = mutableListOf(seg)
+        val nap = NapDetection.Nap(t0, t0.plusSeconds(600), segs)
+        segs += seg
+        assertEquals(listOf(seg), nap.segments, "a nap keeps the segments it was built with")
+        assertTrue(runCatching { (nap.segments as MutableList<SleepSegment>).add(seg) }.isFailure, "and they are read-only")
+        assertEquals(NapDetection.Nap(t0, t0.plusSeconds(600), listOf(seg)), nap, "equality stays structural")
+
+        val levels = mutableListOf(0, 1, 2)
+        val summary = SleepDetailMetrics.MovementSummary(levels, 1, 1, 1)
+        levels[0] = 2
+        assertEquals(listOf(0, 1, 2), summary.levels)
+        assertEquals(SleepDetailMetrics.MovementSummary(listOf(0, 1, 2), 1, 1, 1), summary)
+
+        val factors = linkedMapOf(SleepScore.Composite.Factor.STAGES to 0.5, SleepScore.Composite.Factor.TIME_ASLEEP to 1.0)
+        val composite = SleepScore.Composite(75, SleepScore.Tier.GOOD, factors)
+        factors.clear()
+        assertEquals(
+            listOf(SleepScore.Composite.Factor.STAGES, SleepScore.Composite.Factor.TIME_ASLEEP),
+            composite.factors.keys.toList(),
+            "copied, order kept",
+        )
+        assertTrue(runCatching { (composite.factors as MutableMap<SleepScore.Composite.Factor, Double>).clear() }.isFailure)
+
+        assertTrue(runCatching { (OSASpO2.FREQS as MutableList<Double>)[0] = 0.0 }.isFailure, "the shared frequency grid is read-only")
+    }
+
+    /**
      * For finite values the Swift sort is a stable ascending sort in which -0.0 and 0.0 tie — checked
      * against Kotlin's stable `sortedWith` on seeded arrays: every size from 0 to 200 of random values,
      * and 400 arrays of up to 600 values built from ascending and descending stretches of uneven
