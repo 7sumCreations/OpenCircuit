@@ -2,8 +2,8 @@ package io.github.opencircuit.ringkit
 
 import io.github.opencircuit.ringkit.HealthAlertEvaluator.ActivityInterval
 import java.time.Instant
+import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.ZonedDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -29,7 +29,11 @@ class HealthAlertsTest {
 
     private val zone: ZoneId = ZoneId.of("Asia/Kolkata")
 
-    private fun at(h: Int, m: Int = 0): Instant = ZonedDateTime.of(2026, 6, 17, h, m, 0, 0, zone).toInstant()
+    /**
+     * 2026-06-17 [h]:[m] in [zone]. Lenient, as Foundation's `DateComponents` are: a minute past 59
+     * rolls into the next hour (`:118` builds up to minute 95).
+     */
+    private fun at(h: Int, m: Int = 0): Instant = LocalDateTime.of(2026, 6, 17, 0, 0).plusHours(h.toLong()).plusMinutes(m.toLong()).atZone(zone).toInstant()
     private fun hr(bpm: Int, h: Int, m: Int = 0): HRSample = HRSample(bpm = bpm, start = at(h, m))
     private fun spo2(pct: Int, h: Int, m: Int = 0): SpO2Reading = SpO2Reading(percent = pct, time = at(h, m))
 

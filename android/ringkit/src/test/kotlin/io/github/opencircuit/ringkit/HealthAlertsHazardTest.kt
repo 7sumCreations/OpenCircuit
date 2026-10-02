@@ -245,18 +245,26 @@ class HealthAlertsHazardTest {
 
     @Test
     fun quietHoursAtTheEndsOfInstantNeverThrow() {
-        // An instant `java.time` cannot place in the zone (the last hours of `Instant`'s range ahead of
-        // UTC, the first behind it) is not inside quiet hours: the alert is not held on a clock the port
-        // cannot read. Placeable ends answer by their wall clock (Instant.MAX is 23:59 UTC).
+        // An instant `java.time` cannot place in the zone is not inside quiet hours: the alert is not
+        // held on a clock the port cannot read. That is the first and last year of `Instant`'s range
+        // (years ±1 000 000 000, beyond the ±999 999 999 a local date-time holds) in every zone, and the
+        // last placeable hours once a zone's offset pushes them over. The last and first placeable UTC
+        // instants answer by their wall clock (23:59 and 00:00).
         val allDay = QuietHours(enabled = true, startMinutes = 0, endMinutes = 1_439)
         val lastMinute = QuietHours(enabled = true, startMinutes = 1_439, endMinutes = 0)
-        assertTrue(lastMinute.contains(Instant.MAX, utc))
-        assertFalse(allDay.contains(Instant.MAX, utc))
-        assertTrue(allDay.contains(Instant.MIN, utc))
-        assertFalse(allDay.contains(Instant.MAX, ZoneId.of("Pacific/Kiritimati")))
-        assertFalse(allDay.contains(Instant.MIN, ZoneId.of("Pacific/Pago_Pago")))
+        val lastPlaceable = java.time.LocalDateTime.MAX.toInstant(ZoneOffset.UTC)
+        val firstPlaceable = java.time.LocalDateTime.MIN.toInstant(ZoneOffset.UTC)
+        assertTrue(lastMinute.contains(lastPlaceable, utc))
+        assertFalse(allDay.contains(lastPlaceable, utc))
+        assertTrue(allDay.contains(firstPlaceable, utc))
+        assertFalse(allDay.contains(lastPlaceable, ZoneId.of("Pacific/Kiritimati")), "+14:00 pushes it past the last local year")
+        // (A zone's rules that far back are its oldest offset: New York's local mean time, −4:56:02.)
+        assertFalse(allDay.contains(firstPlaceable, ZoneId.of("America/New_York")), "−4:56:02 pushes it before the first")
+        assertFalse(allDay.contains(firstPlaceable, ZoneOffset.ofHours(-11)), "−11:00 pushes it before the first")
+        assertFalse(lastMinute.contains(Instant.MAX, utc))
+        assertFalse(allDay.contains(Instant.MIN, utc))
         for (z in listOf(utc, ZoneId.of("America/New_York"), ZoneId.of("Asia/Kolkata"), ZoneId.of("Pacific/Kiritimati"))) {
-            for (t in listOf(Instant.MIN, Instant.MAX)) {
+            for (t in listOf(Instant.MIN, Instant.MAX, firstPlaceable, lastPlaceable)) {
                 NotificationGate().filter(HealthNotification.entries, t, mapOf(HealthNotification.FEVER to t), allDay, z)
             }
         }
