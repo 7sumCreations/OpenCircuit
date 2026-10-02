@@ -21,7 +21,9 @@ import kotlin.test.assertTrue
  * `makeEpochRecord` :26-34, epoch sync Layer A :119-152, `SyncCursor` :160-185, cumulative
  * counters :187-204, bulk `0x4c` decode :305-343. E3: motion-channel sleep detection :347-371, the
  * experimental staging check :373-389, the data-gap fragment and stitch checks :390-407, the
- * zero-payload regression :408-411 and the sleep-stage classifier :413-451. Each upstream `check`
+ * zero-payload regression :408-411 and the sleep-stage classifier :413-451. E4: the analytics
+ * checks :206-257 (HRV / RMSSD, the Baevsky stress index, Edwards strain, the Mifflin-St Jeor BMR,
+ * the resting-HR–adjusted basal energy, TRIMP energy). Each upstream `check`
  * becomes one assertion carrying its message; each area is one named test. The rest of the file
  * moves with the epic that ports the code it checks.
  *
@@ -348,6 +350,70 @@ class RingKitVerifyTest {
         assertEquals("count/min", MetricKind.HEART_RATE.unit, "heartRate unit count/min")
         val inst = QuantitySample(kind = MetricKind.HEART_RATE, start = Instant.ofEpochSecond(100), value = 72.0)
         assertEquals(inst.start, inst.end, "instantaneous sample: end defaults to start")
+    }
+
+    // :206-257 — analytics ported from openwhoop-algos.
+
+    @Test
+    fun analyticsHrvRmssd() { // :207-212 — the only upstream check of rollingRMSSD.
+        assertEquals(100L, HRV.rmssd(listOf(800, 900, 1000)), "rmssd([800,900,1000]) = 100")
+        assertNull(HRV.rmssd(listOf(800)), "rmssd single sample = nil")
+        assertEquals(listOf(800, 900, 1000), HRV.cleanRR(listOf(listOf(800, 900), listOf(1000), emptyList())), "cleanRR flattens")
+        assertEquals(listOf(900), HRV.cleanRR(listOf(listOf(0, 900), listOf(0))), "cleanRR drops non-positive")
+        assertEquals(listOf(1L, 1L), HRV.rollingRMSSD(listOf(1, 2, 3), windowSize = 2), "rollingRMSSD windows of 2")
+    }
+
+    @Test
+    fun analyticsBaevskyStress() { // :214-217
+        assertEquals(10.0, Stress.index(List(120) { 750 }), "constant RR -> max stress 10.0")
+        val moderate = Stress.index(listOf(667, 619, 583, 556, 531, 556, 600, 632, 612, 600, 612, 625, 638))
+        assertTrue(moderate > 0.0 && moderate <= 10.0, "moderate variability stress in (0,10]: $moderate")
+    }
+
+    @Test
+    fun analyticsEdwardsStrain() { // :219-226 — maxHR=190, restingHR=60
+        val strain = Strain(maxHR = 190, restingHR = 60)
+        assertEquals(0.0, strain.calculate(List(600) { 65 }), "65bpm below zone1 -> strain 0")
+        assertEquals(21.0, strain.calculate(List(86_400) { 190 }), "24h@maxHR -> strain 21.0")
+        assertTrue((strain.calculate(List(1800) { 170 }) ?: 0.0) > 10.0, "sustained 170bpm -> strain >10")
+        assertNull(strain.calculate(List(500) { 80 }), "too few readings -> nil")
+        assertNull(Strain(maxHR = 60, restingHR = 60).calculate(List(600) { 80 }), "maxHR<=restingHR -> nil")
+    }
+
+    private val maleProfile = UserProfile(age = 30, weightKg = 80.0, heightCm = 180.0, sex = BiologicalSex.MALE) // :229
+
+    @Test
+    fun analyticsMifflinStJeorBmr() { // :228-233
+        assertEquals(1780.0, Calories.bmrKcalPerDay(maleProfile), "male BMR Mifflin-St Jeor")
+        assertTrue(abs(Calories.bmrKcalPerHour(maleProfile) - 74.166_666) < 0.001, "male BMR hourly")
+        val femaleProfile = UserProfile(age = 40, weightKg = 65.0, heightCm = 165.0, sex = BiologicalSex.FEMALE)
+        assertEquals(1320.25, Calories.bmrKcalPerDay(femaleProfile), "female BMR Mifflin-St Jeor")
+    }
+
+    @Test
+    fun analyticsRestingHrAdjustedBasalEnergy() { // :234-248 — dynamic with RHR + baseline, static otherwise, ±20 %.
+        assertNull(Calories.restingBaselineBpm(listOf(60.0, 62.0)), "RHR baseline nil below min days")
+        assertEquals(60.0, Calories.restingBaselineBpm(listOf(58.0, 60.0, 62.0)), "RHR baseline trimmed mean (small window)")
+        // Trimmed mean: 10 values, outlier at 100 — trim drops extremes, result stays near 60.
+        val trimPrior = listOf(59.0, 60.0, 60.0, 61.0, 60.0, 59.0, 61.0, 60.0, 60.0, 100.0)
+        assertTrue(abs((Calories.restingBaselineBpm(trimPrior) ?: 0.0) - 60) < 1.0, "RHR trimmed mean resists single outlier")
+        assertTrue(abs(Calories.restingEnergyScale(restingHR = 68.0, baselineRestingHR = 60.0) - 1.08) < 1e-9, "RHR scale +8 bpm -> +8%")
+        assertEquals(1.20, Calories.restingEnergyScale(restingHR = 200.0, baselineRestingHR = 60.0), "RHR scale clamped +20%")
+        assertEquals(0.80, Calories.restingEnergyScale(restingHR = 10.0, baselineRestingHR = 60.0), "RHR scale clamped -20%")
+        assertEquals(Calories.bmrKcalPerHour(maleProfile), Calories.basalKcalPerHour(maleProfile), "basal/hour falls back to static BMR")
+        assertTrue(
+            abs(Calories.basalKcalPerHour(maleProfile, restingHR = 70.0, baselineRestingHR = 60.0) - Calories.bmrKcalPerHour(maleProfile) * 1.10) < 1e-9,
+            "basal/hour varies with measured RHR",
+        )
+    }
+
+    @Test
+    fun analyticsTrimpEnergy() { // :249-257
+        val hrStart = Instant.ofEpochSecond(0)
+        val calorieSamples = (0 until 600).map { offset ->
+            HRSample(bpm = 150, start = hrStart.plusSeconds(offset.toLong()), end = hrStart.plusSeconds(offset + 1L))
+        }
+        assertTrue(abs(Calories.activeKcal(calorieSamples, maxHR = 180) - 150.0) < 0.001, "TRIMP 30 -> 150 kcal")
     }
 
     @Test
