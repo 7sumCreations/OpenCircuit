@@ -8,6 +8,7 @@ import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -133,9 +134,11 @@ class TrendsHazardTest {
     @Test
     fun bedtimesOutsideTheDayAndDegenerateSpreadsFollowUpstream() {
         // Stored minutes outside 0…1439 land on the circle where their angle puts them (measured):
-        // -60 is 23:00, so [-60, 1380] is perfectly regular; [-1, 1439, 2879] is one minute apart → 99.
+        // -60 is 23:00, so [-60, 1380] is perfectly regular. [-1, 1439, 2879] are all 23:59: upstream
+        // scores them 99 (measured — R lands an ulp below 1); here every night at one clock minute is
+        // 100 (`everyNightAtOneClockMinuteScoresExactly100`).
         assertEquals(100, TrendsEngine.sleepRegularity(listOf(-60, 1_380)))
-        assertEquals(99, TrendsEngine.sleepRegularity(listOf(-1, 1_439, 2_879)))
+        assertEquals(100, TrendsEngine.sleepRegularity(listOf(-1, 1_439, 2_879)))
         assertEquals(100, TrendsEngine.sleepRegularity(listOf(Int.MAX_VALUE, Int.MAX_VALUE)))
         assertEquals(0, TrendsEngine.sleepRegularity(listOf(Int.MIN_VALUE, Int.MAX_VALUE)))
         // Opposite bedtimes cancel: R falls below 1e-9 and the spread is π radians → 0 (measured).
@@ -160,6 +163,38 @@ class TrendsHazardTest {
             }
         }
         assertTrue(scored > 5_000, "the property must see real scores, saw $scored")
+    }
+
+    @Test
+    fun everyNightAtOneClockMinuteScoresExactly100() {
+        // Bedtimes that all name the same clock minute have no spread: R is 1 and the score 100.
+        // In floating point R lands within an ulp of 1, and the truncated score is then 99 or 100
+        // depending on the last bits of the platform's cos and sin: measured on the pinned build,
+        // upstream scores 1 178 of the 4 320 constant lists of 2, 3 and 7 nights 99 (00:03, 00:06,
+        // 00:07, … — 22:00 happens to give 100). Here such a list scores exactly 100 (an improvement,
+        // recorded in PORTING.md); no other list's answer depends on the last bit.
+        for (count in 2..10) {
+            for (x in 0 until 1_440) {
+                assertEquals(100, TrendsEngine.sleepRegularity(List(count) { x }, window = count), "[$x] × $count")
+                // The same clock minute written whole days away (stored minutes outside 0…1439).
+                val shifted = List(count) { k -> x + 1_440 * (k % 7 - 3) }
+                assertEquals(100, TrendsEngine.sleepRegularity(shifted, window = count), "$shifted")
+            }
+        }
+        // Property of the new answer: over seeded lists, the score is 100 exactly when every bedtime
+        // in the window names the same clock minute, and otherwise at most 99.
+        val rng = Random(0x5A3E1L)
+        var constant = 0
+        repeat(30_000) {
+            val n = 2 + rng.nextInt(10)
+            val base = rng.nextInt(1_440)
+            val minutes = List(n) { if (rng.nextInt(3) == 0) base + 1_440 * (rng.nextInt(9) - 4) else base + rng.nextInt(3) - 1 }
+            val sameMinute = minutes.map { Math.floorMod(it, 1_440) }.toSet().size == 1
+            val score = assertNotNull(TrendsEngine.sleepRegularity(minutes, window = n))
+            if (sameMinute) constant++
+            assertEquals(sameMinute, score == 100, "$minutes → $score")
+        }
+        assertTrue(constant > 100, "the property must see constant lists, saw $constant")
     }
 
     @Test

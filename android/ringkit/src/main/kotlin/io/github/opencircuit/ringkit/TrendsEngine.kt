@@ -14,6 +14,8 @@ package io.github.opencircuit.ringkit
 //  • `cos`, `sin` and `log` are `StrictMath`'s (fdlibm), the same bits on every JVM and on Android;
 //    the clamp of R is Swift's `min` / `max`.
 //  • A negative window takes no days, as window 0 does; upstream traps on a negative suffix length.
+//  • Sleep regularity scores bedtimes that all name one clock minute exactly 100, where upstream's
+//    floating-point R gives 99 or 100 by the last bits of the platform's cos and sin.
 
 import java.time.Instant
 import kotlin.math.abs
@@ -186,6 +188,12 @@ object TrendsEngine {
     fun sleepRegularity(bedtimeMinutes: List<Int>, window: Int = 7): Int? {
         val tail = trailing(bedtimeMinutes, window)
         if (tail.size < 2) return null
+        // Every night at one clock minute has no spread: exactly 100. Computed, R lands within an ulp
+        // of 1 and the truncated score is 99 or 100 by the last bits of cos and sin. Any other list
+        // sits well below 1 (one night a minute off among n lowers R by about 1e-5 / n), where an
+        // ulp of R moves the score by a vanishing amount.
+        val minute = Math.floorMod(tail[0], MINUTES_PER_DAY)
+        if (tail.all { Math.floorMod(it, MINUTES_PER_DAY) == minute }) return 100
         val n = tail.size.toDouble()
         val angles = tail.map { 2.0 * Math.PI * it.toDouble() / 1440.0 }
         val meanCos = sum(angles.map { StrictMath.cos(it) }) / n
@@ -201,6 +209,8 @@ object TrendsEngine {
     }
 
     // Private helpers
+
+    private const val MINUTES_PER_DAY = 1440
 
     /** The trailing [window] elements (Swift's `suffix`); a negative window takes none. */
     private fun <T> trailing(xs: List<T>, window: Int): List<T> = xs.takeLast(maxOf(window, 0))
