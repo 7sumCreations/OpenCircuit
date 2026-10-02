@@ -84,6 +84,13 @@
 //   kind fmt (the formatter's three number shapes):
 //     v <doubles>                       the values
 //     fd <ints>                         the fraction digits, each applied to every value
+//   kind batt (battery readings folded into the discharge and charge histories, and sample lists):
+//     cap <cap> <maxAge> <chargeMaxAge> the folds' cap and ages in seconds (doubles)
+//     rd (<percent> <ms> <charging 0|1>)*   every reading, in order, folded into both histories
+//     es (<percent> <ms>)*              one stored sample list, in its stored order (one line per
+//                                       list; the line may hold no sample)
+//     tg <ints>                         the charge targets each sample list is asked about
+//     jf (<percent> <inferred 0|1> <wasFull 0|1>)*   the "battery full" queries
 //   end
 // goldens.txt, per case:
 //   case <id>
@@ -171,6 +178,19 @@
 //                                       fraction digits: UnitsFormatter.temperature in °C and °F,
 //                                       temperatureDelta in °C and °F, distance of value × 1000 m in
 //                                       km and of value × 1609.344 m in miles (the strings verbatim)
+//   batt:   fold <k> <discharge n> <charge n> <tte|-> <ttf|->   after reading k: BatteryTTE.record
+//                                       and recordCharge, the histories' sizes, timeToEmpty of the
+//                                       discharge history and timeToFull (target 100) of the charge
+//                                       history, `now` = reading k's time
+//           rec <n> (<percent> <ms>)*   the discharge history after the last reading
+//           chg <n> (<percent> <ms>)*   the charge history after the last reading
+//           tte <k> <double|->          timeToEmpty of sample list k
+//           dep <k> <seconds> <nanos> | dep <k> -   estimatedDepletionDate of sample list k with
+//                                       `now` = 2001-01-01 00:00 UTC (Foundation's reference date,
+//                                       so the Date's own double is exactly the time to empty), as
+//                                       whole seconds after that instant and the rounded nanoseconds
+//           ttf <k> <double|->...       timeToFull of sample list k for each target, in order
+//           jf <0|1>...                 justReachedFull of each query
 //   end
 //
 // Shapes include, from the start, the inputs a deliberate difference from upstream would touch:
@@ -182,8 +202,10 @@
 // activity inputs whose rounded score depends on the order the factors are summed, sub-scores and
 // goals outside their ranges, trend sums that leave 32 bits, goal days across both 2026 clock
 // changes in three zones (one of them a day without a midnight), duplicated, unsorted and future
-// day rows, summaries judged in another zone, and formatter values at exact binary ties, signed
-// zero, non-finite, huge and with negative or very large fraction digits.
+// day rows, summaries judged in another zone, formatter values at exact binary ties, signed
+// zero, non-finite, huge and with negative or very large fraction digits, and battery readings and
+// stored samples outside 0…100, duplicated and unsorted times, guards at their exact bounds, charge
+// targets outside 0…100, and history caps and ages of zero, below zero or not a number.
 // Upstream's ledger and both scores add a dictionary's values (seeded per process): regenerate.sh
 // runs this program with Swift's deterministic hashing so every run writes the same bytes.
 
@@ -574,7 +596,7 @@ func energyCase(_ index: Int) -> Case {
 // MARK: - Synthetic days → resting HR, exercise minutes, the daily energy estimate
 
 let dayShapes = ["workday", "spring-forward", "fall-back", "duplicated", "unsorted", "steps-only",
-                 "hr-only", "straddle", "sparse", "sleep-heavy", "spans", "hostile"]
+                 "hr-only", "straddle", "sparse", "sleep-heavy", "spans", "hostile", "no-night"]
 let dayCasesPerShape = 4
 let dayZones = ["America/New_York", "Europe/Athens", "Asia/Kolkata", "Australia/Lord_Howe", "UTC", "America/Santiago"]
 let stageCycle: [SleepStage] = [.inBed, .asleepCore, .asleepDeep, .asleepCore, .asleepREM, .awake]
@@ -618,8 +640,9 @@ func dayCase(_ index: Int) -> Case {
         windows.append(StepWindow(start: at(a), end: at(a + minutes * 60), delta: steps))
     }
 
-    // The night before (an evening hour, then asleep), tiled by sleep segments.
-    let night = shape != "sparse"
+    // The night before (an evening hour, then asleep), tiled by sleep segments. A "no-night" day has
+    // no night but keeps its bouts, so its resting HR comes from the lowest sustained window.
+    let night = shape != "sparse" && shape != "no-night"
     let sleepStart = -rng.int(1, 3) * 3600 - rng.int(0, 3) * 900
     let sleepEnd = rng.int(5, 7) * 3600 + rng.int(0, 3) * 900
     let rest = rng.int(48, 66)
@@ -1524,6 +1547,222 @@ func fmtCase(_ index: Int) -> Case {
     return c
 }
 
+// MARK: - Battery histories → time to empty, depletion date, time to full
+
+let battShapes = ["discharge", "charge", "mixed", "duplicated", "unsorted", "edge", "hostile"]
+let battCasesPerShape = 3
+let battBase = Date(timeIntervalSince1970: 1_786_924_800) // 2026-08-17 00:00 UTC
+let battReference = Date(timeIntervalSinceReferenceDate: 0)
+let battOutOfRange = [101, 255, -1, -5, Int(Int32.max), Int(Int32.min)]
+
+/// Upstream's window rule, re-derived here only to name which guard answered (every golden is
+/// upstream's own answer).
+func battWindow(_ samples: [BatteryTTE.Sample], rising: Bool) -> [BatteryTTE.Sample] {
+    var w: [BatteryTTE.Sample] = []
+    for s in samples.sorted(by: { $0.at < $1.at }) {
+        guard let p = w.last else { w.append(s); continue }
+        if rising ? s.percent > p.percent : s.percent < p.percent { w.append(s) }
+        else if rising ? s.percent < p.percent : s.percent > p.percent { w = [s] }
+    }
+    return w
+}
+
+func battEstimateBranch(_ samples: [BatteryTTE.Sample], rising: Bool, target: Int, limit: Double) -> String {
+    let kind = rising ? "batt-ttf" : "batt-tte"
+    if samples.count < 2 { return kind + "-short" }
+    let w = battWindow(samples, rising: rising)
+    if w.count < 2 { return kind + "-no-window" }
+    if rising && w.last!.percent >= target { return kind + "-full" }
+    let change = Double(abs(w.last!.percent - w.first!.percent))
+    let elapsed = w.last!.at.timeIntervalSince(w.first!.at)
+    if change < 2 || elapsed <= 0 { return kind + "-small" }
+    if change / (elapsed / 3_600) > limit { return kind + "-rate" }
+    if !rising && w.last!.percent <= 0 { return kind + "-empty-battery" }
+    return kind + "-value"
+}
+
+func battCase(_ index: Int) -> Case {
+    let shape = battShapes[index / battCasesPerShape]
+    let variant = index % battCasesPerShape
+    var rng = SplitMix64(state: 0x4241_5454 &+ UInt64(index))
+    var c = Case(id: String(format: "batt-%03d", index), kind: "batt", shape: shape)
+    /// Times are counted in quarter seconds from the base, so every one sits on the 250 ms grid.
+    func at(_ q: Int) -> Date { battBase.addingTimeInterval(Double(q) * 0.25) }
+    func minutes(_ lo: Int, _ hi: Int) -> Int { rng.int(lo * 240, hi * 240) }
+
+    var cap = 60
+    var maxAge = 14.0 * 86_400
+    var chargeMaxAge = 6.0 * 3_600
+    var readings: [(Int, Int, Bool)] = [] // percent, quarter seconds, charging
+    var lists: [[BatteryTTE.Sample]] = []
+    var targets = [100, 80]
+    var full: [(Int, Bool, Bool)] = [(100, true, false), (100, true, true), (100, false, false), (99, true, false)]
+
+    var q = rng.int(0, 4 * 3_600 * 4)
+    var pct = rng.int(55, 100)
+    func discharge(_ n: Int, jitter: Bool = true) {
+        for _ in 0..<n {
+            q += minutes(10, 240)
+            let r = rng.int(0, 99)
+            if r < 55 { pct -= rng.int(1, 2) } else if r < 80 || !jitter { } else if r < 92 { pct += 1 } else { pct += 2 }
+            pct = min(100, max(0, pct))
+            readings.append((pct, q, false))
+        }
+    }
+    func charge(_ n: Int, stepSeconds: ClosedRange<Int>, rise: ClosedRange<Int>) {
+        for _ in 0..<n {
+            q += rng.int(stepSeconds.lowerBound, stepSeconds.upperBound) * 4
+            let r = rng.int(0, 99)
+            if r < 8 { pct -= 1 } else if r < 12 { pct -= 4 } else { pct += rng.int(rise.lowerBound, rise.upperBound) }
+            pct = min(100, max(0, pct))
+            readings.append((pct, q, true))
+        }
+    }
+    func samples(of rs: [(Int, Int, Bool)]) -> [BatteryTTE.Sample] { rs.map { BatteryTTE.Sample(percent: $0.0, at: at($0.1)) } }
+
+    switch shape {
+    case "discharge":
+        discharge(rng.int(18, 26))
+        if variant == 2 { maxAge = 2 * 86_400 }
+        let start = rng.int(0, readings.count - 8)
+        lists = [samples(of: Array(readings[start..<(start + rng.int(6, 8))])), samples(of: readings)]
+    case "charge":
+        pct = rng.int(5, 60)
+        charge(rng.int(15, 22), stepSeconds: 30...300, rise: 0...3)
+        if variant == 2 { q += 240; readings.append((pct, q, false)) } // unplugged: the charge history clears
+        lists = [samples(of: readings.filter { $0.2 }), samples(of: Array(readings.prefix(6)))]
+        targets = [100, 90, rng.pick([95, 85, 60])]
+    case "mixed":
+        discharge(8)
+        pct = max(0, pct - rng.int(0, 5))
+        charge(6, stepSeconds: 300...1_200, rise: 2...5)
+        discharge(4)
+        q += minutes(10, 60); pct = min(100, pct + rng.int(3, 8)); readings.append((pct, q, false)) // a missed charge
+        discharge(5)
+        cap = rng.pick([5, 8, 12])
+        maxAge = rng.pick([6 * 3_600, 86_400, 2.5 * 3_600])
+        chargeMaxAge = rng.pick([1_800, 3_600, 6 * 3_600])
+        lists = [samples(of: readings).shuffledDeterministically(&rng)]
+    case "duplicated":
+        for _ in 0..<rng.int(16, 22) {
+            let r = rng.int(0, 99)
+            if r < 25, let last = readings.last {
+                readings.append((rng.chance(50) ? last.0 : max(0, last.0 - rng.int(1, 4)), last.1, last.2)) // same time
+            } else {
+                q += minutes(10, 120)
+                if rng.chance(70) { pct = max(0, pct - rng.int(1, 3)) }
+                readings.append((pct, q, false))
+            }
+        }
+        var dup = samples(of: readings)
+        for _ in 0..<4 {
+            let s = dup[rng.int(0, dup.count - 1)]
+            dup.insert(BatteryTTE.Sample(percent: max(0, s.percent + rng.int(-3, 3)), at: s.at), at: rng.int(0, dup.count))
+        }
+        lists = [dup, dup.shuffledDeterministically(&rng)]
+    case "unsorted":
+        for _ in 0..<rng.int(16, 22) {
+            if rng.chance(20) { q -= minutes(5, 90) } else { q += minutes(10, 180) } // the clock goes back now and then
+            if rng.chance(65) { pct = max(0, pct - rng.int(1, 2)) }
+            readings.append((pct, q, false))
+        }
+        lists = [samples(of: readings).shuffledDeterministically(&rng), samples(of: readings).reversed()]
+    case "edge":
+        discharge(8, jitter: false)
+        cap = [0, 1, 2][variant]
+        maxAge = [0, -1, .nan][variant]
+        chargeMaxAge = [.infinity, 1_800, -.infinity][variant]
+        let h = 3_600 * 4
+        func list(_ xs: [(Int, Int)]) -> [BatteryTTE.Sample] { xs.map { BatteryTTE.Sample(percent: $0.0, at: at($0.1)) } }
+        lists = [
+            list([(100, 0), (50, h)]), list([(100, 0), (49, h)]),                 // exactly 50 %/h, then 51
+            list([(80, 0), (78, h)]), list([(80, 0), (79, h)]),                   // exactly 2 pp, then 1
+            list([(20, 0), (0, 10 * h)]), list([(0, 0), (50, 2_400)]),            // an empty battery; 300 %/h
+            list([(0, 0), (51, 2_400)]), list([(60, 0), (70, h / 2)]),            // 306 %/h; a clean charge
+            list([(90, h), (80, h)]), [], list([(70, 0)]),                        // no time; nothing; one
+            list([(100, 0), (90, rng.int(1, 40) * h / 4)]),
+        ]
+        targets = [150, 101, 70, -5, 0, Int(Int32.max), Int(Int32.min)]
+        for p in [99, 100, 0] { for i in [false, true] { for w in [false, true] { full.append((p, i, w)) } } }
+    default: // hostile: readings and stored samples outside 0…100
+        discharge(rng.int(10, 14))
+        for _ in 0..<3 {
+            let k = rng.int(2, readings.count - 1)
+            readings.insert((battOutOfRange[rng.int(0, battOutOfRange.count - 1)], readings[k - 1].1 + 240, rng.chance(30)), at: k)
+        }
+        let clean = samples(of: readings.filter { (0...100).contains($0.0) })
+        var dirty = clean
+        for _ in 0..<2 {
+            dirty.insert(BatteryTTE.Sample(percent: battOutOfRange[rng.int(0, battOutOfRange.count - 1)], at: at(q + rng.int(-40, 40) * 240)), at: rng.int(0, dirty.count))
+        }
+        let chargeDirty = [BatteryTTE.Sample(percent: rng.pick([-5, -1]), at: at(0)), BatteryTTE.Sample(percent: 60, at: at(7_200)),
+                           BatteryTTE.Sample(percent: 66, at: at(8_640)), BatteryTTE.Sample(percent: rng.pick([101, 255]), at: at(10_800))]
+        lists = [dirty, chargeDirty, clean]
+        for p in [101, 255, Int(Int32.max), -5, 100] { full.append((p, true, false)) }
+    }
+
+    func msOf(_ s: BatteryTTE.Sample) -> String { "\(s.percent) \(ms(s.at))" }
+    c.inputs.append("cap \(cap) \(d(maxAge)) \(d(chargeMaxAge))")
+    c.inputs.append("rd" + readings.map { " \($0.0) \(ms(at($0.1))) \($0.2 ? 1 : 0)" }.joined())
+    for l in lists { c.inputs.append("es" + l.map { " " + msOf($0) }.joined()) }
+    c.inputs.append("tg" + ints(targets))
+    c.inputs.append("jf" + full.map { " \($0.0) \($0.1 ? 1 : 0) \($0.2 ? 1 : 0)" }.joined())
+
+    var history: [BatteryTTE.Sample] = []
+    var chargeHistory: [BatteryTTE.Sample] = []
+    for (k, r) in readings.enumerated() {
+        let (p, qq, charging) = r
+        let t = at(qq)
+        // Name the fold branch upstream takes (its own answer is the golden), and how many samples
+        // that branch leaves before the prune, so a prune by age or cap can be counted.
+        var unpruned = 1
+        if charging { hit("batt-rec-charging") }
+        else if let last = history.last {
+            if p < last.percent { hit("batt-rec-append"); unpruned = history.count + 1 }
+            else if p - last.percent >= 3 { hit("batt-rec-missed-charge") }
+            else { hit("batt-rec-jitter"); unpruned = history.count }
+        } else { hit("batt-rec-first") }
+        if !charging { hit("batt-chg-cleared") }
+        else if let last = chargeHistory.last { hit(p > last.percent ? "batt-chg-append" : last.percent - p >= 3 ? "batt-chg-reset" : "batt-chg-ignored") }
+        history = BatteryTTE.record(history, percent: p, at: t, charging: charging, cap: cap, maxAge: maxAge)
+        chargeHistory = BatteryTTE.recordCharge(chargeHistory, percent: p, at: t, charging: charging, cap: cap, maxAge: chargeMaxAge)
+        hit("batt-rec-pruned", history.count < unpruned)
+        let tte = BatteryTTE.timeToEmpty(history, now: t)
+        let ttf = BatteryTTE.timeToFull(chargeHistory, now: t)
+        c.goldens.append("fold \(k) \(history.count) \(chargeHistory.count) \(optD(tte)) \(optD(ttf))")
+        hit(battEstimateBranch(history, rising: false, target: 100, limit: 50))
+        hit(battEstimateBranch(chargeHistory, rising: true, target: 100, limit: 300))
+        hit("batt-out-of-range", !(0...100).contains(p))
+    }
+    c.goldens.append("rec \(history.count)" + history.map { " " + msOf($0) }.joined())
+    c.goldens.append("chg \(chargeHistory.count)" + chargeHistory.map { " " + msOf($0) }.joined())
+    for (k, l) in lists.enumerated() {
+        c.goldens.append("tte \(k) \(optD(BatteryTTE.timeToEmpty(l, now: battReference)))")
+        if let dep = BatteryTTE.estimatedDepletionDate(l, now: battReference) {
+            let t = dep.timeIntervalSinceReferenceDate
+            var whole = Int64(t.rounded(.down))
+            var nanos = Int64(((t - t.rounded(.down)) * 1e9).rounded())
+            if nanos == 1_000_000_000 { whole += 1; nanos = 0 }
+            c.goldens.append("dep \(k) \(whole) \(nanos)")
+            hit("batt-dep-value")
+        } else {
+            c.goldens.append("dep \(k) -")
+        }
+        c.goldens.append("ttf \(k)" + targets.map { " " + optD(BatteryTTE.timeToFull(l, now: battReference, target: $0)) }.joined())
+        hit(battEstimateBranch(l, rising: false, target: 100, limit: 50))
+        for target in targets { hit(battEstimateBranch(l, rising: true, target: target, limit: 300)) }
+        hit("batt-duplicate-times", Set(l.map(\.at)).count < l.count)
+        hit("batt-unsorted", zip(l, l.dropFirst()).contains { $0.at > $1.at })
+        hit("batt-out-of-range", l.contains { !(0...100).contains($0.percent) })
+    }
+    for t in targets { hit("batt-target-outside", !(0...100).contains(t)) }
+    hit("batt-cap-zero", cap == 0)
+    hit("batt-age-not-positive", !(maxAge > 0) || !(chargeMaxAge > 0))
+    c.goldens.append("jf" + full.map { " " + (BatteryTTE.justReachedFull(percent: $0.0, inferredCharging: $0.1, wasFull: $0.2) ? "1" : "0") }.joined())
+    for f in full where f.0 >= 100 { hit(BatteryTTE.justReachedFull(percent: f.0, inferredCharging: f.1, wasFull: f.2) ? "batt-full-fired" : "batt-full-blocked") }
+    return c
+}
+
 // MARK: - Main
 
 let args = CommandLine.arguments
@@ -1546,6 +1785,7 @@ let cases = (0..<(rrShapes.count * rrCasesPerShape)).map(rrCase)
     + (0..<(trendShapes.count * trendCasesPerShape)).map(trendCase)
     + (0..<(goalShapes.count * goalCasesPerShape)).map(goalCase)
     + (0..<(fmtShapes.count * fmtCasesPerShape)).map(fmtCase)
+    + (0..<(battShapes.count * battCasesPerShape)).map(battCase)
 let header = "# Generated by android/tools/sleep-differential (VitalsDifferential) from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

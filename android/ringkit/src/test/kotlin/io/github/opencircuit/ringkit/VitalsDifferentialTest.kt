@@ -38,10 +38,15 @@ import kotlin.test.assertTrue
  * prior sums that leave 32 bits); windows of goal-ring days in New York, London and Santiago across
  * both 2026 clock changes (weekend goal selection, sleep credit from nights and naps, the built days
  * and their summaries — including Santiago's day without a midnight, duplicated, unsorted and future
- * rows, and summaries judged in another zone); and a sweep of the formatter's three number shapes
+ * rows, and summaries judged in another zone); a sweep of the formatter's three number shapes
  * (exact binary ties, values one ulp off a tie, NaN, infinities, signed zero, huge values, negative
- * and very large fraction digits), compared as whole strings. The format is documented at the top of
- * the generator's `main.swift`.
+ * and very large fraction digits), compared as whole strings; and battery readings folded into the
+ * discharge and charge histories with the time to empty and to full after every reading, and stored
+ * sample lists (time to empty, depletion date, time to full at several targets) — clean discharges,
+ * charges with dips and unplugging, mixed days with small caps and ages, duplicated and unsorted
+ * times, the guards at their exact bounds, targets outside 0…100, zero, negative and NaN caps and
+ * ages, and percents outside 0…100. The format is documented at the top of the generator's
+ * `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
  * `d` + 16 hex digits), which must agree within 1e-9; every double that is not bit-identical is
@@ -123,6 +128,7 @@ class VitalsDifferentialTest {
         "trend" -> renderTrend(c)
         "goal" -> renderGoal(c)
         "fmt" -> renderFmt(c)
+        "batt" -> renderBatt(c)
         else -> error("unknown case kind ${c.kind} in ${c.id}")
     }
 
@@ -490,6 +496,39 @@ class VitalsDifferentialTest {
         return out
     }
 
+    /** Foundation's reference date, 2001-01-01 00:00 UTC: the depletion queries' `now`. */
+    private val referenceDate: Instant = Instant.ofEpochSecond(978_307_200)
+
+    private fun renderBatt(c: VCase): List<String> {
+        val cap = tokens(c, "cap")
+        val readings = tokens(c, "rd").chunked(3).map { (p, t, ch) -> Triple(p.toInt(), milli(t), ch == "1") }
+        val lists = c.lines.filter { it == "es" || it.startsWith("es ") }.map { line ->
+            line.split(' ').drop(1).chunked(2).map { (p, t) -> BatteryTTE.Sample(p.toInt(), milli(t)) }
+        }
+        val targets = tokens(c, "tg").map { it.toInt() }
+        val full = tokens(c, "jf").chunked(3).map { (p, i, w) -> Triple(p.toInt(), i == "1", w == "1") }
+        fun samples(h: List<BatteryTTE.Sample>): String = h.joinToString("") { " ${it.percent} ${it.at.toEpochMilli()}" }
+
+        val out = mutableListOf<String>()
+        var history: List<BatteryTTE.Sample> = emptyList()
+        var chargeHistory: List<BatteryTTE.Sample> = emptyList()
+        readings.forEachIndexed { k, (p, t, charging) ->
+            history = BatteryTTE.record(history, p, t, charging, cap[0].toInt(), toDouble(cap[1]))
+            chargeHistory = BatteryTTE.recordCharge(chargeHistory, p, t, charging, cap[0].toInt(), toDouble(cap[2]))
+            out += "fold $k ${history.size} ${chargeHistory.size} ${optD(BatteryTTE.timeToEmpty(history, t))} ${optD(BatteryTTE.timeToFull(chargeHistory, t))}"
+        }
+        out += "rec ${history.size}" + samples(history)
+        out += "chg ${chargeHistory.size}" + samples(chargeHistory)
+        lists.forEachIndexed { k, l ->
+            out += "tte $k ${optD(BatteryTTE.timeToEmpty(l, referenceDate))}"
+            out += BatteryTTE.estimatedDepletionDate(l, referenceDate)
+                ?.let { "dep $k ${it.epochSecond - referenceDate.epochSecond} ${it.nano}" } ?: "dep $k -"
+            out += "ttf $k" + targets.joinToString("") { " " + optD(BatteryTTE.timeToFull(l, referenceDate, it)) }
+        }
+        out += "jf" + full.joinToString("") { (p, i, w) -> if (BatteryTTE.justReachedFull(p, i, w)) " 1" else " 0" }
+        return out
+    }
+
     // --- comparison ---
 
     /**
@@ -557,6 +596,18 @@ class VitalsDifferentialTest {
         // its streak of twelve all-closed days (1–12 September) breaks into two runs of 6; here it is
         // one run of 12. Every summary of that "streaks" case; no other summary differs.
         "a streak counts consecutive calendar dates" to (0..3).map { Divergence("goal-008", "gs $it") }.toSet(),
+        // PORTING D-99: a battery percent outside 0…100 is not a reading (the folds leave the history
+        // unchanged, the estimates leave such a stored sample out, only exactly 100 is full), where
+        // upstream folds it in (an Int32.max reading replaces the discharge history, a −1 while
+        // charging resets it), estimates from it (a stored 255 or 101 reads as "already full") and
+        // fires "full" for 101, 255 and Int32.max. Exactly the lines of the three "hostile" cases that
+        // an out-of-range value reaches: every fold from the first such reading on whose answer
+        // changes, the final discharge history, the sample lists holding one, and the full queries.
+        "a battery percent outside 0…100 is not a reading" to mapOf(
+            "batt-018" to (5..14).map { "fold $it" } + listOf("rec", "tte 0", "dep 0", "ttf 0", "ttf 1", "jf"),
+            "batt-019" to (7..13).map { "fold $it" } + listOf("rec", "tte 0", "dep 0", "ttf 1", "jf"),
+            "batt-020" to listOf(4, 5, 6, 9, 10, 11).map { "fold $it" } + listOf("ttf 0", "ttf 1", "jf"),
+        ).flatMap { (case, kinds) -> kinds.map { Divergence(case, it) } }.toSet(),
     )
 
     /** The tokens that identify a golden line among its case's lines: the first two for indexed kinds, else the first. */
@@ -568,6 +619,7 @@ class VitalsDifferentialTest {
                 "rst", "z", "vst", "cls", "rep", "ver",
                 "wbs", "acs", "trd",
                 "gw", "gd", "gs", "fmt",
+                "fold", "tte", "dep", "ttf",
             )
         ) {
             2
@@ -678,7 +730,7 @@ class VitalsDifferentialTest {
             "hrs/day", "hrs/spring-forward", "hrs/fall-back", "hrs/reversed", "hrs/duplicated", "hrs/quarter-second", "hrs/sparse", "hrs/point",
             "energy/typical", "energy/edge-profile", "energy/nonfinite",
             "day/workday", "day/spring-forward", "day/fall-back", "day/duplicated", "day/unsorted", "day/steps-only",
-            "day/hr-only", "day/straddle", "day/sparse", "day/sleep-heavy", "day/spans", "day/hostile",
+            "day/hr-only", "day/straddle", "day/sparse", "day/sleep-heavy", "day/spans", "day/hostile", "day/no-night",
             "base/steady", "base/fever", "base/desat", "base/hrvdrop", "base/short", "base/long", "base/flat", "base/artifact",
             "base/unreadable",
             "temp/full", "temp/partial", "temp/clustered", "temp/sparse", "temp/thin", "temp/endreading", "temp/history",
@@ -688,6 +740,7 @@ class VitalsDifferentialTest {
             "trend/typical", "trend/deadband", "trend/extreme",
             "goal/spring", "goal/fall", "goal/streaks", "goal/skew",
             "fmt/ties", "fmt/near", "fmt/edge", "fmt/cap",
+            "batt/discharge", "batt/charge", "batt/mixed", "batt/duplicated", "batt/unsorted", "batt/edge", "batt/hostile",
         )
         for (s in expected) assertTrue((shapes[s] ?: 0) >= 3, "shape $s has ${shapes[s] ?: 0} cases")
 
@@ -702,7 +755,7 @@ class VitalsDifferentialTest {
             "bmr-negative", "dist-nonpositive", "keytel-zero", "keytel-positive",
             "scale-neutral", "scale-clamped-high", "scale-clamped-low", "scale-linear", "scale-nonfinite-input",
             "baseline-none", "baseline-plain-mean", "baseline-trimmed", "baseline-nonfinite",
-            "day-rhr-sleep-mean", "day-rhr-isolated", "day-rhr-multi-day", "day-clock-change", "day-no-midnight",
+            "day-rhr-sleep-mean", "day-rhr-sustained", "day-rhr-isolated", "day-rhr-multi-day", "day-clock-change", "day-no-midnight",
             "day-baseline-derived", "day-baseline-none", "day-sleep-excluded", "day-pieces-none", "day-span-samples",
             "day-attributed", "day-legacy-fallback", "day-netted-bucket", "day-residual-steps", "day-straddling-window",
             "day-duplicated-samples", "day-subsecond-width", "day-wide-width",
@@ -725,6 +778,12 @@ class VitalsDifferentialTest {
             "goal-streak-current", "goal-streak-stale", "goal-nap-excluded", "goal-nap-credited", "goal-legacy-night",
             "goal-widened-night", "goal-normalised", "goal-missing-day", "goal-cross-zone", "goal-duplicate-row",
             "fmt-tie", "fmt-nan", "fmt-inf", "fmt-negative-zero", "fmt-negative-width", "fmt-capped", "fmt-huge",
+            "batt-rec-first", "batt-rec-append", "batt-rec-charging", "batt-rec-missed-charge", "batt-rec-jitter", "batt-rec-pruned",
+            "batt-chg-cleared", "batt-chg-append", "batt-chg-reset", "batt-chg-ignored",
+            "batt-tte-value", "batt-tte-short", "batt-tte-no-window", "batt-tte-small", "batt-tte-rate", "batt-tte-empty-battery",
+            "batt-ttf-value", "batt-ttf-short", "batt-ttf-no-window", "batt-ttf-full", "batt-ttf-small", "batt-ttf-rate",
+            "batt-dep-value", "batt-duplicate-times", "batt-unsorted", "batt-out-of-range", "batt-target-outside",
+            "batt-full-fired", "batt-full-blocked", "batt-cap-zero", "batt-age-not-positive",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }
