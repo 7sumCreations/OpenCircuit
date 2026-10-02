@@ -17,8 +17,9 @@ import kotlin.test.assertTrue
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/RobustBaselineTests.swift
  * (@ b1c2fdd), all 10 tests. `testArtifactDayShiftsBaselineLessThanOneNoiseFloor` reads its noise
- * floor from `HeadacheSignals.Feature.skinTempDeviation.noiseFloor`, which lives in a file a later
- * epic ports; the literal 0.3 here is typed from upstream's `HeadacheSignals.swift:62`.
+ * floor from the ported `HeadacheSignals.Feature.SKIN_TEMP_DEVIATION.noiseFloor`, as upstream reads
+ * `skinTempDeviation.noiseFloor` — one home for the constant. Its expected z of exactly 2 (0.6 over
+ * upstream's 0.3) still pins the value.
  */
 class RobustBaselineTest {
 
@@ -185,7 +186,7 @@ class RobustBaselineTest {
      */
     @Test
     fun artifactDayShiftsBaselineLessThanOneNoiseFloor() { // :156-187
-        val floor = 0.3 // upstream: HeadacheSignals.Feature.skinTempDeviation.noiseFloor (HeadacheSignals.swift:62)
+        val floor = HeadacheSignals.Feature.SKIN_TEMP_DEVIATION.noiseFloor // upstream: skinTempDeviation.noiseFloor (0.3)
         val steady = listOf(34.3, 34.4, 34.5, 34.4, 34.3, 34.5, 34.4, 34.4, 34.5)
         val artifactC = 30.0 // ≈ 86 °F
         val contaminated = listOf(artifactC) + steady

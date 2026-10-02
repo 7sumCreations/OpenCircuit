@@ -17,6 +17,9 @@ internal fun swiftMin(x: Double, y: Double): Double = if (y < x) y else x
 /** Swift's `max(x, y)`: `y >= x ? y : x` (a NaN `x` is returned; a NaN `y` is ignored). */
 internal fun swiftMax(x: Double, y: Double): Double = if (y >= x) y else x
 
+/** Swift's `==` on two `Double?`: nil equals only nil; otherwise IEEE (NaN unequal to itself, -0.0 equal to 0.0). */
+internal fun ieeeEquals(a: Double?, b: Double?): Boolean = if (a == null || b == null) a == null && b == null else a.toDouble() == b.toDouble()
+
 /** Swift's `Sequence.min()` over a non-empty list: the first element, replaced by any later one that compares smaller. */
 internal fun swiftSequenceMin(xs: List<Double>): Double {
     var result = xs[0]
@@ -40,9 +43,21 @@ internal fun roundHalfAwayFromZero(x: Double): Double {
  * and with the same merge direction and tie preference.
  */
 internal fun swiftSorted(values: List<Double>): DoubleArray {
-    val a = values.toDoubleArray()
-    SwiftStableSort.sort(a)
-    return a
+    val v = values.toDoubleArray()
+    val order = swiftSortedIndices(v)
+    return DoubleArray(v.size) { v[order[it]] }
+}
+
+/**
+ * The permutation Swift's `indices.sorted { values[$0] < values[$1] }` produces: the same stable sort
+ * as [swiftSorted], over the positions of [values] (so -0.0 and 0.0, which `<` does not order, keep
+ * their input order, and NaN lands where the algorithm leaves it). `values[result[k]]` is the k-th
+ * value of [swiftSorted].
+ */
+internal fun swiftSortedIndices(values: DoubleArray): IntArray {
+    val order = IntArray(values.size) { it }
+    SwiftStableSort.sort(order) { x, y -> values[x] < values[y] }
+    return order
 }
 
 /**
@@ -82,9 +97,18 @@ internal const val SWIFT_FIXED_MAX_LENGTH = 510
 /** Decimals [swiftFixed] computes at most: past a double's 1 074-decimal expansion, and past [SWIFT_FIXED_MAX_LENGTH]. */
 internal const val SWIFT_FIXED_EXACT_DIGITS = 1_100
 
-private object SwiftStableSort {
+/**
+ * Swift's standard-library sort (`sort(by:)`), applied to [IntArray] elements compared with [less] —
+ * the elements are positions into the caller's values, so one algorithm serves `sorted()` and
+ * `indices.sorted(by:)`.
+ */
+private class SwiftStableSort(private val less: (Int, Int) -> Boolean) {
 
-    fun sort(a: DoubleArray) {
+    companion object {
+        fun sort(a: IntArray, less: (Int, Int) -> Boolean) = SwiftStableSort(less).sort(a)
+    }
+
+    fun sort(a: IntArray) {
         val count = a.size
         if (count <= 1) return
         if (count <= 20) {
@@ -92,7 +116,7 @@ private object SwiftStableSort {
             return
         }
         val minRun = minimumMergeRunLength(count)
-        val buffer = DoubleArray(count / 2 + 1)
+        val buffer = IntArray(count / 2 + 1)
         val runs = ArrayList<IntArray>() // each [lo, hi)
         var start = 0
         while (start < count) {
@@ -127,23 +151,23 @@ private object SwiftStableSort {
      * not `<` the previous one; strictly descending runs while it is. A descending run's end is
      * returned negated.
      */
-    private fun nextRunEnd(a: DoubleArray, start: Int): Int {
+    private fun nextRunEnd(a: IntArray, start: Int): Int {
         var previous = start
         var current = start + 1
         if (current >= a.size) return current
-        val isDescending = a[current] < a[previous]
+        val isDescending = less(a[current], a[previous])
         do {
             previous = current
             current++
-        } while (current < a.size && isDescending == (a[current] < a[previous]))
+        } while (current < a.size && isDescending == less(a[current], a[previous]))
         return if (isDescending) -current else current
     }
 
     /** Insertion sort of `[lo, hi)` whose prefix `[lo, sortedEnd)` is already sorted; moves left only while strictly `<`. */
-    private fun insertionSort(a: DoubleArray, lo: Int, hi: Int, sortedEnd: Int) {
+    private fun insertionSort(a: IntArray, lo: Int, hi: Int, sortedEnd: Int) {
         for (i in sortedEnd until hi) {
             var j = i
-            while (j > lo && a[j] < a[j - 1]) {
+            while (j > lo && less(a[j], a[j - 1])) {
                 val t = a[j]; a[j] = a[j - 1]; a[j - 1] = t
                 j--
             }
@@ -153,7 +177,7 @@ private object SwiftStableSort {
     private fun size(r: IntArray): Int = r[1] - r[0]
 
     /** Swift's `_mergeTopRuns`: restore W > X + Y, X > Y + Z, Y > Z on the top of the run stack. */
-    private fun mergeTopRuns(runs: ArrayList<IntArray>, a: DoubleArray, buffer: DoubleArray) {
+    private fun mergeTopRuns(runs: ArrayList<IntArray>, a: IntArray, buffer: IntArray) {
         while (runs.size > 1) {
             var lastIndex = runs.size - 1
             if (lastIndex >= 3 && size(runs[lastIndex - 3]) <= size(runs[lastIndex - 2]) + size(runs[lastIndex - 1])) {
@@ -169,7 +193,7 @@ private object SwiftStableSort {
         }
     }
 
-    private fun mergeRuns(runs: ArrayList<IntArray>, i: Int, a: DoubleArray, buffer: DoubleArray) {
+    private fun mergeRuns(runs: ArrayList<IntArray>, i: Int, a: IntArray, buffer: IntArray) {
         val low = runs[i - 1][0]
         val mid = runs[i][0]
         val high = runs[i][1]
@@ -184,7 +208,7 @@ private object SwiftStableSort {
      * lower value only when the buffered one is `<` it); whatever is left in the buffer is moved
      * back at the end.
      */
-    private fun merge(a: DoubleArray, low: Int, mid: Int, high: Int, buffer: DoubleArray) {
+    private fun merge(a: IntArray, low: Int, mid: Int, high: Int, buffer: IntArray) {
         val lowCount = mid - low
         val highCount = high - mid
         var destLow = low
@@ -195,7 +219,7 @@ private object SwiftStableSort {
             bufferHigh = lowCount
             var srcLow = mid
             while (bufferLow < bufferHigh && srcLow < high) {
-                if (a[srcLow] < buffer[bufferLow]) {
+                if (less(a[srcLow], buffer[bufferLow])) {
                     a[destLow] = a[srcLow]; srcLow++
                 } else {
                     a[destLow] = buffer[bufferLow]; bufferLow++
@@ -210,7 +234,7 @@ private object SwiftStableSort {
             destLow = mid
             while (bufferHigh > bufferLow && srcHigh > low) {
                 destHigh--
-                if (buffer[bufferHigh - 1] < a[srcHigh - 1]) {
+                if (less(buffer[bufferHigh - 1], a[srcHigh - 1])) {
                     srcHigh--
                     a[destHigh] = a[srcHigh]
                     destLow--
