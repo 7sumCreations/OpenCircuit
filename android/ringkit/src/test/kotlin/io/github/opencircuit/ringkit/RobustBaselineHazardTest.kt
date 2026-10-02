@@ -141,6 +141,14 @@ class RobustBaselineHazardTest {
         assertEquals(-4.0, RobustBaseline.z(62.0, flat, noiseFloor = 5.0, clamp = -4.0))
         assertEquals(0.0, RobustBaseline.z(62.0, flat, noiseFloor = 5.0, clamp = 0.0))
         assertEquals(8.0, RobustBaseline.z(100.0, flat, noiseFloor = 5.0, clamp = inf))
+        // An overflowing quotient that a NaN or infinite clamp cannot bound reads 0, as upstream (which
+        // zeroes every quotient that is not finite): z is never infinite.
+        for (clamp in listOf(nan, inf)) {
+            assertEquals(0.0, RobustBaseline.z(70.0, flat, noiseFloor = 0.0, clamp = clamp), "clamp $clamp, +overflow")
+            assertEquals(0.0, RobustBaseline.z(50.0, flat, noiseFloor = 0.0, clamp = clamp), "clamp $clamp, -overflow")
+            assertEquals(0.0, RobustBaseline.z(1e308, RobustBaseline.Stats(-1e308, 1.0, 7), noiseFloor = 5.0, clamp = clamp), "clamp $clamp, overflowing difference")
+        }
+        assertEquals(-4.0, RobustBaseline.z(70.0, flat, noiseFloor = 0.0, clamp = -4.0), "a negative clamp still bounds an overflow")
         assertEquals(4.0, RobustBaseline.z(80.0, flat, noiseFloor = 5.0), "exactly the clamp")
         assertEquals((-0.0).toRawBits(), RobustBaseline.z(-0.0, RobustBaseline.Stats(0.0, 0.0, 7), noiseFloor = 5.0).toRawBits(), "-0.0 survives")
     }

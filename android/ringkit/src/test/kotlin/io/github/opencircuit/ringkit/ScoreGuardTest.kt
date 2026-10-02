@@ -102,6 +102,12 @@ class ScoreGuardTest {
         assertEquals(10_000, day.steps)
         assertEquals(100, ActivityScore.score(day).score)
         assertEquals(55, ActivityScore.score(lazyDay).score)
+        // Upstream's ActivityScore.Input is Equatable: its doubles compare by IEEE ==, as each Result does.
+        val zeroKcal = day.copy(activeKcal = 0.0)
+        assertEquals(zeroKcal, day.copy(activeKcal = -0.0), "-0.0 equals 0.0, as Swift's ==")
+        assertEquals(zeroKcal.hashCode(), day.copy(activeKcal = -0.0).hashCode())
+        assertNotEquals(day.copy(activeMinutes = Double.NaN), day.copy(activeMinutes = Double.NaN), "NaN is unequal to itself")
+        assertNotEquals(day, day.copy(activeKcalGoal = 499.0))
     }
 
     @Test

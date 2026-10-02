@@ -4,7 +4,8 @@ package io.github.opencircuit.ringkit
 // whole. Upstream ported it from openwhoop-algos/src/strain.rs.
 //
 // Port notes:
-//  • `Strain` keeps upstream's two stored properties; its static members live in the companion.
+//  • `Strain` keeps upstream's two stored properties; its static members live in the companion. It
+//    is a data class, so it compares by value (upstream's struct is not `Equatable`; this only adds).
 //  • `log` is `StrictMath.log` (fdlibm), the same bits on every JVM and on Android; `rounded()` is
 //    Swift's (`roundHalfAwayFromZero`).
 //  • A timestamped sample's duration is the exact difference of its two instants, taken from
@@ -18,7 +19,7 @@ package io.github.opencircuit.ringkit
 import java.time.Instant
 
 /** Edwards' zone-based TRIMP over heart-rate reserve, on the WHOOP 0…21 strain scale. */
-class Strain(val maxHR: Int, val restingHR: Int) {
+data class Strain(val maxHR: Int, val restingHR: Int) {
 
     /**
      * Strain for a BPM series sampled every [sampleSeconds]; `null` with fewer than [MIN_READINGS]

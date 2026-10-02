@@ -63,6 +63,9 @@ class VitalsGuardTest {
         assertEquals(p, p.copy())
         assertNotEquals(p, p.copy(sex = BiologicalSex.FEMALE))
         assertEquals(HRV.Summary(1, 2, 3), HRV.Summary(1, 2, 3))
+        assertEquals(Strain(190, 60), Strain(190, 60), "Strain compares by value")
+        assertEquals(Strain(190, 60).hashCode(), Strain(190, 60).hashCode())
+        assertNotEquals(Strain(190, 60), Strain(190, 61))
     }
 
     @Test

@@ -60,7 +60,8 @@ object ActivityScore {
     /**
      * Inputs: each is a daily current value paired with its goal — steps from the descriptor counter,
      * active minutes and active kcal from the shared `Calories.dailyEstimate`. A factor whose goal is
-     * ≤ 0 (unset / disabled) is dropped and the rest are renormalised.
+     * ≤ 0 (unset / disabled) is dropped and the rest are renormalised. Compares as Swift's synthesized
+     * `Equatable`: the doubles by IEEE `==` (−0.0 equals 0.0, NaN is unequal to itself).
      */
     data class Input(
         val steps: Int,
@@ -69,7 +70,15 @@ object ActivityScore {
         val activeMinutesGoal: Double,
         val activeKcal: Double,
         val activeKcalGoal: Double,
-    )
+    ) {
+        override fun equals(other: Any?): Boolean =
+            other is Input && steps == other.steps && stepGoal == other.stepGoal &&
+                activeMinutes == other.activeMinutes && activeMinutesGoal == other.activeMinutesGoal &&
+                activeKcal == other.activeKcal && activeKcalGoal == other.activeKcalGoal
+
+        override fun hashCode(): Int =
+            listOf(steps, stepGoal, ieeeHash(activeMinutes), ieeeHash(activeMinutesGoal), ieeeHash(activeKcal), ieeeHash(activeKcalGoal)).hashCode()
+    }
 
     /**
      * The result plus each present factor's 0…1 goal attainment (capped at 1; for a breakdown view). A

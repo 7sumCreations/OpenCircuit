@@ -88,7 +88,9 @@ object RobustBaseline {
      * A result that is not finite reads as 0 (upstream's rule — an unreadable today or baseline
      * contributes nothing), EXCEPT a quotient of finite readings that overflows a positive scale: that
      * is the largest deviation there is, and it is clamped by its sign. Upstream returns 0 there too,
-     * so with a zero floor and a zero MAD a deviation of 1 read 4 while one of 10 read 0.
+     * so with a zero floor and a zero MAD a deviation of 1 read 4 while one of 10 read 0. A clamp that
+     * cannot bound that overflow (NaN or +∞) leaves it unclamped, so it reads 0, as upstream: the
+     * result is always finite.
      */
     fun z(today: Double, stats: Stats, noiseFloor: Double, clamp: Double = Z_CLAMP): Double {
         val scale = swiftMax(MAD_CONSISTENCY * stats.mad, swiftMax(noiseFloor, java.lang.Double.MIN_NORMAL))
@@ -97,7 +99,8 @@ object RobustBaseline {
             val overflow = raw.isInfinite() && today.isFinite() && stats.median.isFinite() && scale > 0.0
             if (!overflow) return 0.0
         }
-        return swiftMin(swiftMax(raw, -clamp), clamp)
+        val clamped = swiftMin(swiftMax(raw, -clamp), clamp)
+        return if (clamped.isFinite()) clamped else 0.0
     }
 
     private const val DAY_MINUTES: Int = 24 * 60
