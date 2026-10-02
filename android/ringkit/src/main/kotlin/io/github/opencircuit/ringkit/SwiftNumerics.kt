@@ -5,6 +5,8 @@ package io.github.opencircuit.ringkit
 // and those differences change upstream outputs on inputs the ported code can reach. One home for
 // each, so every port calls the same rule.
 
+import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlin.math.abs
 import kotlin.math.sign
 import kotlin.math.truncate
@@ -42,6 +44,43 @@ internal fun swiftSorted(values: List<Double>): DoubleArray {
     SwiftStableSort.sort(a)
     return a
 }
+
+/**
+ * Foundation's `String(format: "%.Nf", v)` — or `"%+.Nf"` when [forceSign] — with N = [fractionDigits],
+ * reproduced character for character (measured on the pinned build). The one home for fixed-decimal
+ * text: Java's `String.format` rounds half up and reads the default locale, and this does neither.
+ *
+ * - The exact binary value is rounded ties to even (0.25 → "0.2", 2.5 → "2"; 0.35 is below its tie,
+ *   so "0.3"), in ASCII digits with a "." separator, the whole decimal expansion for large values.
+ * - The sign comes from the sign bit: −0.0, and a negative value that rounds to zero, print "-0.0";
+ *   [forceSign] puts "+" on everything else. NaN prints "nan" whatever its sign (never signed);
+ *   infinities print "inf" / "-inf" ("+inf" when forced).
+ * - A negative [fractionDigits] makes upstream's format "%.-Nf", which Foundation reads as no
+ *   decimals, left-justified in a field N characters wide.
+ * - Foundation keeps only the first 510 characters of the number. It crashes once |N| reaches
+ *   2^31 − 512; here every width gets the same 510-character text, and digits past
+ *   [SWIFT_FIXED_EXACT_DIGITS] are never computed (a double's exact expansion has at most 1 074
+ *   decimals), so a huge N allocates nothing extra.
+ */
+internal fun swiftFixed(v: Double, fractionDigits: Int, forceSign: Boolean = false): String {
+    val precision = if (fractionDigits >= 0) minOf(fractionDigits, SWIFT_FIXED_EXACT_DIGITS) else 0
+    val width = if (fractionDigits >= 0) 0L else -fractionDigits.toLong()
+    val negative = v.toRawBits() < 0
+    val sign = if (negative) "-" else if (forceSign) "+" else ""
+    val text = when {
+        v.isNaN() -> "nan"
+        v.isInfinite() -> sign + "inf"
+        else -> sign + BigDecimal(v).abs().setScale(precision, RoundingMode.HALF_EVEN).toPlainString()
+    }
+    val padded = if (text.length < width) text.padEnd(minOf(width, SWIFT_FIXED_MAX_LENGTH.toLong()).toInt()) else text
+    return if (padded.length > SWIFT_FIXED_MAX_LENGTH) padded.substring(0, SWIFT_FIXED_MAX_LENGTH) else padded
+}
+
+/** The most characters Foundation writes for one `%f` conversion (measured). */
+internal const val SWIFT_FIXED_MAX_LENGTH = 510
+
+/** Decimals [swiftFixed] computes at most: past a double's 1 074-decimal expansion, and past [SWIFT_FIXED_MAX_LENGTH]. */
+internal const val SWIFT_FIXED_EXACT_DIGITS = 1_100
 
 private object SwiftStableSort {
 

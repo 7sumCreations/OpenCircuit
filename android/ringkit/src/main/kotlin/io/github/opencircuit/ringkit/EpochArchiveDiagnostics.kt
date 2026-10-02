@@ -100,5 +100,5 @@ object EpochArchiveDiagnostics {
     }
 
     /** Upstream's `String(format: "%.1f", v)`: the exact binary value, one decimal, ties to even. */
-    internal fun oneDecimal(v: Double): String = BigDecimal(v).setScale(1, RoundingMode.HALF_EVEN).toPlainString()
+    internal fun oneDecimal(v: Double): String = swiftFixed(v, 1)
 }
