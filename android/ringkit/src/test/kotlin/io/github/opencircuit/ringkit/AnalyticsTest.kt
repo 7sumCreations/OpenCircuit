@@ -1,6 +1,8 @@
 package io.github.opencircuit.ringkit
 
 import java.time.Instant
+import java.time.ZoneId
+import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -12,11 +14,13 @@ import kotlin.test.assertTrue
  * openwhoop's own Rust unit tests, so the port is provably equivalent.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/AnalyticsTests.swift (@ b1c2fdd),
- * in parts: 24 of 28 so far — HRV, stress, strain, the Mifflin-St Jeor and resting-HR–adjusted
- * basal energy, TRIMP energy and the step / distance energy estimate (:11-171), the trimmed-mean
- * baseline tests (:214-242) and `testSleepScore` (:334-342). The four tests of the daily energy
- * estimate and the daily resting HR (:173, :201, :246, :294) arrive with those functions.
- * HRV results are 64-bit (`Long`), as upstream's `Int`.
+ * all 28 tests — HRV, stress, strain, the Mifflin-St Jeor and resting-HR–adjusted basal energy,
+ * TRIMP energy and the step / distance energy estimate (:11-171), the daily energy estimate
+ * (:173-210), the trimmed-mean baseline (:214-242), the daily resting HR into the basal energy
+ * (:246-332) and `testSleepScore` (:334-342). HRV results are 64-bit (`Long`), as upstream's `Int`.
+ *
+ * The two daily resting-HR tests read the device calendar and clock upstream (`Calendar.current`,
+ * `Date()`); here each names a zone and a fixed instant, chosen so the test bites (stated at each).
  */
 class AnalyticsTest {
 
@@ -205,6 +209,35 @@ class AnalyticsTest {
         assertEquals(0.0, Calories.activeKcalFromSteps(steps = 0, profile = profile), 0.001)
     }
 
+    @Test
+    fun dailyEstimateUsesSameModerateHRRunForMinutesAndCalories() { // :173-199
+        val profile = UserProfile(age = 33, weightKg = 72.5, heightCm = 170.0, sex = BiologicalSex.MALE)
+        val start = Instant.ofEpochSecond(0)
+        // 100 bpm is above the elevated-HR threshold for age 33 (93 bpm), but below the old
+        // 50%-of-HR-reserve calorie floor (~124 bpm). The old dashboard therefore showed
+        // exercise time with zero HR calories. Four consecutive 2.5-min epochs represent 10 min.
+        val samples = listOf(0L, 150L, 300L, 450L).map { offset ->
+            HRSample(bpm = 100, start = start.plusSeconds(offset), end = start.plusSeconds(offset))
+        }
+
+        val result = Calories.dailyEstimate(hrSamples = samples, steps = 0, profile = profile)
+        val expectedKcal = Calories.workoutActiveKcal(avgHR = 100, durationSeconds = 10.0 * 60, profile = profile)
+
+        assertEquals(10.0, result.elevatedMinutes, 0.001)
+        assertEquals(expectedKcal, result.activeKcal, 0.001)
+        assertTrue(result.activeKcal > 0)
+    }
+
+    @Test
+    fun dailyEstimateFallsBackToStepsWithoutQualifyingHR() { // :201-210
+        val profile = UserProfile(age = 33, weightKg = 72.5, heightCm = 170.0, sex = BiologicalSex.MALE)
+        val low = HRSample(bpm = 70, start = Instant.ofEpochSecond(0))
+        val result = Calories.dailyEstimate(hrSamples = listOf(low), steps = 5_000, profile = profile)
+
+        assertEquals(0.0, result.elevatedMinutes)
+        assertEquals(Calories.activeKcalFromSteps(steps = 5_000, profile = profile), result.activeKcal, 0.001)
+    }
+
     // Trimmed-mean baseline robustness (#172 review, fix #4)
 
     @Test
@@ -232,6 +265,103 @@ class AnalyticsTest {
         // n=5: trimming kicks in — drop one high + one low, mean the middle three.
         // [50, 59, 60, 61, 100] → drop 50 & 100 → mean(59, 60, 61) = 60, NOT the plain mean (66).
         assertEquals(60.0, assertNotNull(Calories.restingBaselineBpm(listOf(50.0, 59.0, 60.0, 61.0, 100.0))), 1e-9)
+    }
+
+    // Integration — daily RHR → energy inputs → dynamic basal kcal (#172 review, fix #3)
+
+    /** Athens: each day's readings (00:00–05:00 local) cross UTC midnight, so grouping in any other zone splits days. */
+    private val athens: ZoneId = ZoneId.of("Europe/Athens")
+
+    @Test
+    fun dailyRHRToBasalEnergyEndToEnd() { // :246-292
+        // Upstream reads the device calendar and clock. Here: Europe/Athens on 31 March 2026 (09:00 UTC),
+        // so the five days (27–31 March) cross the 29 March spring-forward (a 23-hour day), and each
+        // day's readings straddle UTC midnight — a zone-blind grouping finds six days, not five.
+        val now = Instant.parse("2026-03-31T09:00:00Z")
+        val today = CalendarDay.startOfDay(now, athens)!!
+
+        // Synthesize 5 days of HR data: ~300 readings per day, each day at a different sustained
+        // resting level. Day 0–3 baseline around 60 bpm; day 4 (today) elevated at 70 bpm.
+        val allHR = mutableListOf<HRSample>()
+        for (dayOffset in 0 until 5) {
+            val dayStart = today.atZone(athens).plusDays(dayOffset - 4L).toInstant()
+            val bpm = if (dayOffset < 4) 60 else 70
+            for (minute in 0 until 300 step 5) {
+                val t = dayStart.plusSeconds(minute * 60L)
+                allHR += HRSample(bpm = bpm, start = t, end = t.plusSeconds(60))
+            }
+        }
+
+        // Derive daily RHR WITHOUT sleep segments (the lowestSustained path for all days —
+        // matches the fix for derivation parity, #172 review fix #1).
+        val daily = RestingHR.dailyValues(hr = allHR, sleep = emptyList(), zone = athens)
+        assertEquals(5, daily.size, "5 days of HR data → 5 daily RHR values")
+
+        // All baseline days should be ~60 bpm (lowestSustained of constant 60).
+        for (d in daily.take(4)) {
+            assertEquals(60.0, d.bpm, 1.0, "baseline day should derive ~60 bpm via lowestSustained")
+        }
+        // Today should be ~70 bpm.
+        assertEquals(70.0, daily.lastOrNull()?.bpm ?: 0.0, 1.0, "today should derive ~70 bpm via lowestSustained")
+
+        // Verify the baseline uses the trimmed mean of prior days (all ~60 → trimmed mean ~60).
+        val prior = daily.filter { it.day < today }.map { it.bpm }
+        val baseline = assertNotNull(Calories.restingBaselineBpm(prior))
+        assertEquals(60.0, baseline, 1.0)
+
+        // The scale factor for today: +10 bpm over 60 → +10%.
+        val scale = Calories.restingEnergyScale(restingHR = 70.0, baselineRestingHR = baseline)
+        assertEquals(1.10, scale, 0.02)
+
+        // Dynamic basal energy should exceed static.
+        val dynamicKcal = Calories.basalKcalPerHour(male30, restingHR = 70.0, baselineRestingHR = baseline)
+        val staticKcal = Calories.bmrKcalPerHour(male30)
+        assertTrue(dynamicKcal > staticKcal, "elevated RHR day should produce higher basal energy than static BMR")
+    }
+
+    @Test
+    fun derivationParityWithoutSleep() { // :294-332
+        // Verify that omitting sleep segments gives ALL days the same derivation method
+        // (lowestSustained), so the comparison today-vs-baseline is fair. Upstream reads the device
+        // calendar and clock. Here: Europe/Athens on 26 October 2026 (09:00 UTC), so "yesterday" is
+        // the 25-hour fall-back day whose readings run through the repeated hour, and both days'
+        // readings straddle UTC midnight — a zone-blind grouping finds three days, not two.
+        val now = Instant.parse("2026-10-26T09:00:00Z")
+        val today = CalendarDay.startOfDay(now, athens)!!
+        val yesterday = today.atZone(athens).plusDays(-1).toInstant()
+
+        // Both days have the same HR pattern: readings at 60 bpm with a dip to 55.
+        val hr = mutableListOf<HRSample>()
+        for (dayStart in listOf(yesterday, today)) {
+            for (minute in 0 until 300 step 5) {
+                val t = dayStart.plusSeconds(minute * 60L)
+                val bpm = if (minute < 30) 55 else 60
+                hr += HRSample(bpm = bpm, start = t, end = t.plusSeconds(60))
+            }
+        }
+
+        // Sleep segments covering ONLY today's night.
+        val sleepStart = today.plusSeconds(1 * 3600)
+        val sleepEnd = today.plusSeconds(4 * 3600)
+        val sleep = listOf(SleepSegment(sleepStart, sleepEnd, SleepStage.ASLEEP_CORE))
+
+        val withSleep = RestingHR.dailyValues(hr = hr, sleep = sleep, zone = athens)
+        val withoutSleep = RestingHR.dailyValues(hr = hr, sleep = emptyList(), zone = athens)
+
+        // Without sleep: both days should produce the same RHR (same HR pattern, same method).
+        assertEquals(2, withoutSleep.size)
+        assertEquals(
+            withoutSleep[0].bpm, withoutSleep[1].bpm, 1e-9,
+            "without sleep, identical HR patterns yield identical daily RHR — no method offset",
+        )
+
+        // With sleep: today may differ from yesterday (sleep-mean vs lowestSustained).
+        // This is the bias the fix eliminates.
+        if (withSleep.size == 2) {
+            val diff = abs(withSleep[0].bpm - withSleep[1].bpm)
+            val noDiff = abs(withoutSleep[0].bpm - withoutSleep[1].bpm)
+            assertTrue(noDiff <= diff, "dropping sleep should not increase inter-day offset")
+        }
     }
 
     // Sleep score (openwhoop sleep.rs)
