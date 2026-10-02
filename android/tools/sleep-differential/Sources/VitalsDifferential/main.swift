@@ -71,6 +71,19 @@
 //     q <steps> <stepGoal> <minutes> <minutesGoal> <kcal> <kcalGoal>   (the last four are doubles)
 //   kind trend (one query per line):
 //     q <today> <deadband> <prior scores...>
+//   kind goal (a window of goal-ring days around a clock change, with its nights and naps):
+//     zone <time zone identifier>       the zone days, weekends and sleep credit are judged in
+//     szone <time zone identifier>      the zone the summaries are judged in
+//     goals <workday steps> <weekend steps> <kcal> <minutes> <workday sleep> <weekend sleep>
+//     now <ms>                          build's "today" reference
+//     di <ms> <steps|-> <kcal|-> <minutes|-> <sleep|->   one day rollup (any order, any time of day)
+//     nt <night key ms> <in-bed start ms|-> <in-bed end ms|-> <minutes>   one stored night
+//     np <start ms> <end ms> <minutes>  one nap
+//     sn <ms>...                        the instants the summaries are judged at
+//     wq <ms>...                        the instants the weekend rule and goal selection are asked at
+//   kind fmt (the formatter's three number shapes):
+//     v <doubles>                       the values
+//     fd <ints>                         the fraction digits, each applied to every value
 //   end
 // goldens.txt, per case:
 //   case <id>
@@ -144,6 +157,20 @@
 //   act:    acs <k> <score> <tier> <steps|-> <activeMinutes|-> <activeKcal|->
 //                                       ActivityScore.score of query k, factors as above
 //   trend:  trd <k> <up|steady|down>    WellnessBalance.trend of query k
+//   goal:   gw <k> <weekend 0|1> <step goal> <sleep goal>   GoalDefaults.isWeekend and the goals'
+//                                       stepGoal / sleepGoalMinutes at weekend query k
+//           gc <n> (<day ms> <minutes>)*   GoalHistory.sleepCreditByDay of the nights and naps,
+//                                       days in ascending order
+//           gd <k> <day ms> <present> <met> <partial 0|1> <attainment|-> <fraction>×4
+//                                       day k of GoalHistory.build (oldest first); present and met
+//                                       as four 0/1 digits and the fractions in ring order (steps,
+//                                       active kcal, activity minutes, sleep minutes)
+//           gs <k> <days with data> <days all closed> <current> <longest> <met count|->×4
+//              <data count|->×4         GoalHistory.summarize of the built days at summary instant k
+//   fmt:    fmt <j> <a> | <b> | <c> | <d> | <e> | <f>   value-major pair j of the values and the
+//                                       fraction digits: UnitsFormatter.temperature in °C and °F,
+//                                       temperatureDelta in °C and °F, distance of value × 1000 m in
+//                                       km and of value × 1609.344 m in miles (the strings verbatim)
 //   end
 //
 // Shapes include, from the start, the inputs a deliberate difference from upstream would touch:
@@ -153,7 +180,10 @@
 // unreadable prior days, todays, offsets, readings and nights, a zero noise floor against a
 // perfectly flat baseline, readings exactly on the end of a whole-hour night, readiness and
 // activity inputs whose rounded score depends on the order the factors are summed, sub-scores and
-// goals outside their ranges, and trend sums that leave 32 bits.
+// goals outside their ranges, trend sums that leave 32 bits, goal days across both 2026 clock
+// changes in three zones (one of them a day without a midnight), duplicated, unsorted and future
+// day rows, summaries judged in another zone, and formatter values at exact binary ties, signed
+// zero, non-finite, huge and with negative or very large fraction digits.
 // Upstream's ledger and both scores add a dictionary's values (seeded per process): regenerate.sh
 // runs this program with Swift's deterministic hashing so every run writes the same bytes.
 
@@ -1263,6 +1293,237 @@ func trendCase(_ index: Int) -> Case {
     return c
 }
 
+// MARK: - Goal-ring history → weekend goals, sleep credit, days, summaries
+
+let goalShapes = ["spring", "fall", "streaks", "skew"]
+let goalZones = ["America/New_York", "Europe/London", "America/Santiago"]
+let goalCasesPerShape = 3
+let goalDays = 12
+/// The first local day of each case's window: the windows of "spring" and "fall" hold the zone's
+/// 2026 clock changes (Santiago's 6 September has no midnight; its 5 April repeats an hour),
+/// "streaks" holds Santiago's missing midnight again, and "skew" holds a change in each zone.
+let goalWindowStart: [String: [(Int, Int, Int)]] = [
+    "spring": [(2026, 3, 2), (2026, 3, 23), (2026, 8, 31)],
+    "fall": [(2026, 10, 26), (2026, 10, 19), (2026, 3, 30)],
+    "streaks": [(2026, 8, 10), (2026, 8, 10), (2026, 9, 1)],
+    "skew": [(2026, 3, 4), (2026, 10, 22), (2026, 4, 1)],
+]
+
+func gregorian(_ zone: String) -> Calendar {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: zone)!
+    return c
+}
+
+func mask(_ rings: Set<GoalHistory.Ring>) -> String {
+    GoalHistory.Ring.allCases.map { rings.contains($0) ? "1" : "0" }.joined()
+}
+
+func goalCase(_ index: Int) -> Case {
+    let shape = goalShapes[index / goalCasesPerShape]
+    let zi = index % goalCasesPerShape
+    let zone = goalZones[zi]
+    let sumZone = shape == "skew" ? goalZones[(zi + 1) % goalZones.count] : zone
+    var rng = SplitMix64(state: 0x474F_414C &+ UInt64(index))
+    var c = Case(id: String(format: "goal-%03d", index), kind: "goal", shape: shape)
+    let cal = gregorian(zone)
+    let scal = gregorian(sumZone)
+    let (y, m, d0) = goalWindowStart[shape]![zi]
+    let firstNoon = cal.date(from: DateComponents(year: y, month: m, day: d0, hour: 12))!
+    let noons = (0..<goalDays).map { cal.date(byAdding: .day, value: $0, to: firstNoon)! }
+    let starts = noons.map { cal.startOfDay(for: $0) }
+    func minutes(_ t: Date, _ n: Int) -> Date { t.addingTimeInterval(Double(n) * 60) }
+
+    let goals = rng.chance(50) ? GoalHistory.Goals() : GoalHistory.Goals(
+        workdaySteps: rng.pick([6_000, 8_000, 9_000]), weekendSteps: rng.pick([7_000, 10_000, 12_000]),
+        activeKcal: rng.pick([250.0, 300.0, 450.5]), activityMinutes: rng.pick([20.0, 30.0, 45.25]),
+        workdaySleepMin: rng.pick([400, 420, 450]), weekendSleepMin: rng.pick([420, 480, 510]))
+
+    // Nights credited to the morning of day k (in bed the evening before, across the clock change
+    // where the window holds one), legacy nights without a clock, zero-minute nights, a second
+    // clocked night on the same wake day (the guard widens), and naps in the afternoon, inside a
+    // night and clipping a wake.
+    var nights: [GoalHistory.NightSleep] = []
+    var naps: [GoalHistory.NapSleep] = []
+    var widened = false
+    for k in 1..<goalDays {
+        let r = rng.int(0, 99)
+        let key = starts[k - 1]
+        var wake = minutes(starts[k], rng.int(300, 540))
+        if r < 10 {
+            nights.append(.init(nightKey: key, inBedStart: nil, inBedEnd: nil, asleepMinutes: rng.int(300, 500)))
+        } else if r < 15 {
+            nights.append(.init(nightKey: key, inBedStart: minutes(starts[k], -60), inBedEnd: wake, asleepMinutes: 0))
+        } else {
+            let bed = minutes(starts[k], -rng.int(0, 150))
+            nights.append(.init(nightKey: key, inBedStart: bed, inBedEnd: wake, asleepMinutes: rng.int(300, 520)))
+            if rng.chance(12) {
+                let s = minutes(starts[k], rng.int(600, 700))
+                nights.append(.init(nightKey: key, inBedStart: s, inBedEnd: minutes(s, 50), asleepMinutes: rng.int(20, 45)))
+                widened = true
+            }
+        }
+        if r < 15 { wake = minutes(starts[k], 480) }
+        if rng.chance(40) {
+            let s = minutes(starts[k], rng.int(780, 960))
+            naps.append(.init(start: s, end: minutes(s, rng.int(20, 90)), asleepMinutes: rng.int(15, 80)))
+        }
+        if rng.chance(20) {
+            let s = minutes(starts[k], -rng.int(10, 40))
+            naps.append(.init(start: s, end: minutes(s, 60), asleepMinutes: rng.int(20, 55)))
+        }
+        if rng.chance(10) {
+            let s = minutes(wake, -10)
+            naps.append(.init(start: s, end: minutes(s, 40), asleepMinutes: rng.int(10, 30)))
+        }
+    }
+    let credit = GoalHistory.sleepCreditByDay(nights: nights, naps: naps, calendar: cal)
+
+    // Day rollups: some days absent, some with no data, some full, some partial; dated at the day
+    // start or at another time of the same day; sleep from the credit where there is one. In
+    // "streaks" every day closes all four rings, so each run crosses the window's clock change.
+    let streaks = shape == "streaks"
+    var inputs: [GoalHistory.DayInput] = []
+    for k in 0..<goalDays {
+        let roll = streaks ? 99 : rng.int(0, 99)
+        if roll < 8 { continue }
+        let date = rng.chance(70) ? starts[k] : minutes(noons[k], rng.int(-300, 300))
+        if roll < 14 { inputs.append(.init(date: date)); continue }
+        let full = streaks || roll < 65
+        func some<T>(_ x: T) -> T? { streaks || rng.chance(92) ? x : nil }
+        inputs.append(.init(
+            date: date,
+            steps: some(full ? rng.int(12_000, 20_000) : rng.int(0, 12_000)),
+            activeKcal: some(full ? rng.real(460, 800) : rng.real(0, 460)),
+            activityMinutes: some(full ? rng.real(46, 90) : rng.real(0, 46)),
+            sleepMinutes: full ? 520 + rng.int(0, 120) : (credit[starts[k]] ?? (rng.chance(40) ? rng.int(0, 600) : nil))))
+    }
+    var duplicated = false
+    if shape == "skew" {
+        inputs.append(inputs[rng.int(0, inputs.count - 1)])
+        inputs.append(inputs[rng.int(0, inputs.count - 1)])
+        inputs.append(.init(date: cal.date(byAdding: .day, value: 4, to: starts[goalDays - 1])!, steps: 20_000, activeKcal: 600,
+                            activityMinutes: 60, sleepMinutes: 600))
+        duplicated = true
+    }
+    inputs = inputs.shuffledDeterministically(&rng)
+
+    let now = shape == "streaks" ? cal.date(byAdding: .day, value: 1, to: noons[goalDays - 1])!
+        : minutes(noons[rng.int(goalDays - 4, goalDays - 1)], rng.int(-600, 600))
+    let days = GoalHistory.build(days: inputs, goals: goals, now: now, calendar: cal)
+    let summaryNows = [now, cal.date(byAdding: .day, value: 1, to: noons[goalDays - 1])!,
+                       cal.date(byAdding: .day, value: 3, to: noons[goalDays - 1])!, noons[goalDays / 2]]
+    var weekendQueries = starts
+    for _ in 0..<6 { weekendQueries.append(minutes(starts[rng.int(0, goalDays - 1)], rng.int(-30, 1500))) }
+
+    func optMs(_ t: Date?) -> String { t.map { String(ms($0)) } ?? "-" }
+    c.inputs.append("zone \(zone)")
+    c.inputs.append("szone \(sumZone)")
+    c.inputs.append("goals \(goals.workdaySteps) \(goals.weekendSteps) \(d(goals.activeKcal)) \(d(goals.activityMinutes)) \(goals.workdaySleepMin) \(goals.weekendSleepMin)")
+    c.inputs.append("now \(ms(now))")
+    for i in inputs {
+        c.inputs.append("di \(ms(i.date)) \(optI(i.steps)) \(optD(i.activeKcal)) \(optD(i.activityMinutes)) \(optI(i.sleepMinutes))")
+    }
+    for n in nights { c.inputs.append("nt \(ms(n.nightKey)) \(optMs(n.inBedStart)) \(optMs(n.inBedEnd)) \(n.asleepMinutes)") }
+    for p in naps { c.inputs.append("np \(ms(p.start)) \(ms(p.end)) \(p.asleepMinutes)") }
+    c.inputs.append("sn" + summaryNows.map { " \(ms($0))" }.joined())
+    c.inputs.append("wq" + weekendQueries.map { " \(ms($0))" }.joined())
+
+    for (k, t) in weekendQueries.enumerated() {
+        let weekend = GoalDefaults.isWeekend(t, calendar: cal)
+        c.goldens.append("gw \(k) \(weekend ? 1 : 0) \(goals.stepGoal(on: t, calendar: cal)) \(goals.sleepGoalMinutes(on: t, calendar: cal))")
+        hit(weekend ? "goal-weekend" : "goal-workday")
+    }
+    c.goldens.append("gc \(credit.count)" + credit.keys.sorted().map { " \(ms($0)) \(credit[$0]!)" }.joined())
+    for (k, day) in days.enumerated() {
+        c.goldens.append("gd \(k) \(ms(day.date)) \(mask(day.present)) \(mask(day.met)) \(day.isPartial ? 1 : 0) \(optD(day.attainment))"
+            + GoalHistory.Ring.allCases.map { " " + d(day.fraction(for: $0)) }.joined())
+        hit("goal-partial", day.isPartial)
+        hit("goal-no-data", !day.hasData)
+        hit("goal-closed-all", day.closedAll)
+        hit("goal-no-midnight-day", cal.component(.hour, from: day.date) != 0 || cal.component(.minute, from: day.date) != 0)
+    }
+    for (k, t) in summaryNows.enumerated() {
+        let s = GoalHistory.summarize(days, now: t, calendar: scal)
+        c.goldens.append("gs \(k) \(s.daysWithData) \(s.daysAllClosed) \(s.currentStreak) \(s.longestStreak)"
+            + GoalHistory.Ring.allCases.map { " " + optI(s.metCounts[$0]) }.joined()
+            + GoalHistory.Ring.allCases.map { " " + optI(s.dataCounts[$0]) }.joined())
+        hit("goal-streak-current", s.currentStreak > 0)
+        hit("goal-streak-stale", s.currentStreak == 0 && s.longestStreak > 0)
+    }
+    let nightMinutes = nights.filter { $0.asleepMinutes > 0 }.map(\.asleepMinutes).reduce(0, +)
+    let napMinutes = naps.filter { $0.asleepMinutes > 0 }.map(\.asleepMinutes).reduce(0, +)
+    let credited = credit.values.reduce(0, +)
+    hit("goal-nap-excluded", credited < nightMinutes + napMinutes)
+    hit("goal-nap-credited", credited > nightMinutes)
+    hit("goal-legacy-night", nights.contains { $0.inBedStart == nil && $0.asleepMinutes > 0 })
+    hit("goal-widened-night", widened)
+    hit("goal-normalised", inputs.contains { cal.startOfDay(for: $0.date) != $0.date })
+    hit("goal-missing-day", days.count > 1 && zip(days, days.dropFirst()).contains { cal.dateComponents([.day], from: $0.date, to: $1.date).day! > 1 })
+    hit("goal-cross-zone", sumZone != zone)
+    hit("goal-duplicate-row", duplicated)
+    return c
+}
+
+// MARK: - Formatter → the three number shapes
+
+let fmtShapes = ["ties", "near", "edge", "cap"]
+let fmtCasesPerShape = 3
+
+func fmtCase(_ index: Int) -> Case {
+    let shape = fmtShapes[index / fmtCasesPerShape]
+    var rng = SplitMix64(state: 0x464D_5400 &+ UInt64(index))
+    var c = Case(id: String(format: "fmt-%03d", index), kind: "fmt", shape: shape)
+    var values: [Double] = []
+    var fds: [Int] = []
+    switch shape {
+    case "ties":
+        // Exact binary ties at one and two decimals (k/2, k/4, k/8, k/16, k/32), and their negatives.
+        values = [0.25, 0.125, 2.5, -2.5, 0.375, -0.625]
+        while values.count < 16 { values.append(Double(rng.int(-6_400, 6_400)) / Double(rng.pick([2, 4, 8, 16, 32]))) }
+        fds = [0, 1, 2, 3]
+    case "near":
+        // One ulp either side of a tie, decimal fives that sit just off their tie (0.35, 9.95, 36.65,
+        // 0.05), and values on a 1/1024 grid.
+        values = [0.35, 9.95, 36.65, 0.05, 0.25.nextUp, 0.25.nextDown, 2.5.nextUp, 2.5.nextDown, -0.15, 98.45]
+        while values.count < 16 { values.append(rng.real(-50, 150)) }
+        fds = [0, 1, 2, 17]
+    case "edge":
+        values = [.nan, -Double.nan, .infinity, -.infinity, -0.0, 0.0, -0.04, -1e-300, .leastNonzeroMagnitude, 1e300,
+                  -Double.greatestFiniteMagnitude, 1e21]
+        values = Array(values.shuffledDeterministically(&rng).prefix(8)) + [rng.pick([36.6, 37.0, 0.5, -0.5]), 123456789012345678.0]
+        fds = [-5, -1, 0, 1, 3, 20]
+    default: // cap: the number cut at 510 characters, a field 510 wide or wider
+        values = [36.6, -0.0, rng.pick([1e300, -Double.greatestFiniteMagnitude, 2.5])]
+        fds = [506, 507, 508, 600, -509, -510, -600]
+    }
+    c.inputs.append("v" + values.map { " " + d($0) }.joined())
+    c.inputs.append("fd" + ints(fds))
+    var j = 0
+    for v in values {
+        for fd in fds {
+            let strings = [
+                UnitsFormatter.temperature(v, unit: .celsius, fractionDigits: fd),
+                UnitsFormatter.temperature(v, unit: .fahrenheit, fractionDigits: fd),
+                UnitsFormatter.temperatureDelta(v, unit: .celsius, fractionDigits: fd),
+                UnitsFormatter.temperatureDelta(v, unit: .fahrenheit, fractionDigits: fd),
+                UnitsFormatter.distance(v * 1000, unit: .metric, fractionDigits: fd),
+                UnitsFormatter.distance(v * 1609.344, unit: .imperial, fractionDigits: fd),
+            ]
+            c.goldens.append("fmt \(j) " + strings.joined(separator: " | "))
+            j += 1
+            hit("fmt-tie", shape == "ties")
+            hit("fmt-nan", v.isNaN)
+            hit("fmt-inf", v.isInfinite)
+            hit("fmt-negative-zero", strings[0].hasPrefix("-0") && v > -1)
+            hit("fmt-negative-width", fd < 0)
+            hit("fmt-capped", strings.contains { $0.unicodeScalars.count >= 513 })
+            hit("fmt-huge", abs(v) >= 1e21 && v.isFinite)
+        }
+    }
+    return c
+}
+
 // MARK: - Main
 
 let args = CommandLine.arguments
@@ -1283,6 +1544,8 @@ let cases = (0..<(rrShapes.count * rrCasesPerShape)).map(rrCase)
     + (0..<(wbShapes.count * wbCasesPerShape)).map(wbCase)
     + (0..<(actShapes.count * actCasesPerShape)).map(actCase)
     + (0..<(trendShapes.count * trendCasesPerShape)).map(trendCase)
+    + (0..<(goalShapes.count * goalCasesPerShape)).map(goalCase)
+    + (0..<(fmtShapes.count * fmtCasesPerShape)).map(fmtCase)
 let header = "# Generated by android/tools/sleep-differential (VitalsDifferential) from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

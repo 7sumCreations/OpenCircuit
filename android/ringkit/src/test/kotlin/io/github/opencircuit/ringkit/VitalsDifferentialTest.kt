@@ -35,7 +35,13 @@ import kotlin.test.assertTrue
  * partial, out-of-range, unanchored, and inputs whose rounded score depends on the summation order),
  * activity goals (score, tier and every factor — typical, disabled and unreadable goals, infinite and
  * negative values, order-sensitive inputs) and readiness trends (deadbands negative to `Int.MAX`,
- * prior sums that leave 32 bits). The format is documented at the top of the generator's `main.swift`.
+ * prior sums that leave 32 bits); windows of goal-ring days in New York, London and Santiago across
+ * both 2026 clock changes (weekend goal selection, sleep credit from nights and naps, the built days
+ * and their summaries — including Santiago's day without a midnight, duplicated, unsorted and future
+ * rows, and summaries judged in another zone); and a sweep of the formatter's three number shapes
+ * (exact binary ties, values one ulp off a tie, NaN, infinities, signed zero, huge values, negative
+ * and very large fraction digits), compared as whole strings. The format is documented at the top of
+ * the generator's `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
  * `d` + 16 hex digits), which must agree within 1e-9; every double that is not bit-identical is
@@ -115,6 +121,8 @@ class VitalsDifferentialTest {
         "wb" -> renderWb(c)
         "act" -> renderAct(c)
         "trend" -> renderTrend(c)
+        "goal" -> renderGoal(c)
+        "fmt" -> renderFmt(c)
         else -> error("unknown case kind ${c.kind} in ${c.id}")
     }
 
@@ -427,6 +435,61 @@ class VitalsDifferentialTest {
         "trd $j ${WellnessBalance.trend(f[0].toInt(), f.drop(2).map { it.toInt() }, deadband = f[1].toInt()).rawValue}"
     }
 
+    private fun optInt(t: String): Int? = if (t == "-") null else t.toInt()
+    private fun optMilli(t: String): Instant? = if (t == "-") null else milli(t)
+    private fun mask(rings: Set<GoalHistory.Ring>): String = GoalHistory.Ring.entries.joinToString("") { if (it in rings) "1" else "0" }
+
+    private fun renderGoal(c: VCase): List<String> {
+        val zone = ZoneId.of(tokens(c, "zone").single())
+        val summaryZone = ZoneId.of(tokens(c, "szone").single())
+        val g = tokens(c, "goals")
+        val goals = GoalHistory.Goals(g[0].toInt(), g[1].toInt(), toDouble(g[2]), toDouble(g[3]), g[4].toInt(), g[5].toInt())
+        val now = milli(tokens(c, "now").single())
+        fun fields(tag: String) = c.lines.filter { it.startsWith("$tag ") }.map { it.split(' ') }
+        val inputs = fields("di").map { f -> GoalHistory.DayInput(milli(f[1]), optInt(f[2]), inDouble(f[3]), inDouble(f[4]), optInt(f[5])) }
+        val nights = fields("nt").map { f -> GoalHistory.NightSleep(milli(f[1]), optMilli(f[2]), optMilli(f[3]), f[4].toInt()) }
+        val naps = fields("np").map { f -> GoalHistory.NapSleep(milli(f[1]), milli(f[2]), f[3].toInt()) }
+
+        val out = mutableListOf<String>()
+        tokens(c, "wq").map(::milli).forEachIndexed { k, t ->
+            out += "gw $k ${if (GoalDefaults.isWeekend(t, zone)) 1 else 0} ${goals.stepGoal(t, zone)} ${goals.sleepGoalMinutes(t, zone)}"
+        }
+        val credit = GoalHistory.sleepCreditByDay(nights, naps, zone)
+        out += "gc ${credit.size}" + credit.entries.joinToString("") { (day, minutes) -> " ${day.toEpochMilli()} $minutes" }
+        val days = GoalHistory.build(inputs, goals, now, zone)
+        days.forEachIndexed { k, day ->
+            out += "gd $k ${day.date.toEpochMilli()} ${mask(day.present)} ${mask(day.met)} ${if (day.isPartial) 1 else 0} ${optD(day.attainment)}" +
+                GoalHistory.Ring.entries.joinToString("") { " " + d(day.fraction(it)) }
+        }
+        tokens(c, "sn").map(::milli).forEachIndexed { k, t ->
+            val s = GoalHistory.summarize(days, t, summaryZone)
+            out += "gs $k ${s.daysWithData} ${s.daysAllClosed} ${s.currentStreak} ${s.longestStreak}" +
+                GoalHistory.Ring.entries.joinToString("") { " " + (s.metCounts[it]?.toString() ?: "-") } +
+                GoalHistory.Ring.entries.joinToString("") { " " + (s.dataCounts[it]?.toString() ?: "-") }
+        }
+        return out
+    }
+
+    private fun renderFmt(c: VCase): List<String> {
+        val values = tokens(c, "v").map(::toDouble)
+        val fds = tokens(c, "fd").map { it.toInt() }
+        val out = mutableListOf<String>()
+        for (v in values) {
+            for (fd in fds) {
+                val strings = listOf(
+                    UnitsFormatter.temperature(v, TemperatureUnit.CELSIUS, fd),
+                    UnitsFormatter.temperature(v, TemperatureUnit.FAHRENHEIT, fd),
+                    UnitsFormatter.temperatureDelta(v, TemperatureUnit.CELSIUS, fd),
+                    UnitsFormatter.temperatureDelta(v, TemperatureUnit.FAHRENHEIT, fd),
+                    UnitsFormatter.distance(v * 1000, DistanceUnit.METRIC, fd),
+                    UnitsFormatter.distance(v * 1609.344, DistanceUnit.IMPERIAL, fd),
+                )
+                out += "fmt ${out.size} " + strings.joinToString(" | ")
+            }
+        }
+        return out
+    }
+
     // --- comparison ---
 
     /**
@@ -489,6 +552,11 @@ class VitalsDifferentialTest {
             Divergence("wb-010", "wbs 14"), Divergence("wb-011", "wbs 6"), Divergence("wb-011", "wbs 7"),
             Divergence("wb-011", "wbs 8"), Divergence("wb-011", "wbs 14"),
         ),
+        // PORTING D-96: a streak counts consecutive calendar dates. Santiago's 6 September 2026 starts
+        // at 01:00 (no midnight), and upstream's whole-day difference to 7 September 00:00 is 0, so
+        // its streak of twelve all-closed days (1–12 September) breaks into two runs of 6; here it is
+        // one run of 12. Every summary of that "streaks" case; no other summary differs.
+        "a streak counts consecutive calendar dates" to (0..3).map { Divergence("goal-008", "gs $it") }.toSet(),
     )
 
     /** The tokens that identify a golden line among its case's lines: the first two for indexed kinds, else the first. */
@@ -499,6 +567,7 @@ class VitalsDifferentialTest {
                 "lplan", "aplan", "seed", "splan", "bad",
                 "rst", "z", "vst", "cls", "rep", "ver",
                 "wbs", "acs", "trd",
+                "gw", "gd", "gs", "fmt",
             )
         ) {
             2
@@ -617,6 +686,8 @@ class VitalsDifferentialTest {
             "wb/full", "wb/partial", "wb/edge", "wb/tie", "wb/unanchored",
             "act/typical", "act/disabled", "act/edge", "act/tie",
             "trend/typical", "trend/deadband", "trend/extreme",
+            "goal/spring", "goal/fall", "goal/streaks", "goal/skew",
+            "fmt/ties", "fmt/near", "fmt/edge", "fmt/cap",
         )
         for (s in expected) assertTrue((shapes[s] ?: 0) >= 3, "shape $s has ${shapes[s] ?: 0} cases")
 
@@ -650,6 +721,10 @@ class VitalsDifferentialTest {
             "act-tier-excellent", "act-tier-good", "act-tier-needsImprovement", "act-dropped-goal", "act-no-factors", "act-capped",
             "act-nonfinite", "act-order-sensitive",
             "trend-up", "trend-steady", "trend-down", "trend-negative-deadband", "trend-empty", "trend-64-bit",
+            "goal-weekend", "goal-workday", "goal-partial", "goal-no-data", "goal-closed-all", "goal-no-midnight-day",
+            "goal-streak-current", "goal-streak-stale", "goal-nap-excluded", "goal-nap-credited", "goal-legacy-night",
+            "goal-widened-night", "goal-normalised", "goal-missing-day", "goal-cross-zone", "goal-duplicate-row",
+            "fmt-tie", "fmt-nan", "fmt-inf", "fmt-negative-zero", "fmt-negative-width", "fmt-capped", "fmt-huge",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }
