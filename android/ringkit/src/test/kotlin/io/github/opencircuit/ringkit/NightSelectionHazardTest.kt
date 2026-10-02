@@ -93,10 +93,34 @@ class NightSelectionHazardTest {
     }
 
     @Test
-    fun duplicatedRecordsAreKeptTwiceExactlyAsUpstream() {
-        // Selection filters records by time; it does not deduplicate (the archive merge does).
-        // Upstream measured: 144 records, both copies of each of the 72.
-        assertEquals(Triple(144, 202_226_400L, 202_237_050L), shape(select(twoNights.flatMap { listOf(it, it) })))
+    fun aDoubledArchiveSelectsTheSingleNight() {
+        // Upstream filters records by time and keeps both copies (measured: 144 records, both copies
+        // of each of the 72). Here a record counts once per counter, the first copy kept (an owner
+        // decision, PORTING D-70): a doubled archive selects exactly the single archive's night.
+        val doubled = twoNights.flatMap { listOf(it, it) }.toMutableList()
+        val before = doubled.toList()
+        assertEquals(select(twoNights), select(doubled), "upstream returned 144")
+        assertEquals(Triple(72, 202_226_400L, 202_237_050L), shape(select(doubled)))
+        assertEquals(before, doubled, "the caller's list is left alone")
+    }
+
+    @Test
+    fun aDuplicatedCounterKeepsItsFirstCopy() {
+        // Same counter, different bytes: the first copy in the caller's order is the one selected.
+        val movingCopies = nightTwo.mapIndexed { i, r -> rec(r.counter, still = false, seed = i) }
+        val night = select(twoNights + movingCopies)
+        assertEquals(select(twoNights), night, "the archive's own copies come first")
+        assertTrue(night.none { it in movingCopies }, "no later copy is returned")
+    }
+
+    @Test
+    fun aHalfObservedHourWithEveryRecordDoubledIsNotDeclined() {
+        // An evening block, an awake hour observed at HALF the epoch rate, then the night. Upstream
+        // counts each doubled record twice, reads the hour as complete and declines the bridge; here
+        // the doubled archive selects what the single one does.
+        val halfHour = (0 until 3600L step 300).map { rec(counter(at(21, 40)) + it, still = false, seed = it.toInt()) }
+        val archive = still(at(20, 30), at(21, 40)) + halfHour + still(at(22, 40), at(6, 0, day = 1))
+        assertEquals(select(archive), select(archive.flatMap { listOf(it, it) }))
     }
 
     @Test
@@ -238,8 +262,9 @@ class NightSelectionHazardTest {
         assertFalse(declined(3600, emptyList(), 0.95), "an empty hole is the stitch's own case")
         val half = times(75, 3600, step = 300)
         assertFalse(declined(3600, half, 0.95), "a half-observed hour")
-        // Duplicated times count twice, upstream too: a half-observed hour with every record doubled
-        // reads as complete. The archive merge deduplicates before selection ever sees it.
-        assertTrue(declined(3600, half + half, 0.95), "duplicates inflate coverage exactly as upstream")
+        // Upstream counts duplicated times twice, so a half-observed hour with every record doubled
+        // reads as complete and is declined (measured `true`). Here a time counts once (PORTING D-70).
+        assertFalse(declined(3600, half + half, 0.95), "duplicates count once")
+        assertFalse(declined(3600, half.flatMap { listOf(it, it, it) }, 0.95), "however many copies")
     }
 }

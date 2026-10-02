@@ -146,14 +146,11 @@ class SleepStagingHazardTest {
         val recs = cyc()
         assertEquals(cycNight, shape(SleepStaging.classify(recs)))
         assertEquals(cycNight, shape(SleepStaging.classify(recs.reversed())), "reversed archive: same night")
-        assertEquals(
-            listOf(
-                "inBed 1781348416 1781369986", "awake 1781348416 1781350216", "asleepCore 1781350216 1781350366",
-                "asleepDeep 1781350366 1781368216", "awake 1781368216 1781368666", "asleepDeep 1781368666 1781369986",
-            ),
-            shape(SleepStaging.classify(recs.flatMap { listOf(it, it) })),
-            "every record twice: upstream stages the doubled timeline as it is (deduplication is the archive's job)",
-        )
+        // Every record twice: upstream stages the doubled timeline as it is (measured: inBed
+        // 1781348416..1781369986 over 6 segments). Here each counter is read once (PORTING D-70),
+        // so the doubled night stages as the single night.
+        assertEquals(cycNight, shape(SleepStaging.classify(recs.flatMap { listOf(it, it) })), "every record twice")
+        assertEquals(cycNight, shape(BulkSleep.stagedSegments(recs + recs.reversed())), "every record twice, the copies reversed")
         val far = recs + vrec(0xFFFF_FFFFL, 50)
         assertEquals(cycNight, shape(SleepStaging.classify(far)), "a far-future record is its own fragment and stages nothing")
         assertEquals(cycNight, shape(BulkSleep.stagedSegments(far)))

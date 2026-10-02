@@ -81,7 +81,10 @@ object NapDetection {
         temperatures: List<TemperatureSample> = emptyList(),
         epoch: Long = Command.SYNC_EPOCH,
     ): List<Nap> {
-        val timeline = BulkSleep.motionTimeline(records, epoch)
+        // Each counter once, its first copy, as night detection reads it (PORTING D-70; upstream's
+        // detector counted every copy and widened the nap).
+        val day = BulkSleep.distinctRecords(records)
+        val timeline = BulkSleep.motionTimeline(day, epoch)
         val periods = ActivityPeriod.detectFromMotion(timeline, temperatureSamples = temperatures)
 
         return periods.mapNotNull { p ->
@@ -93,8 +96,8 @@ object NapDetection {
             // the plain form — a nap is judged as observed, never with a presumed unobserved onset.
             if (SleepWindow.isOvernightBlock(p.start, p.end, zone)) return@mapNotNull null
             // A real nap vs awake stillness: predominantly ring-measured sleep.
-            if (sleepVitalsShare(p, records, epoch) < MIN_NAP_SLEEP_VITALS_SHARE) return@mapNotNull null
-            Nap(p.start, p.end, napSegments(records, p, epoch))
+            if (sleepVitalsShare(p, day, epoch) < MIN_NAP_SLEEP_VITALS_SHARE) return@mapNotNull null
+            Nap(p.start, p.end, napSegments(day, p, epoch))
         }.sortedBy { it.start }
     }
 

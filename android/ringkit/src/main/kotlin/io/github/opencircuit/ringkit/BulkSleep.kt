@@ -536,6 +536,16 @@ object BulkSleep {
     // Night half — main sleep and coarse segments
 
     /**
+     * [records] with each counter once — the FIRST copy kept, input order otherwise — as a new list
+     * (the caller's is never changed). The night half's single entry filter: [mainSleep],
+     * [sleepSegments] and [latestNightRecords] read their records through it. Upstream counts a
+     * duplicated record once per copy: the detector's stillness window counts samples, so a doubled
+     * night widened by 90 s at each end, and night selection returned both copies (PORTING D-70, an
+     * owner decision; `EpochArchive.merge` already deduplicates one layer up).
+     */
+    internal fun distinctRecords(records: List<BulkRecord>): List<BulkRecord> = records.distinctBy { it.counter }
+
+    /**
      * The main sleep block (in-bed window) detected from the motion channel, or null. [within]
      * bounds detection to a scheduled sleep window; [temperatures] (the night's stored skin-temperature
      * samples) drop off-wrist / charging blocks — empty means motion only. HR and sleep-vitals
@@ -549,7 +559,7 @@ object BulkSleep {
         epoch: Long = Command.SYNC_EPOCH,
         motionPolicy: MotionChannelPolicy = MotionChannelPolicy.DEFAULT,
     ): ActivityPeriod? {
-        val scoped = this.records(records, within, epoch)
+        val scoped = this.records(distinctRecords(records), within, epoch)
         val periods = ActivityPeriod.detectFromMotion(
             motionTimeline(scoped, epoch, motionPolicy),
             temperatureSamples = temperatures,
@@ -572,7 +582,7 @@ object BulkSleep {
         temperatures: List<TemperatureSample> = emptyList(),
         epoch: Long = Command.SYNC_EPOCH,
     ): List<SleepSegment> {
-        val scoped = this.records(records, within, epoch)
+        val scoped = this.records(distinctRecords(records), within, epoch)
         val frags = contiguousFragments(scoped)
         if (frags.size <= 1) return sleepSegmentsContiguous(scoped, temperatures, epoch)
         return frags.flatMap { sleepSegmentsContiguous(it, temperatures, epoch) }.sortedBy { it.start }
@@ -711,8 +721,9 @@ object BulkSleep {
         declinedBridgeMayReanchor: Boolean = DECLINED_BRIDGE_MAY_REANCHOR,
         motionPolicy: MotionChannelPolicy = MotionChannelPolicy.DEFAULT,
     ): List<BulkRecord> {
-        // Detection needs a time-ordered timeline; sort defensively so any caller is served.
-        val sorted = records.sortedBy { it.counter }
+        // Detection needs a time-ordered timeline; sort defensively so any caller is served. Each
+        // counter once, its first copy (D-70) — so the guard's coverage counts each epoch once too.
+        val sorted = distinctRecords(records).sortedBy { it.counter }
         val periods = ActivityPeriod.detectFromMotion(
             motionTimeline(sorted, epoch, motionPolicy),
             temperatureSamples = temperatures,
@@ -791,13 +802,14 @@ object BulkSleep {
      * questions. A bridge from [clusterStart] back to [blockEnd] is DECLINED when the records
      * strictly inside the gap reach [cut] of the `gap / 150 s` the gap could hold. A cut not greater
      * than zero (or NaN) never declines; a gap at or below [ONSET_CONTIGUITY_GAP] — including a
-     * negative one — is never judged. Duplicate record times count once per copy, as upstream.
+     * negative one — is never judged. A duplicated record time counts once (upstream counts every
+     * copy, so a half-observed hour with each record doubled read as complete — PORTING D-70).
      */
     internal fun bridgeIsDeclined(clusterStart: Instant, blockEnd: Instant, recordTimes: List<Instant>, cut: Double): Boolean {
         if (!(cut > 0)) return false
         val gap = Duration.between(blockEnd, clusterStart)
         if (gap <= ONSET_CONTIGUITY_GAP) return false
-        val observed = recordTimes.count { it.isAfter(blockEnd) && it.isBefore(clusterStart) }
+        val observed = recordTimes.filter { it.isAfter(blockEnd) && it.isBefore(clusterStart) }.distinct().size
         val expected = (gap.seconds + gap.nano / 1e9) / BulkRecord.EPOCH_SECONDS
         if (!(expected > 0)) return false
         return observed / expected >= cut

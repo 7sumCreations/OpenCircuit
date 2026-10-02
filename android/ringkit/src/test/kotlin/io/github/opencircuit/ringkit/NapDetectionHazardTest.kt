@@ -74,12 +74,15 @@ class NapDetectionHazardTest {
     }
 
     @Test
-    fun duplicatedRecordsWidenTheNapExactlyAsUpstream() {
-        // Same as night detection (detection counts samples): parity, deduplication is the archive's job.
-        assertEquals(
-            listOf("1781547690..1781551080 long=false asleep=3330 inBed:1781547690-1781551080,asleepCore:1781547750-1781551080"),
-            naps(day().flatMap { listOf(it, it) }),
-        )
+    fun duplicatedRecordsCountOnceInANap() {
+        // Upstream's detector counts samples, so every record twice widens the nap by 90 s at each end
+        // (measured: 1781547690..1781551080 long=false asleep=3330). Here each counter is read once,
+        // its first copy (PORTING D-70, as for the night), so a doubled day finds the single day's nap.
+        val doubled = day().flatMap { listOf(it, it) }.toMutableList()
+        val before = doubled.toList()
+        assertEquals(listOf(referenceNap), naps(doubled), "every record twice")
+        assertEquals(listOf(referenceNap), naps(day() + day().reversed()), "every record twice, the copies reversed")
+        assertEquals(before, doubled, "the caller's list is left alone")
     }
 
     @Test

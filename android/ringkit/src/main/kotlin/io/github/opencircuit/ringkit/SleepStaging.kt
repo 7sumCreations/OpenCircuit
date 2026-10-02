@@ -207,6 +207,10 @@ object SleepStaging {
      * WEAR GATE: [temperatures] — the night's skin-temperature samples including the cold/charging
      * ones — let an off-wrist block drop out, as on the coarse path and in night selection. Empty
      * means motion only; [Tuning.stagedWearGate] `false` drops them.
+     *
+     * DUPLICATES: each counter is read once, its first copy ([BulkSleep.distinctRecords]), as the
+     * detector that finds the block reads it — so a doubled night stages as the single night
+     * (PORTING D-70; upstream staged the doubled timeline).
      */
     fun classify(
         records: List<BulkRecord>,
@@ -215,6 +219,15 @@ object SleepStaging {
         tuning: Tuning = Tuning.DEFAULT,
         baseline: PersonalBaseline? = null,
         motionPolicy: BulkSleep.MotionChannelPolicy = BulkSleep.MotionChannelPolicy.DEFAULT,
+    ): List<SleepSegment> = classifyDistinct(BulkSleep.distinctRecords(records), temperatures, epoch, tuning, baseline, motionPolicy)
+
+    private fun classifyDistinct(
+        records: List<BulkRecord>,
+        temperatures: List<TemperatureSample>,
+        epoch: Long,
+        tuning: Tuning,
+        baseline: PersonalBaseline?,
+        motionPolicy: BulkSleep.MotionChannelPolicy,
     ): List<SleepSegment> {
         val temps = if (tuning.stagedWearGate) temperatures else emptyList()
         val frags = BulkSleep.contiguousFragments(records)

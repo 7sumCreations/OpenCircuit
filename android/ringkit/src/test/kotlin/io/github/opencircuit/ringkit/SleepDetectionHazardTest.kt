@@ -168,12 +168,35 @@ class SleepDetectionHazardTest {
     }
 
     @Test
-    fun duplicatedRecordsWidenTheBlockExactlyAsUpstream() {
-        // The detector's stillness window counts SAMPLES, so every record twice halves its time span
-        // and the block edges move out by 90 s. Upstream does the same (measured on the pinned Swift
-        // build); deduplication is the archive's job, not the detector's.
-        val doubled = assertNotNull(BulkSleep.mainSleep(night().flatMap { listOf(it, it) }))
-        assertEquals(1781351506L to 1781383696L, doubled.start.epochSecond to doubled.end.epochSecond)
+    fun duplicatedRecordsCountOnceInTheMainBlock() {
+        // The detector's stillness window counts SAMPLES, so in upstream every record twice halves its
+        // time span and the block edges move out by 90 s (measured on the pinned Swift build:
+        // 1781351506..1781383696 against the single night's 1781351596..1781383606). Here a record
+        // counts once per counter, the first copy kept (an owner decision, PORTING D-70), so a doubled
+        // night is the single night.
+        val single = night()
+        val block = assertNotNull(BulkSleep.mainSleep(single))
+        assertEquals(1781351596L to 1781383606L, block.start.epochSecond to block.end.epochSecond)
+        val doubled = single.flatMap { listOf(it, it) }.toMutableList()
+        val before = doubled.toList()
+        assertEquals(block, BulkSleep.mainSleep(doubled), "every record twice")
+        assertEquals(BulkSleep.sleepSegments(single), BulkSleep.sleepSegments(doubled), "segments of every record twice")
+        val redrained = single + single.subList(100, 180) // a page delivered again, at the end
+        assertEquals(block, BulkSleep.mainSleep(redrained), "a re-drained stretch")
+        assertEquals(BulkSleep.sleepSegments(single), BulkSleep.sleepSegments(redrained))
+        assertEquals(before, doubled, "the caller's list is left alone")
+    }
+
+    @Test
+    fun aDuplicatedCounterKeepsItsFirstCopy() {
+        // Same counter, different bytes: the first copy is the one detection reads. A moving copy of
+        // every epoch (the night's own active pattern), delivered AFTER the night, changes nothing;
+        // delivered first, it wins.
+        val single = night()
+        val active = intArrayOf(0x0a, 0x28, 0x50)
+        val movingCopies = single.mapIndexed { i, r -> rec(r.counter, active[i % 3], 0x12) }
+        assertEquals(BulkSleep.mainSleep(single), BulkSleep.mainSleep(single + movingCopies), "the night's own copies come first")
+        assertNull(BulkSleep.mainSleep(movingCopies + single), "the moving copies come first, so there is no night")
     }
 
     @Test
