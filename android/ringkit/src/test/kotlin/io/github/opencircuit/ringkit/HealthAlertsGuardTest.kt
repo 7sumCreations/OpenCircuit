@@ -21,8 +21,11 @@ import kotlin.test.assertTrue
  * type is immutable, compares its doubles by IEEE `==` as Swift's synthesized `Equatable` does, and
  * changes only through `copy`; every list handed back is the function's own (Swift's arrays are
  * values), and the per-night set is read-only; the defaults are upstream's; no zone or clock has a
- * default and no source line reads one; nothing reads the machine's zone or locale. The hostile inputs
- * are in `HealthAlertsHazardTest`.
+ * default and no source line reads one; nothing reads the machine's zone or locale. For the
+ * overnight-signals notification: its set, category, window and words typed from upstream; its copy a
+ * value, its lists its own, its set read-only; its casing locale-free under a foreign default locale;
+ * and "no number in the copy" asked in Swift's sense of a number, which is wider than `isDigit`. The
+ * hostile inputs are in `HealthAlertsHazardTest`.
  */
 class HealthAlertsGuardTest {
 
@@ -146,6 +149,12 @@ class HealthAlertsGuardTest {
             val defaults = type.declaredMethods.filter { it.name.endsWith("\$default") }.map { it.name }
             assertEquals(emptyList(), defaults.filter { !it.startsWith("copy") }, "only copy has defaults on ${type.simpleName}")
         }
+        // The overnight-signals notification: upstream's tuning and limit only (the data class's own
+        // `copy` aside); the zone of the window, the day key and the decision is required.
+        assertEquals(
+            listOf("candidates\$default", "topSignals\$default"),
+            HeadacheSignsNotifications::class.java.declaredMethods.filter { it.name.endsWith("\$default") }.map { it.name }.sorted(),
+        )
 
         val root = File(assertNotNull(System.getProperty("opencircuit.androidRoot"), "system property opencircuit.androidRoot is not set"))
         val defaultedClock = Regex("""\w+\s*:\s*(Instant|ZoneId|Locale|Clock|TimeZone)\??\s*=(?!\s*(?:null\b|this\.))""")
@@ -173,6 +182,9 @@ class HealthAlertsGuardTest {
                 TempFeverNotifications.dayKey(now, zone),
                 HealthNotification.entries.map { it.rawValue },
                 HealthAlertThresholds().toString(),
+                HeadacheSignsNotifications.withinDeliveryWindow(now, zone),
+                HeadacheSignsNotifications.dayKey(now, zone),
+                HeadacheSignsNotifications.candidates(true, HeadacheSignals.Band.FLAGGED, null, 30, false, now, emptyMap(), zone = zone),
             )
         }
         val savedLocale = Locale.getDefault()
@@ -189,6 +201,105 @@ class HealthAlertsGuardTest {
         } finally {
             Locale.setDefault(savedLocale)
             TimeZone.setDefault(savedZone)
+        }
+    }
+
+    // MARK: the overnight-signals notification
+
+    @Test
+    fun theOvernightNotificationsNamesWindowAndWordsAreUpstreams() {
+        // HealthAlerts.swift :535, :540, :556-557, :646-656, :696-700, typed from upstream.
+        assertEquals(listOf(HealthNotification.HEADACHE_SIGNS), HeadacheSignsNotifications.NOTIFICATION_SET.toList())
+        assertEquals("headache.signs", HeadacheSignsNotifications.CATEGORY_IDENTIFIER)
+        assertEquals(HealthNotification.HEADACHE_SIGNS.rawValue, HeadacheSignsNotifications.CATEGORY_IDENTIFIER, "the category and the raw name agree")
+        assertEquals(listOf(420, 1_260), listOf(HeadacheSignsNotifications.EARLIEST_MINUTES, HeadacheSignsNotifications.LATEST_MINUTES))
+        assertEquals(
+            listOf(
+                "sleep efficiency", "daytime heart rate", "heart rate variability", "resting heart rate", "time awake in bed", "sleep duration",
+                "bedtime", "skin temperature", "cycle phase",
+            ),
+            HeadacheSignals.Feature.entries.map(HeadacheSignsNotifications::plainName),
+        )
+        assertEquals(
+            listOf("last night", "over the past two days", "last night", "last night", "last night", "last night", "last night", "last night", "last night"),
+            HeadacheSignals.Feature.entries.map(HeadacheSignsNotifications::timeframe),
+        )
+        assertEquals("last night", HeadacheSignsNotifications.NIGHTLY_PHRASE)
+    }
+
+    @Test
+    fun theOvernightNotificationsValuesAndListsAreItsOwn() {
+        // The copy is a value: no setters, equal by content, a copy never changes the original.
+        val text = HeadacheSignsNotifications.copy(listOf(HeadacheSignals.Feature.HRV_DEVIATION))
+        assertEquals(emptyList(), HeadacheSignsNotifications.Text::class.java.methods.filter { it.name.startsWith("set") }.map { it.name })
+        assertEquals(text, HeadacheSignsNotifications.Text(text.title, text.body))
+        assertEquals("Last night was unusual for you", text.copy(body = "x").title)
+        assertEquals(text, HeadacheSignsNotifications.copy(listOf(HeadacheSignals.Feature.HRV_DEVIATION)))
+        // Every list handed back is the function's own: the caller editing what it passed in afterwards
+        // changes nothing (Swift's arrays and dictionaries are values).
+        val features = mutableListOf(HeadacheSignals.Feature.AROUSAL_LETDOWN)
+        val wording = HeadacheSignsNotifications.copy(features)
+        val shares = mutableMapOf(HeadacheSignals.Feature.HRV_DEVIATION to 0.2, HeadacheSignals.Feature.SCHEDULE_SHIFT to 0.1)
+        val top = HeadacheSignsNotifications.topSignals(shares)
+        val candidates = mutableListOf(HealthNotification.HEADACHE_SIGNS)
+        val ledger = mutableMapOf<HealthNotification, Long>()
+        val fresh = HeadacheSignsNotifications.freshForDay(candidates, 20_260_720L, ledger)
+        val raised = HeadacheSignsNotifications.candidates(true, HeadacheSignals.Band.FLAGGED, null, 30, false, t0, ledger, zone = ZoneId.of("UTC"))
+        features[0] = HeadacheSignals.Feature.HRV_DEVIATION
+        shares.clear()
+        candidates.clear()
+        ledger[HealthNotification.HEADACHE_SIGNS] = Long.MAX_VALUE
+        assertEquals("Your recent signals stood out", wording.title)
+        assertEquals(listOf(HeadacheSignals.Feature.HRV_DEVIATION, HeadacheSignals.Feature.SCHEDULE_SHIFT), top)
+        assertEquals(listOf(HealthNotification.HEADACHE_SIGNS), fresh)
+        assertEquals(listOf(HealthNotification.HEADACHE_SIGNS), raised)
+        // The set cannot be edited through a cast.
+        @Suppress("UNCHECKED_CAST")
+        assertFailsWith<UnsupportedOperationException> { (HeadacheSignsNotifications.NOTIFICATION_SET as MutableSet<HealthNotification>).add(HealthNotification.FEVER) }
+        assertEquals(1, HeadacheSignsNotifications.NOTIFICATION_SET.size)
+    }
+
+    @Test
+    fun aForeignDefaultLocaleNeverChangesTheCopy() {
+        // Swift's `uppercased()` reads no locale. Under a Turkish or Azeri default a locale-reading upper
+        // case dots an `i` ("idle" → "İdle"), and Lithuanian keeps extra dots — none of it may reach the copy.
+        val features = HeadacheSignals.Feature.entries
+        val signals = listOf(emptyList<HeadacheSignals.Feature>()) + features.map { listOf(it) } + features.flatMap { a -> features.map { b -> listOf(a, b) } }
+        fun results(): List<Any> = signals.map { HeadacheSignsNotifications.copy(it) } +
+            listOf(HeadacheSignsNotifications.sentenceCased("idle"), HeadacheSignsNotifications.sentenceCased("ıdle"), HeadacheSignsNotifications.sentenceCased(""))
+        val saved = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.ROOT)
+            val reference = results()
+            assertEquals(listOf("Idle", "Idle", ""), reference.takeLast(3))
+            for (tag in listOf("tr-TR", "az-AZ", "lt-LT", "ar-EG", "el-GR")) {
+                Locale.setDefault(Locale.forLanguageTag(tag))
+                assertEquals(reference, results(), tag)
+            }
+        } finally {
+            Locale.setDefault(saved)
+        }
+    }
+
+    @Test
+    fun noCopyCarriesANumberInSwiftsSenseWhichIsWiderThanIsDigit() {
+        // Upstream's copy test asks Swift's `Character.isNumber`: a Unicode number category or a numeric
+        // ideograph — superscripts, fractions, Roman numerals and 八 are numbers, the letter A is not
+        // (Java's `getNumericValue` reads it as 10). Kotlin's `isDigit` misses most of them.
+        val numbers = listOf(0x37, 0x663, 0xB2, 0xBD, 0x216B, 0x3007, 0x516B, 0x4E00, 0x1D7E0)
+        val notNumbers = listOf(0x41, 0xFF21, 0x61, 0x25, 0x20, 0x2014, 0xE9, 0x5B57)
+        assertEquals(numbers.map { true }, numbers.map(::isSwiftNumber), "number scalars")
+        assertEquals(notNumbers.map { false }, notNumbers.map(::isSwiftNumber), "letters and punctuation")
+        assertEquals(listOf(0xB2, 0xBD, 0x216B, 0x3007, 0x516B, 0x4E00), numbers.filter { !Character.isDigit(it) }, "what isDigit misses")
+        assertEquals(10, Character.getNumericValue(0x41), "why getNumericValue is not the class either")
+        assertTrue("x²".containsSwiftNumber())
+        assertFalse("estimate — not a forecast".containsSwiftNumber())
+        // Every copy the notification can produce (no signal, each single, every ordered pair) carries none.
+        val features = HeadacheSignals.Feature.entries
+        val signals = listOf(emptyList<HeadacheSignals.Feature>()) + features.map { listOf(it) } + features.flatMap { a -> features.map { b -> listOf(a, b) } }
+        for (s in signals) {
+            val (title, body) = HeadacheSignsNotifications.copy(s)
+            assertFalse(title.containsSwiftNumber() || body.containsSwiftNumber(), "a number in: $title / $body")
         }
     }
 }
