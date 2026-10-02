@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Kotlin-only checks for the missed-night recency math: both 2026 DST transitions in four zones
@@ -18,6 +19,12 @@ import kotlin.test.assertNull
  * Every expected value was measured on upstream's pinned Swift build. A sweep of 23 104 (instant ×
  * schedule) points every 10 minutes across ±30 h of each 2026 transition in eleven zones agreed with
  * `java.time` on every one; the table keeps every point where an answer changes, and both sides of it.
+ *
+ * One deliberate divergence (an owner decision): on a spring-forward evening upstream's fixed 24 h
+ * step lands on the day before, so for up to 30 minutes it answers yesterday's wake. Kotlin steps back
+ * one calendar day instead and answers this morning's wake. Eight table rows (New York at both
+ * schedules, London, Lord Howe) carry the Kotlin answer, not upstream's; their status and "ended today"
+ * columns are unchanged. [onlySpringForwardEveningsLeaveUpstreamsAnswer] proves nothing else moved.
  */
 class MissedNightHazardTest {
 
@@ -47,8 +54,8 @@ class MissedNightHazardTest {
             America/New_York 1350 390 1772969400 1772969400 ok 1
             America/New_York 1350 390 1772970000 1772969400 missing 1
             America/New_York 1350 390 1773010800 1772969400 missing 1
-            America/New_York 1350 390 1773011400 1772883000 missing 1
-            America/New_York 1350 390 1773012600 1772883000 missing 1
+            America/New_York 1350 390 1773011400 1772969400 missing 1
+            America/New_York 1350 390 1773012600 1772969400 missing 1
             America/New_York 1350 390 1773013200 1772969400 missing 1
             America/New_York 1350 390 1773022800 1772969400 missing 1
             America/New_York 1350 390 1773023400 1773052200 ok 1
@@ -101,8 +108,8 @@ class MissedNightHazardTest {
             America/New_York 60 540 1772978400 1772978400 ok 1
             America/New_York 60 540 1772979000 1772978400 missing 1
             America/New_York 60 540 1773019800 1772978400 missing 1
-            America/New_York 60 540 1773020400 1772892000 missing 1
-            America/New_York 60 540 1773021600 1772892000 missing 1
+            America/New_York 60 540 1773020400 1772978400 missing 1
+            America/New_York 60 540 1773021600 1772978400 missing 1
             America/New_York 60 540 1773022200 1772978400 missing 1
             America/New_York 60 540 1773028200 1772978400 missing 1
             America/New_York 60 540 1773028800 1772978400 missing 0
@@ -151,8 +158,8 @@ class MissedNightHazardTest {
             Europe/London 1350 390 1774765800 1774765800 ok 1
             Europe/London 1350 390 1774766400 1774765800 missing 1
             Europe/London 1350 390 1774807200 1774765800 missing 1
-            Europe/London 1350 390 1774807800 1774679400 missing 1
-            Europe/London 1350 390 1774809000 1774679400 missing 1
+            Europe/London 1350 390 1774807800 1774765800 missing 1
+            Europe/London 1350 390 1774809000 1774765800 missing 1
             Europe/London 1350 390 1774809600 1774765800 missing 1
             Europe/London 1350 390 1774819200 1774765800 missing 1
             Europe/London 1350 390 1774819800 1774848600 ok 1
@@ -279,8 +286,8 @@ class MissedNightHazardTest {
             Australia/Lord_Howe 1350 390 1791057600 1791057600 ok 1
             Australia/Lord_Howe 1350 390 1791058200 1791057600 missing 1
             Australia/Lord_Howe 1350 390 1791099600 1791057600 missing 1
-            Australia/Lord_Howe 1350 390 1791100200 1790971200 missing 1
-            Australia/Lord_Howe 1350 390 1791100800 1790971200 missing 1
+            Australia/Lord_Howe 1350 390 1791100200 1791057600 missing 1
+            Australia/Lord_Howe 1350 390 1791100800 1791057600 missing 1
             Australia/Lord_Howe 1350 390 1791101400 1791057600 missing 1
             Australia/Lord_Howe 1350 390 1791112800 1791057600 missing 1
             Australia/Lord_Howe 1350 390 1791113400 1791142200 ok 1
@@ -328,19 +335,138 @@ class MissedNightHazardTest {
     }
 
     /**
-     * Upstream's own quirk, kept for parity: on a spring-forward evening the "nearest wake" flips to
-     * tomorrow's shortened day and the 24 h step back lands on the PREVIOUS day, so for a few tens of
-     * minutes the morning wake is yesterday's (measured: 20–40 min in New York and London, 10–30 min in
-     * Lord Howe; Havana's nearest window flips the other way and shows no stale wake).
+     * On a spring-forward evening the nearest window is tomorrow's, and stepping back from it must land
+     * on THIS morning's wake. Upstream steps back a fixed 24 h, which on the shortened day lands on the
+     * day before and answers yesterday's wake for up to 30 minutes (measured: New York and London
+     * 19:10–19:30, Lord Howe 18:50–19:00 at 10-minute resolution); there a sync from yesterday evening
+     * would read as "after this morning's wake" and the banner could say MISSING. Kotlin steps back one
+     * calendar day. Each case: zone, now (epoch s), this morning's wake, upstream's stale answer.
      */
     @Test
-    fun theSpringForwardEveningStepsBackToYesterdaysWakeAsUpstream() {
-        val ny = ZoneId.of("America/New_York")
-        // 2026-03-08 19:10 EDT: this morning's wake was 1772969400 (07:30 EDT on the wall clock, the
-        // 06:30 schedule moved by the lost hour), but upstream answers 03-07's wake.
-        assertEquals(s(1_772_883_000), MissedNight.morningWake(now = s(1_773_011_400), bedMinutes = 1350, wakeMinutes = 390, zone = ny))
-        // Twenty minutes later it is back on this morning's wake.
-        assertEquals(s(1_772_969_400), MissedNight.morningWake(now = s(1_773_013_200), bedMinutes = 1350, wakeMinutes = 390, zone = ny))
+    fun aSpringForwardEveningStepsBackOneCalendarDayToThisMorningsWake() {
+        val cases = listOf(
+            // 2026-03-08 19:10 / 19:30 EDT: this morning's 06:30 schedule fell at 07:30 EDT.
+            Triple("America/New_York", 1_773_011_400L, 1_772_969_400L) to 1_772_883_000L,
+            Triple("America/New_York", 1_773_012_600L, 1_772_969_400L) to 1_772_883_000L,
+            // 2026-03-29 19:10 / 19:30 BST.
+            Triple("Europe/London", 1_774_807_800L, 1_774_765_800L) to 1_774_679_400L,
+            Triple("Europe/London", 1_774_809_000L, 1_774_765_800L) to 1_774_679_400L,
+            // 2026-10-04 18:50 / 19:00 +11:00 (Lord Howe's 30-minute shift).
+            Triple("Australia/Lord_Howe", 1_791_100_200L, 1_791_057_600L) to 1_790_971_200L,
+            Triple("Australia/Lord_Howe", 1_791_100_800L, 1_791_057_600L) to 1_790_971_200L,
+        )
+        for ((case, upstreamStale) in cases) {
+            val (zone, now, thisMorning) = case
+            val got = MissedNight.morningWake(now = s(now), bedMinutes = 1350, wakeMinutes = 390, zone = ZoneId.of(zone))
+            assertEquals(s(thisMorning), got, "$zone at $now answers this morning's wake, not upstream's ${s(upstreamStale)}")
+            // The banner consequence: a sync made yesterday evening is NOT after this morning's wake.
+            val syncedYesterdayEvening = s(upstreamStale).plusSeconds(12 * 3600)
+            assertEquals(
+                MissedNight.Status.NOT_SYNCED_YET,
+                MissedNight.status(
+                    now = s(now),
+                    bedMinutes = 1350,
+                    wakeMinutes = 390,
+                    nightWake = s(upstreamStale),
+                    wakeKnown = true,
+                    lastSyncAt = syncedYesterdayEvening,
+                    zone = ZoneId.of(zone),
+                ),
+                "$zone at $now: yesterday's sync does not make last night MISSING",
+            )
+        }
+    }
+
+    /**
+     * The fall-back evening of the same zones (a 25 h day; Lord Howe's is 24.5 h) keeps this morning's
+     * wake: stepping back one calendar day from the nearest window's day lands on today, never two
+     * wakes back. These are the instants where stepping `now` itself back a calendar day (25 h) and
+     * then taking the nearest window WOULD have answered yesterday's wake (measured by the sweep below).
+     * Each case: zone, now (epoch s), this morning's wake — upstream's answer too.
+     */
+    @Test
+    fun aFallBackEveningKeepsThisMorningsWake() {
+        val cases = listOf(
+            Triple("America/New_York", 1_793_574_600L, 1_793_529_000L), // 2026-11-01 18:10 EST
+            Triple("America/New_York", 1_793_575_800L, 1_793_529_000L), // 18:30 EST
+            Triple("Europe/London", 1_792_951_800L, 1_792_906_200L), // 2026-10-25 18:10 GMT
+            Triple("Europe/London", 1_792_953_000L, 1_792_906_200L), // 18:30 GMT
+            Triple("Australia/Lord_Howe", 1_775_375_400L, 1_775_331_000L), // 2026-04-05 18:20 +10:30
+            Triple("Australia/Lord_Howe", 1_775_376_000L, 1_775_331_000L), // 18:30 +10:30
+        )
+        for ((zone, now, thisMorning) in cases) {
+            assertEquals(
+                s(thisMorning),
+                MissedNight.morningWake(now = s(now), bedMinutes = 1350, wakeMinutes = 390, zone = ZoneId.of(zone)),
+                "$zone at $now",
+            )
+        }
+    }
+
+    /**
+     * Upstream's morning wake, transcribed: before the nearest window's bedtime, step back a fixed
+     * 24 h and take the nearest window again. Measured identical to the pinned Swift build on every
+     * point of the sweep below (the same zones and transitions as the measured table).
+     */
+    private fun upstreamMorningWake(now: Instant, bed: Int, wake: Int, zone: ZoneId): Instant? {
+        val near = SleepWindow.interval(bedMinutes = bed, wakeMinutes = wake, nightEndingNear = now, zone = zone) ?: return null
+        if (now >= near.start) return near.end
+        return SleepWindow.interval(bedMinutes = bed, wakeMinutes = wake, nightEndingNear = now.minusSeconds(86_400), zone = zone)?.end
+    }
+
+    /**
+     * The divergence is confined to spring-forward days: every 10 minutes across ±30 h of every 2026
+     * transition in eleven zones (the fixed-offset zones swept across New York's), ten schedules
+     * (including a day sleeper and one-minute windows), 79 420 points — only 109 answers differ from
+     * upstream's, every one at a spring-forward transition, and every one later than upstream's answer
+     * but not after `now` (a more recent wake already passed). No fall-back point and no fixed-offset
+     * point moves. At one-minute resolution the same sweep gives 1 050 of 792 220.
+     */
+    @Test
+    fun onlySpringForwardEveningsLeaveUpstreamsAnswer() {
+        val zones = listOf(
+            "America/New_York", "Europe/London", "America/Santiago", "America/Havana", "Asia/Beirut", "Australia/Lord_Howe",
+            "Pacific/Chatham", "Asia/Kolkata", "Asia/Kathmandu", "America/St_Johns", "UTC",
+        )
+        val schedules = listOf(1350 to 390, 60 to 540, 1380 to 420, 0 to 480, 120 to 600, 1320 to 360, 720 to 1200, 1439 to 1, 1 to 1439, 30 to 0)
+        val yearStart = Instant.parse("2026-01-01T00:00:00Z")
+        val yearEnd = Instant.parse("2027-01-01T00:00:00Z")
+        fun transitions(zone: ZoneId) = generateSequence(zone.rules.nextTransition(yearStart)) { zone.rules.nextTransition(it.instant) }
+            .takeWhile { it.instant < yearEnd }
+            .toList()
+        val newYorkInstants = transitions(ZoneId.of("America/New_York")).map { it.instant to false }
+        var points = 0
+        var changed = 0
+        val changedPerZone = sortedMapOf<String, Int>()
+        for (name in zones) {
+            val zone = ZoneId.of(name)
+            val own = transitions(zone).map { it.instant to it.isGap }
+            assertEquals(if (name in setOf("Asia/Kolkata", "Asia/Kathmandu", "UTC")) 0 else 2, own.size, "$name has its 2026 transitions")
+            for ((at, springForward) in own.ifEmpty { newYorkInstants }) {
+                for ((bed, wake) in schedules) {
+                    var now = at.minusSeconds(30 * 3600)
+                    while (now <= at.plusSeconds(30 * 3600)) {
+                        points++
+                        val upstream = upstreamMorningWake(now, bed, wake, zone)
+                        val got = MissedNight.morningWake(now = now, bedMinutes = bed, wakeMinutes = wake, zone = zone)
+                        if (got != upstream) {
+                            changed++
+                            changedPerZone.merge(name, 1, Int::plus)
+                            val where = "$name $bed/$wake at ${now.epochSecond}: upstream $upstream, got $got"
+                            assertTrue(springForward, "only a spring-forward transition may differ — $where")
+                            assertTrue(upstream != null && got != null && got > upstream && got <= now, "a more recent wake already passed — $where")
+                        }
+                        now = now.plusSeconds(600)
+                    }
+                }
+            }
+        }
+        assertEquals(79_420, points, "the sweep is complete")
+        assertEquals(109, changed, "spring-forward points that leave upstream's answer")
+        assertEquals(
+            mapOf("America/New_York" to 24, "America/St_Johns" to 24, "Australia/Lord_Howe" to 16, "Europe/London" to 21, "Pacific/Chatham" to 24),
+            changedPerZone.toMap(),
+        )
     }
 
     /** The schedule takes 32-bit minutes; upstream's 64-bit `Int` gives the same answers at the extremes (measured). */
@@ -392,6 +518,14 @@ class MissedNightHazardTest {
             assertFalse(MissedNight.endedToday(inBedEnd = edge, nightKey = stale, now = edge, zone = utc), "no credit when the day cannot be placed")
             assertFalse(MissedNight.endedToday(inBedEnd = edge, nightKey = stale, now = wake, zone = utc))
         }
+        // The earliest day java.time can place: before a 06:00 bedtime the window is that day's, and the
+        // calendar day before it cannot be placed — no wake, no claim, never an exception.
+        val firstDayOneAm = java.time.LocalDate.MIN.atTime(1, 0).toInstant(ZoneOffset.UTC)
+        assertNull(MissedNight.morningWake(now = firstDayOneAm, bedMinutes = 360, wakeMinutes = 420, zone = utc))
+        assertEquals(
+            MissedNight.Status.OK,
+            MissedNight.status(now = firstDayOneAm, bedMinutes = 360, wakeMinutes = 420, nightWake = stale, wakeKnown = true, lastSyncAt = firstDayOneAm, zone = utc),
+        )
         // A night dated beyond the calendar did not end today, so after a post-wake sync it is missing
         // (upstream, with a night dated 3.2e16 s: missing too).
         assertEquals(

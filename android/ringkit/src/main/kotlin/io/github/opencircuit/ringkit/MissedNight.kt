@@ -42,16 +42,21 @@ object MissedNight {
      * [SleepWindow.interval] returns the wake NEAREST [now], which after about wake + 12 h flips to
      * tomorrow's wake; that made the banner disappear every evening. So: at/after the nearest window's
      * bedtime, that window's wake is the reference (ahead only mid-sleep, which the caller's
-     * `now > wake` gate handles); before it, the nearest window is a future night, so step back 24 h.
-     * Kept exactly as upstream, including its spring-forward evening, when the 24 h step lands on the
-     * previous day for a few tens of minutes. Null for a degenerate zero-length schedule (`bed == wake`)
-     * or an instant the calendar cannot place.
+     * `now > wake` gate handles); before it, the nearest window is a future night, so step back one
+     * CALENDAR day from that window's wake.
+     *
+     * Deliberately not upstream's step: upstream steps `now` back a fixed 24 h and takes the nearest
+     * window again. On a spring-forward evening that lands on the day before, so for up to 30 minutes
+     * it answered yesterday's wake, and a sync made yesterday evening then read as "after this
+     * morning's wake" (the banner could say MISSING where "not synced yet" was meant). Every other
+     * instant gives upstream's answer, fall-back evenings included (stepping `now` itself back a
+     * calendar day would there land 25 h back and skip to yesterday's wake). Null for a degenerate
+     * zero-length schedule (`bed == wake`) or an instant the calendar cannot place.
      */
     fun morningWake(now: Instant, bedMinutes: Int, wakeMinutes: Int, zone: ZoneId): Instant? {
         val near = SleepWindow.interval(bedMinutes = bedMinutes, wakeMinutes = wakeMinutes, nightEndingNear = now, zone = zone) ?: return null
         if (now >= near.start) return near.end
-        val dayBefore = zonedOrNull { now.minusSeconds(86_400) } ?: return null
-        return SleepWindow.interval(bedMinutes = bedMinutes, wakeMinutes = wakeMinutes, nightEndingNear = dayBefore, zone = zone)?.end
+        return SleepWindow.wakeOneDayBefore(wake = near.end, wakeMinutes = wakeMinutes, zone = zone)
     }
 
     /**

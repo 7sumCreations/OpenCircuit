@@ -37,8 +37,8 @@ object SleepWindow {
     /** [interval] over 64-bit minutes, as upstream's `Int` (the habitual window's margins may be large). */
     private fun interval(bedMinutes: Long, wakeMinutes: Long, nightEndingNear: Instant, zone: ZoneId): DateInterval? {
         val day = MINUTES_PER_DAY.toLong()
-        val bed = ((bedMinutes % day) + day) % day
-        val wake = ((wakeMinutes % day) + day) % day
+        val bed = minuteOfDay(bedMinutes)
+        val wake = minuteOfDay(wakeMinutes)
 
         // Sleep duration, wrapping across midnight. bed == wake → 0 (degenerate; no window).
         val duration = ((wake - bed) + day) % day
@@ -53,6 +53,28 @@ object SleepWindow {
         val wakeDate = candidates.minByOrNull { Duration.between(nightEndingNear, it).abs() } ?: return null
         val bedDate = guarded { wakeDate.minusSeconds(duration * 60) } ?: return null
         return DateInterval(bedDate, wakeDate)
+    }
+
+    /**
+     * The scheduled wake ONE CALENDAR DAY before [wake], where [wake] is a wake [interval] returned for
+     * the same [wakeMinutes] in [zone]. It is placed by the same rule as [interval]'s: the day's start
+     * plus the wake's minutes in absolute seconds. [wake]'s own day is recovered by taking those
+     * minutes back off, so a wake pushed past midnight by a lost hour still counts as its own day's.
+     * Unlike a fixed 24 h step, a day that gained or lost time never makes this skip a wake or repeat
+     * one. Null when [zone] cannot place the instant.
+     */
+    internal fun wakeOneDayBefore(wake: Instant, wakeMinutes: Int, zone: ZoneId): Instant? {
+        val offsetSeconds = minuteOfDay(wakeMinutes.toLong()) * 60
+        return guarded {
+            val dayBefore = wake.minusSeconds(offsetSeconds).atZone(zone).toLocalDate().minusDays(1)
+            dayBefore.atStartOfDay(zone).toInstant().plusSeconds(offsetSeconds)
+        }
+    }
+
+    /** Minutes reduced into one day, `[0, 1440)`, as upstream's `((m % 1440) + 1440) % 1440`. */
+    private fun minuteOfDay(minutes: Long): Long {
+        val day = MINUTES_PER_DAY.toLong()
+        return ((minutes % day) + day) % day
     }
 
     /**
