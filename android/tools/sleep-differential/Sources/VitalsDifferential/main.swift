@@ -51,6 +51,20 @@
 //     law <digits> | law -              per step window, in order, the flush it arrives by
 //     ls <doubles>                      legacy written totals to seed the day's ledger from
 //     rq (<anchor ms|-> <notBefore ms|-> <now ms> <kcal>)...   write-window queries
+//   kind base (prior daily values, oldest first, and today's):
+//     pr <doubles> / ps <doubles> / ph <doubles>   resting HR, overnight SpO2, overnight HRV days
+//     td <rhr> <spo2> <hrv>             today's three values
+//     to <doubles>                      skin-temperature offsets to evaluate
+//     bm <ints>                         prior bedtimes, minutes since midnight (not normalised)
+//     bt <int>                          tonight's bedtime
+//     (the noise floors for z are 0, 0.3 and 5, fixed in both programs)
+//   kind temp (one night of skin temperature):
+//     w <start ms> <end ms>             the sleep window (closed)
+//     s (<ms> <celsius>)*               every reading, in order
+//     n (<night ms> <celsius>)*         the prior nights' means, in order
+//     wn <ints>                         baseline windows to evaluate
+//     tn <double>                       tonight's mean
+//     pv <double|->                     the previous night's mean
 //   end
 // goldens.txt, per case:
 //   case <id>
@@ -95,12 +109,37 @@
 //                                       -40, a NaN carry, a NaN workout credit, a NaN saved total
 //     where <plan> is <n writes> (<start ms> <end ms> <kcal>)* <marks count> <non-zero marks>
 //     (<slot> <mark>)* <carry remaining> <workout consumed> <total kcal>
+//   base:   (r, s, h = resting HR, overnight SpO2, overnight HRV; inputs below)
+//           rst <r|s|h> <median> <mad> <n> | rst <r|s|h> none   RobustBaseline.stats of that series
+//           z <r|s|h> <double>... | z <r|s|h> none   RobustBaseline.z of today's value at each noise floor
+//           vst <r|s|h> <mean> <sd> <n> | vst <r|s|h> none     VitalsBaseline.stats of that series
+//           cls <r|s|h> <severity> <mean|-> <sd|-> <n|-> <delta> <direction>   VitalsBaseline.classify
+//           temp <severity>...          VitalsBaseline.tempSeverity of each offset
+//           fever <0|1>...              VitalsBaseline.suspectedFever(resting HR today and prior, offset)
+//           rep <k> <status> <fever 0|1> <n> (<vital|temp> <severity> <delta> <direction> <mean|->)*
+//                                       VitalsBaseline.report of all three vitals with offset k
+//                                       (k = the offsets' count: no offset)
+//           circ <median|-> <delta|->   RobustBaseline.circularMedianMinutes of the prior bedtimes and
+//                                       circularDeltaMinutes from tonight's bedtime to it
+//   temp:   cov <double>                SkinTempBaseline.coverage of every reading over the window
+//           ver <k> (pub <double> | nm | rej <double>)   nightlyVerdict, k 0 = shipped gates,
+//                                       k 1 = minSamples 1 and minCoverage 0
+//           nmw <double|->              nightlyMean(samples:in:) with the shipped gates
+//           nml <double|->              nightlyMean of every reading's temperature (count floor only)
+//           base <double|->...          baseline(priorNights:windowNights:) for each window
+//           off <double|->              offset(tonight:baseline:) against the 30-night baseline
+//           band <raw name|->           deviationBand of that offset
+//           flags <a> <b> <c> <d>       anomalyFlags(tonight, 30-night baseline, previous night):
+//                                       abnormal rise, abnormal drop, fluctuation rise, drop (0 | 1)
+//           nrep <nightly> <baseline|-> <offset|-> <band|-> <a> <b> <c> <d>   report (30 nights)
 //   end
 //
 // Shapes include, from the start, the inputs a deliberate difference from upstream would touch:
 // duplicated groups and samples, reversed samples, heart-rate days that cross both 2026 clock
 // changes in New York, unreadable (NaN / infinite) resting HR and baseline readings, bucket
-// widths below one second and above one billion seconds, and unreadable stored ledger states.
+// widths below one second and above one billion seconds, unreadable stored ledger states,
+// unreadable prior days, todays, offsets, readings and nights, a zero noise floor against a
+// perfectly flat baseline, and readings exactly on the end of a whole-hour night.
 // Upstream's ledger adds a dictionary's values (seeded per process): regenerate.sh runs this
 // program with Swift's deterministic hashing so every run writes the same bytes.
 
@@ -784,6 +823,244 @@ func dayCase(_ index: Int) -> Case {
     return c
 }
 
+// MARK: - Prior-day series → robust and vitals baselines, classification, fever, status
+
+let baseShapes = ["steady", "fever", "desat", "hrvdrop", "short", "long", "flat", "artifact", "unreadable"]
+let baseCasesPerShape = 5
+let noiseFloors: [Double] = [0, 0.3, 5]
+let unreadables: [Double] = [.nan, .infinity, -.infinity]
+
+func baseCase(_ index: Int) -> Case {
+    let shape = baseShapes[index / baseCasesPerShape]
+    let k = index % baseCasesPerShape
+    var rng = SplitMix64(state: 0x4241_5345 &+ UInt64(index))
+    let n: Int
+    switch shape {
+    case "short": n = [0, 3, 6, 7, 8][k]
+    case "long": n = rng.int(61, 95)
+    default: n = rng.int(7, 45)
+    }
+    let bases = [rng.real(48, 70), rng.real(94, 99), rng.real(30, 90)]
+    let spreads = [3.0, 1.0, 8.0]
+    var series: [[Double]] = (0..<3).map { v in
+        (0..<n).map { _ in shape == "flat" ? bases[v] : bases[v] + rng.real(-spreads[v], spreads[v]) }
+    }
+    if shape == "artifact" && n > 0 {
+        let outliers = [40.0, -15.0, -40.0]
+        for v in 0..<3 { series[v][rng.int(0, n - 1)] = bases[v] + outliers[v] }
+    }
+    if shape == "unreadable" {
+        for v in 0..<3 { for _ in 0..<rng.int(1, 3) { series[v].insert(rng.pick(unreadables), at: rng.int(0, series[v].count)) } }
+    }
+    var today = (0..<3).map { v in shape == "flat" ? bases[v] : bases[v] + rng.real(-spreads[v], spreads[v]) }
+    switch shape {
+    case "fever": today[0] = bases[0] + rng.real(6, 20)
+    case "desat": today[1] = bases[1] - rng.real(2, 8)
+    case "hrvdrop": today[2] = bases[2] - rng.real(8, 30)
+    case "flat": today[0] = bases[0] + [0.25, 1, 4, 10, -2][k]
+    case "unreadable": today[k % 3] = unreadables[k % 3]
+    default: break
+    }
+    var offsets = [rng.real(-1.5, 1.5), [0.5, 1.0, -0.5, -1.0, 0.0][k], rng.real(1, 2)]
+    if shape == "unreadable" { offsets[(k + 1) % 3] = unreadables[(k + 2) % 3] }
+    let habitual = k == 0 ? (1410 + rng.int(0, 60)) % 1440 : rng.int(0, 1439)
+    let bedtimes = (0..<n).map { _ in habitual + rng.int(-90, 90) + (rng.chance(10) ? 1440 * rng.int(-2, 2) : 0) }
+    let tonightBed = habitual + rng.int(-240, 240)
+
+    var c = Case(id: String(format: "base-%03d", index), kind: "base", shape: shape)
+    let tags = ["r", "s", "h"]
+    let vitals: [VitalsBaseline.Vital] = [.restingHR, .overnightSpO2, .overnightHRV]
+    c.inputs = (0..<3).map { v in "p\(tags[v])" + series[v].map { " " + d($0) }.joined() } + [
+        "td" + today.map { " " + d($0) }.joined(),
+        "to" + offsets.map { " " + d($0) }.joined(),
+        "bm" + ints(bedtimes),
+        "bt \(tonightBed)",
+    ]
+    for v in 0..<3 {
+        let s = RobustBaseline.stats(series[v])
+        c.goldens.append(s.map { "rst \(tags[v]) \(d($0.median)) \(d($0.mad)) \($0.n)" } ?? "rst \(tags[v]) none")
+        hit("base-rstats-none", s == nil)
+        hit("base-rstats-capped", s?.n == RobustBaseline.maxBaselineDays)
+        if let s {
+            let zs = noiseFloors.map { RobustBaseline.z(today: today[v], stats: s, noiseFloor: $0) }
+            c.goldens.append("z \(tags[v])" + zs.map { " " + d($0) }.joined())
+            hit("base-z-clamped", zs.contains { abs($0) == RobustBaseline.zClamp })
+            hit("base-z-floor-scale", noiseFloors.contains { RobustBaseline.madConsistency * s.mad < $0 })
+        } else {
+            c.goldens.append("z \(tags[v]) none")
+        }
+    }
+    for v in 0..<3 {
+        let s = VitalsBaseline.stats(series[v])
+        c.goldens.append(s.map { "vst \(tags[v]) \(d($0.mean)) \(d($0.sd)) \($0.n)" } ?? "vst \(tags[v]) none")
+        hit("base-vstats-none", s == nil)
+        hit("base-vstats-capped", s?.n == VitalsBaseline.Config().maxBaselineDays)
+    }
+    for v in 0..<3 {
+        let cl = VitalsBaseline.classify(today: today[v], prior: series[v], vital: vitals[v])
+        c.goldens.append("cls \(tags[v]) \(cl.severity.rawValue) \(optD(cl.baseline?.mean)) \(optD(cl.baseline?.sd)) \(optI(cl.baseline?.n)) \(d(cl.delta)) \(cl.direction.rawValue)")
+        hit("base-cls-minor", cl.severity == .minor)
+        hit("base-cls-significant", cl.severity == .significant)
+        hit("base-cls-normal-past-floor", cl.baseline != nil && cl.severity == .normal && abs(cl.delta) >= VitalsBaseline.Config().minDelta(vitals[v]))
+    }
+    c.goldens.append("temp" + offsets.map { " " + VitalsBaseline.tempSeverity(offsetC: $0).rawValue }.joined())
+    c.goldens.append("fever" + offsets.map {
+        " " + (VitalsBaseline.suspectedFever(restingHRToday: today[0], restingHRPrior: series[0], skinTempOffsetC: $0) ? "1" : "0")
+    }.joined())
+    let report = (0..<3).map { VitalsBaseline.VitalInput(vital: vitals[$0], today: today[$0], prior: series[$0]) }
+    for (j, offset) in (offsets.map { Optional($0) } + [nil]).enumerated() {
+        let r = VitalsBaseline.report(report, skinTempOffsetC: offset)
+        c.goldens.append("rep \(j) \(r.status.rawValue) \(r.feverSuspected ? 1 : 0) \(r.signals.count)" + r.signals.map {
+            " \($0.vital?.rawValue ?? "temp") \($0.severity.rawValue) \(d($0.delta)) \($0.direction.rawValue) \(optD($0.baselineMean))"
+        }.joined())
+        hit("base-status-\(r.status.rawValue)")
+        hit("base-fever", r.feverSuspected)
+        hit("base-temp-minor", r.signals.contains { $0.isTemperature && $0.severity == .minor })
+        hit("base-temp-significant", r.signals.contains { $0.isTemperature && $0.severity == .significant })
+    }
+    let median = RobustBaseline.circularMedianMinutes(bedtimes)
+    c.goldens.append("circ \(optI(median)) \(optI(median.map { RobustBaseline.circularDeltaMinutes(tonightBed, $0) }))")
+    let normalised = bedtimes.map { (($0 % 1440) + 1440) % 1440 }
+    hit("base-circ-wrap", normalised.contains { $0 < 120 } && normalised.contains { $0 > 1320 })
+    hit("base-unreadable", shape == "unreadable")
+    return c
+}
+
+// MARK: - Temperature nights → coverage, verdict, nightly means, baseline, offset, band, flags
+
+let tempShapes = ["full", "partial", "clustered", "sparse", "thin", "endreading", "history", "unreadable"]
+let tempCasesPerShape = 5
+
+func tempCase(_ index: Int) -> Case {
+    let shape = tempShapes[index / tempCasesPerShape]
+    let k = index % tempCasesPerShape
+    var rng = SplitMix64(state: 0x5445_4d50 &+ UInt64(index))
+    let day = Date(timeIntervalSince1970: 1_767_225_600 + Double(index) * 86_400) // 2026-01-01 UTC onwards
+    let start = day.addingTimeInterval(Double(rng.int(80, 96)) * 900)
+    let wholeHours = shape == "endreading" || rng.chance(50)
+    let duration = wholeHours ? Double(rng.int(6, 11)) * 3600 : Double(rng.int(6 * 3600 * 4, 11 * 3600 * 4)) / 4
+    let window = DateInterval(start: start, duration: duration)
+    let base = rng.real(33, 36)
+    var readings: [(Double, Double)] = [] // (seconds after the window's start, celsius)
+    func add(_ t: Double) { readings.append((t, base + rng.real(-0.75, 0.75))) }
+    switch shape {
+    case "full", "history", "unreadable":
+        var t = Double(rng.int(0, 120))
+        while t < duration { add(t); t += Double(rng.int(240, 600)) }
+    case "partial":
+        let span = Double(rng.int(1, 3)) * 3600
+        var t = Double(rng.int(0, 60))
+        while t < span { add(t); t += Double(rng.int(60, 200)) }
+    case "clustered":
+        for _ in 0..<2 {
+            let at = Double(rng.int(0, Int(duration) - 3600))
+            for j in 0..<rng.int(8, 25) { add(at + Double(j) * 73) }
+        }
+        readings += readings.prefix(3) // duplicated readings
+    case "sparse":
+        var t = Double(rng.int(0, 600))
+        while t < duration { add(t); t += Double(rng.int(1200, 2400)) }
+    case "thin":
+        for _ in 0..<rng.int(1, 12) { add(Double(rng.int(0, Int(duration) - 1))) }
+    default: // endreading: the last hour, then a reading exactly on the window's end
+        var t = duration - 3600 + Double(rng.int(1, 300))
+        while t < duration { add(t); t += 300 }
+        add(duration)
+        if k % 2 == 0 { add(0) }
+        if k == 4 { add(duration - 3600) }
+    }
+    if ["full", "sparse", "history"].contains(shape) && rng.chance(60) {
+        add(-Double(rng.int(1, 3600)))
+        add(duration + Double(rng.int(1, 3600)))
+    }
+    if shape == "unreadable" && !readings.isEmpty {
+        if k == 4 {
+            readings = readings.map { ($0.0, Double.nan) }
+        } else {
+            for _ in 0..<rng.int(1, 4) { let j = rng.int(0, readings.count - 1); readings[j].1 = rng.pick(unreadables) }
+        }
+    }
+    if ["clustered", "sparse", "history"].contains(shape) { readings = readings.shuffledDeterministically(&rng) }
+
+    let m = shape == "history" ? rng.int(3, 40) : shape == "thin" ? rng.int(0, 2) : rng.int(0, 12)
+    var nights = (0..<m).map { j in
+        SkinTempBaseline.NightlyTemp(night: day.addingTimeInterval(-Double(j + 1) * 86_400), celsius: base + rng.real(-0.5, 0.5))
+    }
+    if shape == "history" && m > 2 {
+        nights.append(SkinTempBaseline.NightlyTemp(night: nights[1].night, celsius: base + rng.real(-0.5, 0.5)))
+        nights = nights.shuffledDeterministically(&rng)
+    }
+    if shape == "unreadable" && m > 0 {
+        let j = rng.int(0, m - 1)
+        nights[j] = SkinTempBaseline.NightlyTemp(night: nights[j].night, celsius: rng.pick(unreadables))
+    }
+    let windowNights = [30, 3, rng.int(1, 10)]
+    var tonight = base + rng.real(-2, 2)
+    var prev: Double? = rng.chance(25) ? nil : base + rng.real(-1.5, 1.5)
+    if shape == "unreadable" {
+        if k % 3 == 0 { tonight = .nan } else if k % 3 == 1 { tonight = .infinity }
+        if k == 2 { prev = .nan } else if k == 4 { prev = -.infinity }
+    }
+
+    var c = Case(id: String(format: "temp-%03d", index), kind: "temp", shape: shape)
+    c.inputs = [
+        "w \(ms(window.start)) \(ms(window.end))",
+        "s" + readings.map { " \(ms(start.addingTimeInterval($0.0))) \(d($0.1))" }.joined(),
+        "n" + nights.map { " \(ms($0.night)) \(d($0.celsius))" }.joined(),
+        "wn" + ints(windowNights),
+        "tn \(d(tonight))",
+        "pv \(optD(prev))",
+    ]
+    let samples = readings.map { TemperatureSample(time: start.addingTimeInterval($0.0), celsius: $0.1) }
+    func verdict(_ v: SkinTempBaseline.NightlyVerdict) -> String {
+        switch v {
+        case .published(let x): return "pub \(d(x))"
+        case .notMeasured: return "nm"
+        case .rejectedCoverage(let x): return "rej \(d(x))"
+        }
+    }
+    func bits(_ f: SkinTempBaseline.AnomalyFlags) -> String {
+        [f.abnormalRise, f.abnormalDrop, f.fluctuationRise, f.fluctuationDrop].map { $0 ? "1" : "0" }.joined(separator: " ")
+    }
+    let shipped = SkinTempBaseline.nightlyVerdict(samples: samples, in: window)
+    c.goldens += [
+        "cov \(d(SkinTempBaseline.coverage(samples: samples, in: window)))",
+        "ver 0 \(verdict(shipped))",
+        "ver 1 \(verdict(SkinTempBaseline.nightlyVerdict(samples: samples, in: window, minSamples: 1, minCoverage: 0)))",
+        "nmw \(optD(SkinTempBaseline.nightlyMean(samples: samples, in: window)))",
+        "nml \(optD(SkinTempBaseline.nightlyMean(readings.map { $0.1 })))",
+        "base" + windowNights.map { " " + optD(SkinTempBaseline.baseline(priorNights: nights, windowNights: $0)) }.joined(),
+    ]
+    let baseline = SkinTempBaseline.baseline(priorNights: nights)
+    let offset = baseline.map { SkinTempBaseline.offset(tonight: tonight, baseline: $0) }
+    c.goldens.append("off \(optD(offset))")
+    c.goldens.append("band \(offset.map { SkinTempBaseline.deviationBand(offset: $0).rawValue } ?? "-")")
+    let flags = SkinTempBaseline.anomalyFlags(tonight: tonight, baseline: baseline, previousNight: prev)
+    c.goldens.append("flags \(bits(flags))")
+    let r = SkinTempBaseline.report(tonight: tonight, priorNights: nights, previousNight: prev)
+    c.goldens.append("nrep \(d(r.nightlyC)) \(optD(r.baselineC)) \(optD(r.offsetC)) \(r.band?.rawValue ?? "-") \(bits(r.flags))")
+
+    switch shipped {
+    case .published: hit("temp-published")
+    case .notMeasured: hit("temp-not-measured")
+    case .rejectedCoverage: hit("temp-rejected")
+    }
+    hit("temp-end-reading", readings.contains { $0.0 == duration })
+    hit("temp-out-of-window", readings.contains { $0.0 < 0 || $0.0 > duration })
+    hit("temp-partial-hour-window", !wholeHours)
+    hit("temp-baseline", baseline != nil)
+    hit("temp-baseline-none", baseline == nil)
+    hit("temp-band-\(r.band?.rawValue ?? "none")")
+    hit("temp-flag-abnormal", flags.abnormalRise || flags.abnormalDrop)
+    hit("temp-flag-fluct-rise", flags.fluctuationRise)
+    hit("temp-flag-fluct-drop", flags.fluctuationDrop)
+    hit("temp-flag-gated", baseline != nil && prev.map { abs(tonight - $0) > SkinTempBaseline.fluctuationC } == true
+        && !flags.fluctuationRise && !flags.fluctuationDrop)
+    hit("temp-duplicated-nights", shape == "history" && m > 2)
+    hit("temp-unreadable", shape == "unreadable")
+    return c
+}
+
 // MARK: - Main
 
 let args = CommandLine.arguments
@@ -799,6 +1076,8 @@ let cases = (0..<(rrShapes.count * rrCasesPerShape)).map(rrCase)
     + (0..<(hrsShapes.count * hrsCasesPerShape)).map(hrsCase)
     + (0..<(energyShapes.count * energyCasesPerShape)).map(energyCase)
     + (0..<(dayShapes.count * dayCasesPerShape)).map(dayCase)
+    + (0..<(baseShapes.count * baseCasesPerShape)).map(baseCase)
+    + (0..<(tempShapes.count * tempCasesPerShape)).map(tempCase)
 let header = "# Generated by android/tools/sleep-differential (VitalsDifferential) from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

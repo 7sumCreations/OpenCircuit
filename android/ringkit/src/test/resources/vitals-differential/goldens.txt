@@ -4721,3 +4721,1428 @@ bad 2 4 1781955900000 1781956800000 d401793b333333333 1781964000000 178196490000
 bad 3 4 1781955900000 1781956800000 d401793b333333333 1781964000000 1781964900000 d4018f9c000000000 1781991000000 1781991900000 d3fe32e6666666666 1782002700000 1782003600000 d400414933333332e 84 4 31 d401793b333333333 40 d4018f9c000000000 70 d3fe32e6666666666 83 d4004149333333333 d0000000000000000 d0000000000000000 d402e7ec4cccccccc
 bad 4 4 1781955900000 1781956800000 d401793b333333333 1781964000000 1781964900000 d4018f9c000000000 1781991000000 1781991900000 d3fe32e6666666666 1782002700000 1782003600000 d400414933333332e 84 4 31 d401793b333333333 40 d4018f9c000000000 70 d3fe32e6666666666 83 d4004149333333333 d0000000000000000 d0000000000000000 d402e7ec4cccccccc
 end
+case base-000
+rst r d4051916800000000 d3ff11a0000000000 34
+z r d3fc5a718f970630d d3fc5a718f970630d d3fab733333333333
+rst s d4057f24800000000 d3fe0e40000000000 34
+z s d3fdaa29d1816d926 d3fdaa29d1816d926 d3fb0accccccccccd
+rst h d405219f000000000 d400a6a0000000000 34
+z h dbf95dbb390558c78 dbf95dbb390558c78 dbf95666666666666
+vst r d405185419999999a d3ff9e6eb953b3343 30
+vst s d4057f7e2aaaaaaab d3fe0e21f3aadebd5 30
+vst h d4051ef7222222222 d400ec61414bc59db 30
+cls r normal d405185419999999a d3ff9e6eb953b3343 30 d3fdd4e6666666600 rise
+cls s normal d4057f7e2aaaaaaab d3fe0e21f3aadebd5 30 d3fce7aaaaaaaaa00 rise
+cls h normal d4051ef7222222222 d400ec61414bc59db 30 d3fe1e6eeeeeeef00 rise
+temp normal minor significant
+fever 0 0 0
+rep 0 normal 0 0
+rep 1 watch 0 1 temp minor d3fe0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ffc3c0000000000 rise -
+rep 3 normal 0 0
+circ 1430 115
+end
+case base-001
+rst r d404f89c000000000 d3ff2b40000000000 41
+z r d3ffabd9f5e491285 d3ffabd9f5e491285 d3fe289999999999a
+rst s d40577c6000000000 d3fe0e80000000000 41
+z s d3ff67103fbf27409 d3ff67103fbf27409 d3fcc200000000000
+rst h d4042a1a000000000 d4013d10000000000 41
+z h dbfe725289ef55cc8 dbfe725289ef55cc8 dbfe725289ef55cc8
+vst r d404fa03777777777 d3ff85a012fcaf243 30
+vst s d4057876c44444444 d3fe1c27bd26d290f 30
+vst h d4042b39bbbbbbbbc d401402c7bf7b4f5f 30
+cls r normal d404fa03777777777 d3ff85a012fcaf243 30 d4005c48888888890 rise
+cls s normal d4057876c44444444 d3fe1c27bd26d290f 30 d3feda1ddddddde00 rise
+cls h normal d4042b39bbbbbbbbc d401402c7bf7b4f5f 30 dc015cfdddddddde0 drop
+temp minor significant significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor dbfe2980000000000 drop -
+rep 1 anomaly 0 1 temp significant d3ff0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ff9a40000000000 rise -
+rep 3 normal 0 0
+circ 1365 89
+end
+case base-002
+rst r d404c02e000000000 d3ffa660000000000 16
+z r dbfc661d4dfb6a7bc dbfc661d4dfb6a7bc dbfb5e66666666666
+rst s d4058a21000000000 d3fe2280000000000 16
+z s dbfdcd3eb0281b7d6 dbfdcd3eb0281b7d6 dbfb3666666666666
+rst h d405237d800000000 d40159c0000000000 16
+z h d3ff14afc1804a46d d3ff14afc1804a46d d3ff14afc1804a46d
+vst r d404bdbe200000000 d3fff47e9f4f9002a 16
+vst s d4058a1e400000000 d3fe486b88e8b07ea 16
+vst h d40525b0000000000 d401535f84aac4888 16
+cls r normal d404bdbe200000000 d3fff47e9f4f9002a 16 dbfbf840000000000 drop
+cls s normal d4058a1e400000000 d3fe486b88e8b07ea 16 dbfd8140000000000 drop
+cls h normal d40525b0000000000 d401535f84aac4888 16 d4020370000000000 rise
+temp minor minor significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor d3fe6880000000000 rise -
+rep 1 watch 0 1 temp minor dbfe0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ff4900000000000 rise -
+rep 3 normal 0 0
+circ 250 109
+end
+case base-003
+rst r d4050ca9000000000 d3ff2f40000000000 29
+z r d3fcf2cab0779c3a4 d3fcf2cab0779c3a4 d3fb5e66666666666
+rst s d40579b2000000000 d3fdc600000000000 29
+z s dbff5c006748bcb41 dbff5c006748bcb41 dbfc6e00000000000
+rst h d40443a8000000000 d4011960000000000 29
+z h d3fd8bd02810abf13 d3fd8bd02810abf13 d3fd8bd02810abf13
+vst r d4050d7708d3dcb09 d3ff95f3f4aedae59 29
+vst s d405797b9ee58469f d3fe146578bfa899b 29
+vst h d4044199cb08d3dcb d4012bef19d723c8d 29
+cls r normal d4050d7708d3dcb09 d3ff95f3f4aedae59 29 d3fccfee58469ee00 rise
+cls s normal d405797b9ee58469f d3fe146578bfa899b 29 dbfeae4f72c234f80 drop
+cls h normal d4044199cb08d3dcb d4012bef19d723c8d 29 d40063634f72c2350 rise
+temp minor significant significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor d3feed80000000000 rise -
+rep 1 anomaly 0 1 temp significant dbff0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ff6100000000000 rise -
+rep 3 normal 0 0
+circ 1274 45
+end
+case base-004
+rst r d404a0f2000000000 d3ff91e0000000000 30
+z r dbf9c5b8949c42852 dbf9c5b8949c42852 dbf8a666666666666
+rst s d40578e5800000000 d3fd8d00000000000 30
+z s dbfe2e47d506b6adb dbfe2e47d506b6adb dbfb1600000000000
+rst h d4045f44000000000 d4010d80000000000 30
+z h dbfde1cf24403e2af dbfde1cf24403e2af dbfde1cf24403e2af
+vst r d404a34f777777777 d3ffd8235d88efb47 30
+vst s d405798d222222222 d3fe0abc43d2904f7 30
+vst h d4045d22000000000 d4012caab4e4b721c 30
+cls r normal d404a34f777777777 d3ffd8235d88efb47 30 dbfd70bbbbbbbbb80 drop
+cls s normal d405798d222222222 d3fe0abc43d2904f7 30 dbfe0191111111100 drop
+cls h normal d4045d22000000000 d4012caab4e4b721c 30 dc0055e0000000000 drop
+temp normal normal significant
+fever 0 0 0
+rep 0 normal 0 0
+rep 1 normal 0 0
+rep 2 anomaly 0 1 temp significant d3ff57c0000000000 rise -
+rep 3 normal 0 0
+circ 680 173
+end
+case base-005
+rst r d4051799800000000 d3fe1d00000000000 8
+z r d4010000000000000 d4010000000000000 d4004996666666666
+rst s d4058a1d000000000 d3fe17c0000000000 8
+z s d3ff6f8f3abaf8cc3 d3ff6f8f3abaf8cc3 d3fcdc66666666666
+rst h d4053bba800000000 d40116d0000000000 8
+z h d3fb8fc2b5e9fdc33 d3fb8fc2b5e9fdc33 d3fb8fc2b5e9fdc33
+vst r d40516e0e00000000 d3fe5b71fd239d3bb 8
+vst s d4058a72800000000 d3fe165071993bc60 8
+vst h d40539e9a00000000 d4011c60f66d2f477 8
+cls r significant d40516e0e00000000 d3fe5b71fd239d3bb 8 d402a1c1000000000 rise
+cls s normal d4058a72800000000 d3fe165071993bc60 8 d3ff1460000000000 rise
+cls h normal d40539e9a00000000 d4011c60f66d2f477 8 d3ff1598000000000 rise
+temp significant minor significant
+fever 0 0 1
+rep 0 anomaly 0 2 restingHR significant d402a1c1000000000 rise d40516e0e00000000 temp significant dbff6c00000000000 drop -
+rep 1 anomaly 0 2 restingHR significant d402a1c1000000000 rise d40516e0e00000000 temp minor d3fe0000000000000 rise -
+rep 2 anomaly 1 2 restingHR significant d402a1c1000000000 rise d40516e0e00000000 temp significant d3ff0e00000000000 rise -
+rep 3 anomaly 0 1 restingHR significant d402a1c1000000000 rise d40516e0e00000000
+circ 1413 211
+end
+case base-006
+rst r d404a95a000000000 d3ff6580000000000 40
+z r d4010000000000000 d4010000000000000 d400e14cccccccccd
+rst s d4057c3a000000000 d3fdd100000000000 40
+z s d3fdfef41e238aae6 d3fdfef41e238aae6 d3fb1333333333333
+rst h d4050b06800000000 d400d680000000000 40
+z h d3fbb39e870529b26 d3fbb39e870529b26 d3fbb39e870529b26
+vst r d404ab23333333333 d3ffac130838c9c0e 30
+vst s d4057c062aaaaaaab d3fdd40d910a4b404 30
+vst h d405080baaaaaaaab d4013e4af25fb15c0 30
+cls r significant d404ab23333333333 d3ffac130838c9c0e 30 d403293d99999999a rise
+cls s normal d4057c062aaaaaaab d3fdd40d910a4b404 30 d3fd8bd5555555500 rise
+cls h normal d405080baaaaaaaab d4013e4af25fb15c0 30 d3ff5315555555540 rise
+temp normal significant significant
+fever 0 1 1
+rep 0 anomaly 0 1 restingHR significant d403293d99999999a rise d404ab23333333333
+rep 1 anomaly 1 2 restingHR significant d403293d99999999a rise d404ab23333333333 temp significant d3ff0000000000000 rise -
+rep 2 anomaly 1 2 restingHR significant d403293d99999999a rise d404ab23333333333 temp significant d3ffae40000000000 rise -
+rep 3 anomaly 0 1 restingHR significant d403293d99999999a rise d404ab23333333333
+circ 1402 32
+end
+case base-007
+rst r d40493ce000000000 d3ff3a80000000000 37
+z r d4010000000000000 d4010000000000000 d400eff3333333333
+rst s d4057965000000000 d3fe4500000000000 37
+z s dbfd4da69ef2462af dbfd4da69ef2462af dbfaf666666666666
+rst h d4054e01000000000 d400b060000000000 37
+z h d3fd87c38e35891e0 d3fd87c38e35891e0 d3fd87c38e35891e0
+vst r d40492ebaaaaaaaab d3ff9749c395eb1af 30
+vst s d40579d4a22222222 d3fe43b4b40263b3d 30
+vst h d405457d666666666 d4011407b790163b7 30
+cls r significant d40492ebaaaaaaaab d3ff9749c395eb1af 30 d40337bcaaaaaaaaa rise
+cls s normal d40579d4a22222222 d3fe43b4b40263b3d 30 dbfda9a2222222200 drop
+cls h normal d405457d666666666 d4011407b790163b7 30 d40102d99999999a0 rise
+temp normal minor significant
+fever 0 0 1
+rep 0 anomaly 0 1 restingHR significant d40337bcaaaaaaaaa rise d40492ebaaaaaaaab
+rep 1 anomaly 0 2 restingHR significant d40337bcaaaaaaaaa rise d40492ebaaaaaaaab temp minor dbfe0000000000000 drop -
+rep 2 anomaly 1 2 restingHR significant d40337bcaaaaaaaaa rise d40492ebaaaaaaaab temp significant d3ff8440000000000 rise -
+rep 3 anomaly 0 1 restingHR significant d40337bcaaaaaaaaa rise d40492ebaaaaaaaab
+circ 1373 40
+end
+case base-008
+rst r d404b22f000000000 d3fe5b00000000000 36
+z r d4010000000000000 d4010000000000000 d3ffe393333333333
+rst s d4057a3c800000000 d3fdd800000000000 36
+z s dbff9526d845c3fb8 dbff9526d845c3fb8 dbfcbb00000000000
+rst h d4051c18800000000 d40098f0000000000 36
+z h d3fe953115fe9168e d3fe953115fe9168e d3fe7fd999999999a
+vst r d404b473777777777 d3ff48d165b7a1550 30
+vst s d405796df77777777 d3fe59c3e5d6eeb04 30
+vst h d4051b84000000000 d40117adf34700255 30
+cls r significant d404b473777777777 d3ff48d165b7a1550 30 d402252a222222224 rise
+cls s normal d405796df77777777 d3fe59c3e5d6eeb04 30 dbfec27bbbbbbbb80 drop
+cls h normal d4051b84000000000 d40117adf34700255 30 d400f260000000000 rise
+temp minor significant significant
+fever 0 0 1
+rep 0 anomaly 0 2 restingHR significant d402252a222222224 rise d404b473777777777 temp minor dbfe4600000000000 drop -
+rep 1 anomaly 0 2 restingHR significant d402252a222222224 rise d404b473777777777 temp significant dbff0000000000000 drop -
+rep 2 anomaly 1 2 restingHR significant d402252a222222224 rise d404b473777777777 temp significant d3ff3540000000000 rise -
+rep 3 anomaly 0 1 restingHR significant d402252a222222224 rise d404b473777777777
+circ 661 230
+end
+case base-009
+rst r d404ccd0000000000 d3ff4400000000000 27
+z r d400fb3790a9a1724 d400fb3790a9a1724 d3ff7cb3333333333
+rst s d4058138000000000 d3fe0c00000000000 27
+z s d3fed8e89bb072c18 d3fed8e89bb072c18 d3fc259999999999a
+rst h d4055fcb000000000 d4003700000000000 27
+z h dbff261f1094861c4 dbff261f1094861c4 dbfea7ccccccccccd
+vst r d404cc53da12f684c d3ff689208b25fe53 27
+vst s d40581fb84bda12f7 d3fe3b9fe2bb56948 27
+vst h d4055b351c71c71c7 d401076642549b6bf 27
+cls r significant d404cc53da12f684c d3ff689208b25fe53 27 d401dfc12f684bda0 rise
+cls s normal d40581fb84bda12f7 d3fe3b9fe2bb56948 27 d3fe0d3da12f68480 rise
+cls h normal d4055b351c71c71c7 d401076642549b6bf 27 dc007f038e38e38e0 drop
+temp minor normal significant
+fever 0 0 0
+rep 0 anomaly 0 2 restingHR significant d401dfc12f684bda0 rise d404cc53da12f684c temp minor dbfe9c00000000000 drop -
+rep 1 anomaly 0 1 restingHR significant d401dfc12f684bda0 rise d404cc53da12f684c
+rep 2 anomaly 0 2 restingHR significant d401dfc12f684bda0 rise d404cc53da12f684c temp significant d3ff7200000000000 rise -
+rep 3 anomaly 0 1 restingHR significant d401dfc12f684bda0 rise d404cc53da12f684c
+circ 533 118
+end
+case base-010
+rst r d404ec34000000000 d3fffb00000000000 12
+z r dbfde1e88987c244c dbfde1e88987c244c dbfd1b00000000000
+rst s d4058770000000000 d3fd7100000000000 12
+z s dc010000000000000 dc010000000000000 dbff639999999999a
+rst h d4045cba000000000 d4006440000000000 12
+z h dbfe1aef9454ea28d dbfe1aef9454ea28d dbfdd300000000000
+vst r d404ee162aaaaaaab d400061b51c743c72 12
+vst s d405877f555555555 d3fde7344eba4ca88 12
+vst h d40466a4800000000 d401265ac54c577b1 12
+cls r normal d404ee162aaaaaaab d400061b51c743c72 12 dbff9e05555555560 drop
+cls s significant d405877f555555555 d3fde7344eba4ca88 12 dc01bd75555555550 drop
+cls h normal d40466a4800000000 d401265ac54c577b1 12 dc00c288000000000 drop
+temp significant minor significant
+fever 0 0 0
+rep 0 anomaly 0 2 overnightSpO2 significant dc01bd75555555550 drop d405877f555555555 temp significant dbff2400000000000 drop -
+rep 1 anomaly 0 2 overnightSpO2 significant dc01bd75555555550 drop d405877f555555555 temp minor d3fe0000000000000 rise -
+rep 2 anomaly 0 2 overnightSpO2 significant dc01bd75555555550 drop d405877f555555555 temp significant d3ffb540000000000 rise -
+rep 3 anomaly 0 1 overnightSpO2 significant dc01bd75555555550 drop d405877f555555555
+circ 45 149
+end
+case base-011
+rst r d404c3d7000000000 d3ff31e0000000000 26
+z r d3ff08af518c0d3df d3ff08af518c0d3df d3fd771999999999a
+rst s d4057b4c000000000 d3fe2880000000000 26
+z s dc010000000000000 dc010000000000000 dbfe8ee6666666666
+rst h d404dc81000000000 d4012c60000000000 26
+z h d3fc5d5cfa7bd579e d3fc5d5cfa7bd579e d3fc5d5cfa7bd579e
+vst r d404c3193b13b13b1 d3ff9b18069c2c00e 26
+vst s d4057ae6589d89d8a d3fe4624a67b3ec99 26
+vst h d404dd7c762762762 d40128a410becbbbd 26
+cls r normal d404c3193b13b13b1 d3ff9b18069c2c00e 26 d3ffec989d89d89e0 rise
+cls s significant d4057ae6589d89d8a d3fe4624a67b3ec99 26 dc00e5eb13b13b140 drop
+cls h normal d404dd7c762762762 d40128a410becbbbd 26 d3ff10713b13b13c0 rise
+temp normal significant significant
+fever 0 0 0
+rep 0 anomaly 0 1 overnightSpO2 significant dc00e5eb13b13b140 drop d4057ae6589d89d8a
+rep 1 anomaly 0 2 overnightSpO2 significant dc00e5eb13b13b140 drop d4057ae6589d89d8a temp significant d3ff0000000000000 rise -
+rep 2 anomaly 0 2 overnightSpO2 significant dc00e5eb13b13b140 drop d4057ae6589d89d8a temp significant d3ff8e80000000000 rise -
+rep 3 anomaly 0 1 overnightSpO2 significant dc00e5eb13b13b140 drop d4057ae6589d89d8a
+circ 1279 100
+end
+case base-012
+rst r d404cd73000000000 d3ff3100000000000 12
+z r dbffa7d1ac25f251a dbffa7d1ac25f251a dbfe2b73333333333
+rst s d4057d2d800000000 d3fd8e80000000000 12
+z s dc010000000000000 dc010000000000000 dbfecbf3333333333
+rst h d404867c000000000 d4000d20000000000 12
+z h dbff4ff4b74288156 dbff4ff4b74288156 dbfea2e6666666666
+vst r d404d1cc000000000 d3ff88066a2dc640b 12
+vst s d4057dac000000000 d3fe08fc4bf8167b0 12
+vst h d4047f84d55555555 d400fe667fa60b9c1 12
+cls r normal d404d1cc000000000 d3ff88066a2dc640b 12 dc00bbe0000000000 drop
+cls s significant d4057dac000000000 d3fe08fc4bf8167b0 12 dc012760000000000 drop
+cls h normal d4047f84d55555555 d400fe667fa60b9c1 12 dc009c2d555555550 drop
+temp normal minor significant
+fever 0 0 0
+rep 0 anomaly 0 1 overnightSpO2 significant dc012760000000000 drop d4057dac000000000
+rep 1 anomaly 0 2 overnightSpO2 significant dc012760000000000 drop d4057dac000000000 temp minor dbfe0000000000000 drop -
+rep 2 anomaly 0 2 overnightSpO2 significant dc012760000000000 drop d4057dac000000000 temp significant d3ffa9c0000000000 rise -
+rep 3 anomaly 0 1 overnightSpO2 significant dc012760000000000 drop d4057dac000000000
+circ 1102 108
+end
+case base-013
+rst r d4048382000000000 d3ff4900000000000 27
+z r dbfd2f5a4c9e56315 dbfd2f5a4c9e56315 dbfbce66666666666
+rst s d4058240000000000 d3fe0200000000000 27
+z s dc010000000000000 dc010000000000000 dbff5a5999999999a
+rst h d404355e000000000 d400d5a0000000000 27
+z h dbfe115de52c7f8db dbfe115de52c7f8db dbfe115de52c7f8db
+vst r d40485d838e38e38e d3ff826a81c590a48 27
+vst s d4058356f684bda13 d3fe4c2292e647828 27
+vst h d4043b7438e38e38e d4010db63c3d20e81 27
+cls r normal d40485d838e38e38e d3ff826a81c590a48 27 dbfeb68e38e38e380 drop
+cls s significant d4058356f684bda13 d3fe4c2292e647828 27 dc01c25f684bda130 drop
+cls h normal d4043b7438e38e38e d4010db63c3d20e81 27 dc00d5238e38e38e0 drop
+temp minor significant significant
+fever 0 0 0
+rep 0 anomaly 0 2 overnightSpO2 significant dc01c25f684bda130 drop d4058356f684bda13 temp minor dbfe6680000000000 drop -
+rep 1 anomaly 0 2 overnightSpO2 significant dc01c25f684bda130 drop d4058356f684bda13 temp significant dbff0000000000000 drop -
+rep 2 anomaly 0 2 overnightSpO2 significant dc01c25f684bda130 drop d4058356f684bda13 temp significant d3ffb2c0000000000 rise -
+rep 3 anomaly 0 1 overnightSpO2 significant dc01c25f684bda130 drop d4058356f684bda13
+circ 1063 38
+end
+case base-014
+rst r d404e482000000000 d3ff0340000000000 33
+z r dbfecd8ffa92b9a01 dbfecd8ffa92b9a01 dbfd1533333333333
+rst s d40584c9000000000 d3fdde00000000000 33
+z s dc010000000000000 dc010000000000000 dbfe8f4cccccccccd
+rst h d4049f4c000000000 d40113f0000000000 33
+z h dbfeeafbead8c65f9 dbfeeafbead8c65f9 dbfeeafbead8c65f9
+vst r d404e73f444444444 d3ff7d8567b85dee4 30
+vst s d4058454ccccccccd d3fe20fbc9afc9e1a 30
+vst h d404a45f111111111 d40126f70e4a82019 30
+cls r normal d404e73f444444444 d3ff7d8567b85dee4 30 dbffb228888888880 drop
+cls s significant d4058454ccccccccd d3fe20fbc9afc9e1a 30 dc00e4999999999a0 drop
+cls h normal d404a45f111111111 d40126f70e4a82019 30 dc01b0e8888888888 drop
+temp minor normal significant
+fever 0 0 0
+rep 0 anomaly 0 2 overnightSpO2 significant dc00e4999999999a0 drop d4058454ccccccccd temp minor d3fe3d00000000000 rise -
+rep 1 anomaly 0 1 overnightSpO2 significant dc00e4999999999a0 drop d4058454ccccccccd
+rep 2 anomaly 0 2 overnightSpO2 significant dc00e4999999999a0 drop d4058454ccccccccd temp significant d3ff5f00000000000 rise -
+rep 3 anomaly 0 1 overnightSpO2 significant dc00e4999999999a0 drop d4058454ccccccccd
+circ 1436 100
+end
+case base-015
+rst r d404e032000000000 d3ff9f00000000000 27
+z r dbfa004ccbfad6cc0 dbfa004ccbfad6cc0 dbf8ecccccccccccd
+rst s d40588e6000000000 d3fe6780000000000 27
+z s d3fe779936166b43d d3fe779936166b43d d3fc38ccccccccccd
+rst h d4046a24000000000 d4011380000000000 27
+z h dbffc36aada5a108a dbffc36aada5a108a dbffc36aada5a108a
+vst r d404de03425ed097b d3ffc08ac54f1729d 27
+vst s d40588b1a12f684be d3fe652a1b5ae8a92 27
+vst h d4045a99555555555 d4015d6a7a1f2dbfd 27
+cls r normal d404de03425ed097b d3ffc08ac54f1729d 27 d3fc94bda12f68500 rise
+cls s normal d40588b1a12f684be d3fe652a1b5ae8a92 27 d3fea12f684bda100 rise
+cls h minor d4045a99555555555 d4015d6a7a1f2dbfd 27 dc0229f5555555554 drop
+temp normal minor significant
+fever 0 0 0
+rep 0 watch 0 1 overnightHRV minor dc0229f5555555554 drop d4045a99555555555
+rep 1 watch 0 2 overnightHRV minor dc0229f5555555554 drop d4045a99555555555 temp minor d3fe0000000000000 rise -
+rep 2 anomaly 0 2 overnightHRV minor dc0229f5555555554 drop d4045a99555555555 temp significant d3ff7fc0000000000 rise -
+rep 3 watch 0 1 overnightHRV minor dc0229f5555555554 drop d4045a99555555555
+circ 2 193
+end
+case base-016
+rst r d404b50b000000000 d3ff2c80000000000 28
+z r d3ff3df93c2340713 d3ff3df93c2340713 d3fdbab3333333333
+rst s d405894a000000000 d3fd5f80000000000 28
+z s dbf93a6430ba18004 dbf93a6430ba18004 dbf60000000000000
+rst h d404a088000000000 d400bb80000000000 28
+z h dc0007c6175125a08 dc0007c6175125a08 dc0007c6175125a08
+vst r d404b2e7b6db6db6e d3ff99bc313cbb17e 28
+vst s d40589dd800000000 d3fe14a2b93d6e57d 28
+vst h d4049f7c249249249 d4011e90239a9e81b 28
+cls r normal d404b2e7b6db6db6e d3ff99bc313cbb17e 28 d40036e4924924920 rise
+cls s normal d40589dd800000000 d3fe14a2b93d6e57d 28 dbfc3b00000000000 drop
+cls h minor d4049f7c249249249 d4011e90239a9e81b 28 dc024e90924924924 drop
+temp normal significant significant
+fever 0 0 0
+rep 0 watch 0 1 overnightHRV minor dc024e90924924924 drop d4049f7c249249249
+rep 1 anomaly 0 2 overnightHRV minor dc024e90924924924 drop d4049f7c249249249 temp significant d3ff0000000000000 rise -
+rep 2 anomaly 0 2 overnightHRV minor dc024e90924924924 drop d4049f7c249249249 temp significant d3ffcfc0000000000 rise -
+rep 3 watch 0 1 overnightHRV minor dc024e90924924924 drop d4049f7c249249249
+circ 94 232
+end
+case base-017
+rst r d404d91e000000000 d3ff18c0000000000 44
+z r dbff3982efeb35635 dbff3982efeb35635 dbfd97ccccccccccd
+rst s d4057cdf000000000 d3fe0940000000000 44
+z s d3fe10c19508391ff d3fe10c19508391ff d3fb4f33333333333
+rst h d40534b9800000000 d400f330000000000 44
+z h dc00358c9e1db18c5 dc00358c9e1db18c5 dc00358c9e1db18c5
+vst r d404dc9b555555555 d3ffb1692583892bd 30
+vst s d4057cf7e66666666 d3fe32de8b007ec19 30
+vst h d405341fccccccccd d4010cb790f0688f9 30
+cls r normal d404dc9b555555555 d3ffb1692583892bd 30 dc0036b5555555550 drop
+cls s normal d4057cf7e66666666 d3fe32de8b007ec19 30 d3fd8a19999999a00 rise
+cls h significant d405341fccccccccd d4010cb790f0688f9 30 dc02baa6666666668 drop
+temp significant minor significant
+fever 0 0 0
+rep 0 anomaly 0 2 overnightHRV significant dc02baa6666666668 drop d405341fccccccccd temp significant d3ff6fc0000000000 rise -
+rep 1 anomaly 0 2 overnightHRV significant dc02baa6666666668 drop d405341fccccccccd temp minor dbfe0000000000000 drop -
+rep 2 anomaly 0 2 overnightHRV significant dc02baa6666666668 drop d405341fccccccccd temp significant d3ff7ec0000000000 rise -
+rep 3 anomaly 0 1 overnightHRV significant dc02baa6666666668 drop d405341fccccccccd
+circ 422 113
+end
+case base-018
+rst r d40513c3000000000 d3ff6ec0000000000 44
+z r dbfe76c3d0d4b8801 dbfe76c3d0d4b8801 dbfd3e66666666666
+rst s d4057b89000000000 d3fdce00000000000 44
+z s d3fe01e21ab8da775 d3fe01e21ab8da775 d3fb1400000000000
+rst h d404f251000000000 d40107d8000000000 44
+z h dbfffa25aeb02a029 dbfffa25aeb02a029 dbfffa25aeb02a029
+vst r d40514d6bbbbbbbbc d3ffa62e57dce2f5c 30
+vst s d4057bcf5ddddddde d3fe39b35ede5a7f1 30
+vst h d404e508aaaaaaaab d4012e68cec4fd0bb 30
+cls r normal d40514d6bbbbbbbbc d3ffa62e57dce2f5c 30 dbffd2eeeeeeeef00 drop
+cls s normal d4057bcf5ddddddde d3fe39b35ede5a7f1 30 d3fd12a2222222200 rise
+cls h minor d404e508aaaaaaaab d4012e68cec4fd0bb 30 dc024d92aaaaaaaac drop
+temp significant significant significant
+fever 0 0 0
+rep 0 anomaly 0 2 overnightHRV minor dc024d92aaaaaaaac drop d404e508aaaaaaaab temp significant d3ff1c80000000000 rise -
+rep 1 anomaly 0 2 overnightHRV minor dc024d92aaaaaaaac drop d404e508aaaaaaaab temp significant dbff0000000000000 drop -
+rep 2 anomaly 0 2 overnightHRV minor dc024d92aaaaaaaac drop d404e508aaaaaaaab temp significant d3ffa200000000000 rise -
+rep 3 watch 0 1 overnightHRV minor dc024d92aaaaaaaac drop d404e508aaaaaaaab
+circ 870 189
+end
+case base-019
+rst r d4049c32000000000 d3ff8d80000000000 33
+z r dbff4a5a543aee8bd dbff4a5a543aee8bd dbfe3033333333333
+rst s d4057ec5000000000 d3fdd000000000000 33
+z s d3fddad76c31ddf32 d3fddad76c31ddf32 d3fafe66666666666
+rst h d4046a0e000000000 d4011fb0000000000 33
+z h dc00f1b6f5cd80429 dc00f1b6f5cd80429 dc00f1b6f5cd80429
+vst r d4049bf4dddddddde d3fff3dd3d5fc1f65 30
+vst s d4057fa5111111111 d3fe3aba71759c7a6 30
+vst h d40466a4444444444 d40130e508896bc79 30
+cls r normal d4049bf4dddddddde d3fff3dd3d5fc1f65 30 dc00786dddddddde0 drop
+cls s normal d4057fa5111111111 d3fe3aba71759c7a6 30 d3fb7bbbbbbbbbc00 rise
+cls h significant d40466a4444444444 d40130e508896bc79 30 dc0397cc888888888 drop
+temp normal normal significant
+fever 0 0 0
+rep 0 anomaly 0 1 overnightHRV significant dc0397cc888888888 drop d40466a4444444444
+rep 1 anomaly 0 1 overnightHRV significant dc0397cc888888888 drop d40466a4444444444
+rep 2 anomaly 0 2 overnightHRV significant dc0397cc888888888 drop d40466a4444444444 temp significant d3ff4800000000000 rise -
+rep 3 anomaly 0 1 overnightHRV significant dc0397cc888888888 drop d40466a4444444444
+circ 75 3
+end
+case base-020
+rst r none
+z r none
+rst s none
+z s none
+rst h none
+z h none
+vst r none
+vst s none
+vst h none
+cls r normal - - - d0000000000000000 rise
+cls s normal - - - d0000000000000000 rise
+cls h normal - - - d0000000000000000 rise
+temp significant minor significant
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant dbff1380000000000 drop -
+rep 1 watch 0 1 temp minor d3fe0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ffe280000000000 rise -
+rep 3 normal 0 0
+circ - -
+end
+case base-021
+rst r none
+z r none
+rst s none
+z s none
+rst h none
+z h none
+vst r none
+vst s none
+vst h none
+cls r normal - - - d0000000000000000 rise
+cls s normal - - - d0000000000000000 rise
+cls h normal - - - d0000000000000000 rise
+temp normal significant significant
+fever 0 0 0
+rep 0 normal 0 0
+rep 1 anomaly 0 1 temp significant d3ff0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ff92c0000000000 rise -
+rep 3 normal 0 0
+circ 925 79
+end
+case base-022
+rst r none
+z r none
+rst s none
+z s none
+rst h none
+z h none
+vst r none
+vst s none
+vst h none
+cls r normal - - - d0000000000000000 rise
+cls s normal - - - d0000000000000000 rise
+cls h normal - - - d0000000000000000 rise
+temp normal minor significant
+fever 0 0 0
+rep 0 normal 0 0
+rep 1 watch 0 1 temp minor dbfe0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ffad80000000000 rise -
+rep 3 normal 0 0
+circ 1046 52
+end
+case base-023
+rst r d404f144000000000 d3ffa100000000000 7
+z r dbfbab5387b5aac66 dbfbab5387b5aac66 dbfa9cccccccccccd
+rst s d4058000000000000 d3fe1380000000000 7
+z s d3fe023894613b539 d3fe023894613b539 d3fb499999999999a
+rst h d404e692000000000 d40096c0000000000 7
+z h d3ff77d9d87339be1 d3ff77d9d87339be1 d3ff6226666666666
+vst r d404edad6db6db6db d3ff78aeb70f75fec 7
+vst s d4057fc3db6db6db7 d3fe124af3cdb5c89 7
+vst h d404ea496db6db6db d400c5ae7cb2d860b 7
+cls r normal d404edad6db6db6db d3ff78aeb70f75fec 7 d3fc9292492492500 rise
+cls s normal d4057fc3db6db6db7 d3fe124af3cdb5c89 7 d3fdd824924924900 rise
+cls h normal d404ea496db6db6db d400c5ae7cb2d860b 7 d4019cf4924924928 rise
+temp minor significant significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor dbfefd00000000000 drop -
+rep 1 anomaly 0 1 temp significant dbff0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ffd540000000000 rise -
+rep 3 normal 0 0
+circ 691 219
+end
+case base-024
+rst r d404d322000000000 d3ff3580000000000 8
+z r dbfffa274f7fc934e dbfffa274f7fc934e dbfe6ae6666666666
+rst s d4057d6d000000000 d3fdb480000000000 8
+z s dc0004e22979cb6fb dc0004e22979cb6fb dbfd07ccccccccccd
+rst h d405237a000000000 d400f690000000000 8
+z h dbfba699f9d14c6d7 dbfba699f9d14c6d7 dbfba699f9d14c6d7
+vst r d404d1e9400000000 d3ff85e1778090dab 8
+vst s d4057d5ca00000000 d3fddaf74e115a629 8
+vst h d4051fb6000000000 d401175f0ea8e28dc 8
+cls r normal d404d1e9400000000 d3ff85e1778090dab 8 dc00b214000000000 drop
+cls s normal d4057d5ca00000000 d3fddaf74e115a629 8 dbff45a8000000000 drop
+cls h normal d4051fb6000000000 d401175f0ea8e28dc 8 d3fd5d00000000000 rise
+temp significant normal significant
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant dbff2f40000000000 drop -
+rep 1 normal 0 0
+rep 2 anomaly 0 1 temp significant d3ff7200000000000 rise -
+rep 3 normal 0 0
+circ 923 255
+end
+case base-025
+rst r d4050aba800000000 d3ff6480000000000 60
+z r d3fb7302786026278 d3fb7302786026278 d3fa3266666666666
+rst s d4058369800000000 d3fdce80000000000 60
+z s d3ff0ac05203e925e d3ff0ac05203e925e d3fc1dccccccccccd
+rst h d4042d0e000000000 d4012ba0000000000 60
+z h d3fd28a4a366a41d2 d3fd28a4a366a41d2 d3fd28a4a366a41d2
+vst r d4050c4f3bbbbbbbc d3ffbcc6d47599a07 30
+vst s d40583eaccccccccd d3fe2aeaf1e406c44 30
+vst h d4043950444444444 d4012d97f2ed797fe 30
+cls r normal d4050c4f3bbbbbbbc d3ffbcc6d47599a07 30 dbfcaa77777777800 drop
+cls s normal d40583eaccccccccd d3fe2aeaf1e406c44 30 d3fe2499999999980 rise
+cls h normal d4043950444444444 d4012d97f2ed797fe 30 d3fde9dddddddde00 rise
+temp minor minor significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor dbfe5380000000000 drop -
+rep 1 watch 0 1 temp minor d3fe0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ffc300000000000 rise -
+rep 3 normal 0 0
+circ 8 72
+end
+case base-026
+rst r d4048dd2000000000 d3ffbb40000000000 60
+z r dbff0724b9b5111bf dbff0724b9b5111bf dbfe0e33333333333
+rst s d4058845800000000 d3fdff80000000000 60
+z s d3ff93922aae1a119 d3ff93922aae1a119 d3fcde33333333333
+rst h d4054198000000000 d400e6d0000000000 60
+z h d3ff892dbd1c8484d d3ff892dbd1c8484d d3ff892dbd1c8484d
+vst r d4048e35333333333 d3ffd7d4c1bc74af2 30
+vst s d40588d34cccccccd d3fe2664e76a9f016 30
+vst h d4054747666666666 d400e96ff60448524 30
+cls r normal d4048e35333333333 d3ffd7d4c1bc74af2 30 dc0057f3333333330 drop
+cls s normal d40588d34cccccccd d3fe2664e76a9f016 30 d3ff076ccccccccc0 rise
+cls h normal d4054747666666666 d400e96ff60448524 30 d401cf499999999a0 rise
+temp significant significant significant
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant d3ff4d00000000000 rise -
+rep 1 anomaly 0 1 temp significant d3ff0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ffe180000000000 rise -
+rep 3 normal 0 0
+circ 1077 177
+end
+case base-027
+rst r d405115e000000000 d3ff7ba0000000000 60
+z r dbfe3ccc42c225de0 dbfe3ccc42c225de0 dbfd169999999999a
+rst s d405807d800000000 d3fddf80000000000 60
+z s dbff6c3ea4dfc1300 dbff6c3ea4dfc1300 dbfc949999999999a
+rst h d404d7a1000000000 d400f4c0000000000 60
+z h dbfd607e8c27aadcc dbfd607e8c27aadcc dbfd607e8c27aadcc
+vst r d4050ef1e66666666 d3ff90a21b014bd31 30
+vst s d405804b6eeeeeeef d3fe38a91037e3d05 30
+vst h d404d487222222222 d4010ca4ad13ec89e 30
+cls r normal d4050ef1e66666666 d3ff90a21b014bd31 30 dbfe8273333333300 drop
+cls s normal d405804b6eeeeeeef d3fe38a91037e3d05 30 dbfee0b7777777780 drop
+cls h normal d404d487222222222 d4010ca4ad13ec89e 30 dbff9be4444444440 drop
+temp minor minor significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor d3fe5400000000000 rise -
+rep 1 watch 0 1 temp minor dbfe0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ff8200000000000 rise -
+rep 3 normal 0 0
+circ 15 171
+end
+case base-028
+rst r d404ae05000000000 d3ff41c0000000000 60
+z r d3ff7a02209afe96e d3ff7a02209afe96e d3fe19c0000000000
+rst s d4057ea2000000000 d3fe0bc0000000000 60
+z s dbfc7b3230fb8f04c dbfc7b3230fb8f04c dbf9d666666666666
+rst h d404c1a9000000000 d4011ea8000000000 60
+z h dbfee3814ddbe6db9 dbfee3814ddbe6db9 dbfee3814ddbe6db9
+vst r d404afe099999999a d3ff9f10447d9ce3f 30
+vst s d4057ee2dddddddde d3fe03e7478521309 30
+vst h d404bf83555555555 d40120a2f0bb50ff2 30
+cls r normal d404afe099999999a d3ff9f10447d9ce3f 30 d4004276666666660 rise
+cls s normal d4057ee2dddddddde d3fe03e7478521309 30 dbfca7bbbbbbbbc00 drop
+cls h normal d404bf83555555555 d40120a2f0bb50ff2 30 dc01802aaaaaaaaa8 drop
+temp significant significant significant
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant d3ff6900000000000 rise -
+rep 1 anomaly 0 1 temp significant dbff0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ffdc40000000000 rise -
+rep 3 normal 0 0
+circ 1070 44
+end
+case base-029
+rst r d404ba3d000000000 d3ffbe20000000000 60
+z r dbfdd48408b4ec3bf dbfdd48408b4ec3bf dbfce433333333333
+rst s d4057ccb000000000 d3fdcd80000000000 60
+z s dbff34ac35b0eb409 dbff34ac35b0eb409 dbfc4a00000000000
+rst h d40527ff800000000 d400ebc0000000000 60
+z h d3fe5c0443adb62e0 d3fe5c0443adb62e0 d3fe5c0443adb62e0
+vst r d404ba65eeeeeeeef d3ffd2785d4bd7eb2 30
+vst s d4057cb8dddddddde d3fe252581f747536 30
+vst h d40523a76eeeeeeef d4013662445183b98 30
+cls r normal d404ba65eeeeeeeef d3ffd2785d4bd7eb2 30 dbff33bdddddddde0 drop
+cls s normal d4057cb8dddddddde d3fe252581f747536 30 dbfe936eeeeeeef00 drop
+cls h normal d40523a76eeeeeeef d4013662445183b98 30 d4013d49111111110 rise
+temp significant normal significant
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant dbff2880000000000 drop -
+rep 1 normal 0 0
+rep 2 anomaly 0 1 temp significant d3ff1840000000000 rise -
+rep 3 normal 0 0
+circ 1140 95
+end
+case base-030
+rst r d404ff58000000000 d0000000000000000 7
+z r d4010000000000000 d3feaaaaaaaaaaaab d3fa999999999999a
+rst s d4058389000000000 d0000000000000000 7
+z s d0000000000000000 d0000000000000000 d0000000000000000
+rst h d404fbd4000000000 d0000000000000000 7
+z h d0000000000000000 d0000000000000000 d0000000000000000
+vst r d404ff58000000000 d0000000000000000 7
+vst s d4058389000000000 d0000000000000000 7
+vst h d404fbd4000000000 d0000000000000000 7
+cls r normal d404ff58000000000 d0000000000000000 7 d3fd0000000000000 rise
+cls s normal d4058389000000000 d0000000000000000 7 d0000000000000000 rise
+cls h normal d404fbd4000000000 d0000000000000000 7 d0000000000000000 rise
+temp normal minor significant
+fever 0 0 0
+rep 0 normal 0 0
+rep 1 watch 0 1 temp minor d3fe0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ff8f40000000000 rise -
+rep 3 normal 0 0
+circ 4 112
+end
+case base-031
+rst r d405148f000000000 d0000000000000000 32
+z r d4010000000000000 d400aaaaaaaaaaaab d3fc999999999999a
+rst s d4058ae7000000000 d0000000000000000 32
+z s d0000000000000000 d0000000000000000 d0000000000000000
+rst h d4054a07000000000 d0000000000000000 32
+z h d0000000000000000 d0000000000000000 d0000000000000000
+vst r d405148f000000000 d0000000000000000 30
+vst s d4058ae7000000000 d0000000000000000 30
+vst h d4054a07000000000 d0000000000000000 30
+cls r normal d405148f000000000 d0000000000000000 30 d3ff0000000000000 rise
+cls s normal d4058ae7000000000 d0000000000000000 30 d0000000000000000 rise
+cls h normal d4054a07000000000 d0000000000000000 30 d0000000000000000 rise
+temp normal significant significant
+fever 0 0 0
+rep 0 normal 0 0
+rep 1 anomaly 0 1 temp significant d3ff0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ffd5c0000000000 rise -
+rep 3 normal 0 0
+circ 959 164
+end
+case base-032
+rst r d4048810000000000 d0000000000000000 12
+z r d0000000000000000 d4010000000000000 d3fe999999999999a
+rst s d40579d7000000000 d0000000000000000 12
+z s d0000000000000000 d0000000000000000 d0000000000000000
+rst h d4048776000000000 d0000000000000000 12
+z h d0000000000000000 d0000000000000000 d0000000000000000
+vst r d4048810000000000 d0000000000000000 12
+vst s d40579d7000000000 d0000000000000000 12
+vst h d4048776000000000 d0000000000000000 12
+cls r normal d4048810000000000 d0000000000000000 12 d4010000000000000 rise
+cls s normal d40579d7000000000 d0000000000000000 12 d0000000000000000 rise
+cls h normal d4048776000000000 d0000000000000000 12 d0000000000000000 rise
+temp normal minor significant
+fever 0 0 0
+rep 0 normal 0 0
+rep 1 watch 0 1 temp minor dbfe0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ff2880000000000 rise -
+rep 3 normal 0 0
+circ 896 196
+end
+case base-033
+rst r d404934a000000000 d0000000000000000 9
+z r d0000000000000000 d4010000000000000 d4000000000000000
+rst s d40583ac000000000 d0000000000000000 9
+z s d0000000000000000 d0000000000000000 d0000000000000000
+rst h d4043592000000000 d0000000000000000 9
+z h d0000000000000000 d0000000000000000 d0000000000000000
+vst r d404934a000000000 d0000000000000000 9
+vst s d40583ac000000000 d0000000000000000 9
+vst h d4043592000000000 d0000000000000000 9
+cls r significant d404934a000000000 d0000000000000000 9 d4024000000000000 rise
+cls s normal d40583ac000000000 d0000000000000000 9 d0000000000000000 rise
+cls h normal d4043592000000000 d0000000000000000 9 d0000000000000000 rise
+temp normal significant significant
+fever 0 0 1
+rep 0 anomaly 0 1 restingHR significant d4024000000000000 rise d404934a000000000
+rep 1 anomaly 0 2 restingHR significant d4024000000000000 rise d404934a000000000 temp significant dbff0000000000000 drop -
+rep 2 anomaly 1 2 restingHR significant d4024000000000000 rise d404934a000000000 temp significant d3ff6180000000000 rise -
+rep 3 anomaly 0 1 restingHR significant d4024000000000000 rise d404934a000000000
+circ 1047 157
+end
+case base-034
+rst r d4049f6c000000000 d0000000000000000 9
+z r dc010000000000000 dc010000000000000 dbfd999999999999a
+rst s d405810e000000000 d0000000000000000 9
+z s d0000000000000000 d0000000000000000 d0000000000000000
+rst h d40501e0000000000 d0000000000000000 9
+z h d0000000000000000 d0000000000000000 d0000000000000000
+vst r d4049f6c000000000 d0000000000000000 9
+vst s d405810e000000000 d0000000000000000 9
+vst h d40501e0000000000 d0000000000000000 9
+cls r normal d4049f6c000000000 d0000000000000000 9 dc000000000000000 drop
+cls s normal d405810e000000000 d0000000000000000 9 d0000000000000000 rise
+cls h normal d40501e0000000000 d0000000000000000 9 d0000000000000000 rise
+temp significant normal significant
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant dbff0d00000000000 drop -
+rep 1 normal 0 0
+rep 2 anomaly 0 1 temp significant d3ff9e40000000000 rise -
+rep 3 normal 0 0
+circ 1098 120
+end
+case base-035
+rst r d404a0f1000000000 d3ffce60000000000 26
+z r d3fe06fedf91e87f7 d3fe06fedf91e87f7 d3fd19b3333333333
+rst s d4057765800000000 d3fdca00000000000 26
+z s d3fde7d9281ee84c3 d3fde7d9281ee84c3 d3fb02ccccccccccd
+rst h d404af15000000000 d400ae20000000000 26
+z h d3fd8bebb875b5104 d3fd8bebb875b5104 d3fd8a80000000000
+vst r d404a942b13b13b14 d401fb6cdadf509cd 26
+vst s d40575b1c4ec4ec4f d4007488badc9d851 26
+vst h d4049e2413b13b13b d402163db376b458e 26
+cls r normal d404a942b13b13b14 d401fb6cdadf509cd 26 d3fd57a7627627600 rise
+cls s normal d40575b1c4ec4ec4f d4007488badc9d851 26 d3fe7b9d89d89d880 rise
+cls h normal d4049e2413b13b13b d402163db376b458e 26 d40102cf627627628 rise
+temp minor minor significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor d3fe4400000000000 rise -
+rep 1 watch 0 1 temp minor d3fe0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ff7a80000000000 rise -
+rep 3 normal 0 0
+circ 1402 161
+end
+case base-036
+rst r d40510c4800000000 d3ff4160000000000 10
+z r d3fe16b74f850d351 d3fe16b74f850d351 d3fc9f00000000000
+rst s d4058740000000000 d3fe4880000000000 10
+z s dbfe0c1252f8fa45e dbfe0c1252f8fa45e dbfb9800000000000
+rst h d404a4e1000000000 d40139e8000000000 10
+z h d3fe6048abcb50d1d d3fe6048abcb50d1d d3fe6048abcb50d1d
+vst r d4051f5b4cccccccd d40284ef8d5fdb0c1 10
+vst s d40581d9800000000 d4012157daedb1590 10
+vst h d404925099999999a d402a2bc071e8e328 10
+cls r normal d4051f5b4cccccccd d40284ef8d5fdb0c1 10 dc0051299999999a0 drop
+cls s normal d40581d9800000000 d4012157daedb1590 10 d3feb440000000000 rise
+cls h normal d404925099999999a d402a2bc071e8e328 10 d401d4bb333333330 rise
+temp minor significant significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor d3fe5600000000000 rise -
+rep 1 anomaly 0 1 temp significant d3ff0000000000000 rise -
+rep 2 anomaly 0 1 temp significant d3ff1cc0000000000 rise -
+rep 3 normal 0 0
+circ 2 256
+end
+case base-037
+rst r d4048ccc000000000 d3ff83a0000000000 24
+z r dbff75a02cd890427 dbff75a02cd890427 dbfe4f80000000000
+rst s d40588d1800000000 d3fe1080000000000 24
+z s dbff2300f79ecba93 dbff2300f79ecba93 dbfc6f66666666666
+rst h d4049eef000000000 d4015220000000000 24
+z h dbfe1c48533d0691c dbfe1c48533d0691c dbfe1c48533d0691c
+vst r d4049652155555555 d402042e21d489356 24
+vst s d405869bc00000000 d40085d5b8ec1131f 24
+vst h d4049e03955555555 d4022dd91c8d19b9c 24
+cls r normal d4049652155555555 d402042e21d489356 24 dc011de0aaaaaaaa8 drop
+cls s normal d405869bc00000000 d40085d5b8ec1131f 24 dbfd60c0000000000 drop
+cls h normal d4049e03955555555 d4022dd91c8d19b9c 24 dc010efcaaaaaaaa8 drop
+temp normal minor significant
+fever 0 0 0
+rep 0 normal 0 0
+rep 1 watch 0 1 temp minor dbfe0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ffb240000000000 rise -
+rep 3 normal 0 0
+circ 335 85
+end
+case base-038
+rst r d4048d00000000000 d3ff5740000000000 17
+z r dbff19d47dc797722 dbff19d47dc797722 dbfdc033333333333
+rst s d4057edc000000000 d3fe2f80000000000 17
+z s d3ff4df5f112ee399 d3ff4df5f112ee399 d3fcd59999999999a
+rst h d40551e9000000000 d40108d0000000000 17
+z h d3fe383f7c5af2e5c d3fe383f7c5af2e5c d3fe383f7c5af2e5c
+vst r d4049e36969696969 d4022c77abdafb9fe 17
+vst s d4057be95a5a5a5a6 d400c5c4687a6a4f6 17
+vst h d405515c000000000 d4024b8c9334365f1 17
+cls r normal d4049e36969696969 d4022c77abdafb9fe 17 dc0115c4b4b4b4b48 drop
+cls s normal d4057be95a5a5a5a6 d400c5c4687a6a4f6 17 d3ffe229696969680 rise
+cls h normal d405515c000000000 d4024b8c9334365f1 17 d400f080000000000 rise
+temp minor significant significant
+fever 0 0 0
+rep 0 watch 0 1 temp minor d3fea500000000000 rise -
+rep 1 anomaly 0 1 temp significant dbff0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3ff8dc0000000000 rise -
+rep 3 normal 0 0
+circ 744 212
+end
+case base-039
+rst r d4050e4c800000000 d3ff42c0000000000 36
+z r d3fe391b170c6bd89 d3fe391b170c6bd89 d3fcd433333333333
+rst s d4058449000000000 d3fe2600000000000 36
+z s d3fca936b24322e4d d3fca936b24322e4d d3fa219999999999a
+rst h d4054dc3000000000 d400f9a0000000000 36
+z h dbfd5d2e5d8b1c52f dbfd5d2e5d8b1c52f dbfd5d2e5d8b1c52f
+vst r d40511f7e66666666 d401d633ec7890bff 30
+vst s d405819b911111111 d4005c62e6d4db714 30
+vst h d4054b0caaaaaaaab d40205053136c3090 30
+cls r normal d40511f7e66666666 d401d633ec7890bff 30 d3fcce33333333400 rise
+cls s normal d405819b911111111 d4005c62e6d4db714 30 d3feb137777777780 rise
+cls h normal d4054b0caaaaaaaab d40205053136c3090 30 dbff51aaaaaaaaac0 drop
+temp significant normal significant
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant d3ff61c0000000000 rise -
+rep 1 normal 0 0
+rep 2 anomaly 0 1 temp significant d3ff2740000000000 rise -
+rep 3 normal 0 0
+circ 690 183
+end
+case base-040
+rst r d404a7a0000000000 d3ffe000000000000 46
+z r d0000000000000000 d0000000000000000 d0000000000000000
+rst s d4058853800000000 d3fdff00000000000 46
+z s d3ff3e234ca2350ff d3ff3e234ca2350ff d3fc789999999999a
+rst h d4055125000000000 d4010350000000000 47
+z h d3fd915b216699b5d d3fd915b216699b5d d3fd915b216699b5d
+vst r d7ff8000000000000 d7ff8000000000000 30
+vst s d7ff0000000000000 d7ff8000000000000 30
+vst h d7ff8000000000000 d7ff8000000000000 30
+cls r normal d7ff8000000000000 d7ff8000000000000 30 d7ff8000000000000 drop
+cls s significant d7ff0000000000000 d7ff8000000000000 30 dfff0000000000000 drop
+cls h normal d7ff8000000000000 d7ff8000000000000 30 d7ff8000000000000 drop
+temp normal significant significant
+fever 0 0 0
+rep 0 anomaly 0 1 overnightSpO2 significant dfff0000000000000 drop d7ff0000000000000
+rep 1 anomaly 0 2 overnightSpO2 significant dfff0000000000000 drop d7ff0000000000000 temp significant dfff0000000000000 drop -
+rep 2 anomaly 0 2 overnightSpO2 significant dfff0000000000000 drop d7ff0000000000000 temp significant d3ffd980000000000 rise -
+rep 3 anomaly 0 1 overnightSpO2 significant dfff0000000000000 drop d7ff0000000000000
+circ 0 147
+end
+case base-041
+rst r d404f54e000000000 d40006e0000000000 15
+z r dbfd39f982727d0b9 dbfd39f982727d0b9 dbfc7e66666666666
+rst s d4057a5d000000000 d3fc5100000000000 14
+z s d0000000000000000 d0000000000000000 d0000000000000000
+rst h d404ef9c000000000 d400c5a0000000000 15
+z h d3f9e7396d05971f3 d3f9e7396d05971f3 d3f9e7396d05971f3
+vst r d7ff8000000000000 d7ff8000000000000 15
+vst s d7ff8000000000000 d7ff8000000000000 14
+vst h d7ff8000000000000 d7ff8000000000000 15
+cls r normal d7ff8000000000000 d7ff8000000000000 15 d7ff8000000000000 drop
+cls s normal d7ff8000000000000 d7ff8000000000000 14 d7ff8000000000000 drop
+cls h normal d7ff8000000000000 d7ff8000000000000 15 d7ff8000000000000 drop
+temp significant significant normal
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant d3ff2e00000000000 rise -
+rep 1 anomaly 0 1 temp significant d3ff0000000000000 rise -
+rep 2 normal 0 0
+rep 3 normal 0 0
+circ 431 30
+end
+case base-042
+rst r d404830c000000000 d3fd6d00000000000 33
+z r dbfef57398321c70a dbfef57398321c70a dbfba800000000000
+rst s d4058528000000000 d3fe2000000000000 33
+z s d3f97fb5d6231ff59 d3f97fb5d6231ff59 d3f70000000000000
+rst h d4053aa3800000000 d400f170000000000 34
+z h d0000000000000000 d0000000000000000 d0000000000000000
+vst r d7ff8000000000000 d7ff8000000000000 30
+vst s dfff0000000000000 d7ff8000000000000 30
+vst h d7ff8000000000000 d7ff8000000000000 30
+cls r normal d7ff8000000000000 d7ff8000000000000 30 d7ff8000000000000 drop
+cls s normal dfff0000000000000 d7ff8000000000000 30 d7ff0000000000000 rise
+cls h normal d7ff8000000000000 d7ff8000000000000 30 d7ff8000000000000 drop
+temp significant minor significant
+fever 0 0 0
+rep 0 anomaly 0 1 temp significant d7ff0000000000000 rise -
+rep 1 watch 0 1 temp minor dbfe0000000000000 drop -
+rep 2 anomaly 0 1 temp significant d3fffe40000000000 rise -
+rep 3 normal 0 0
+circ 233 19
+end
+case base-043
+rst r d404f040000000000 d7ff0000000000000 26
+z r d0000000000000000 d0000000000000000 d0000000000000000
+rst s d40578f2000000000 d3fdb600000000000 25
+z s d3fd0a7ea3cd592d6 d3fd0a7ea3cd592d6 d3fa0e66666666666
+rst h d4055891000000000 d400b320000000000 25
+z h d3fefcee74dbb4a5f d3fefcee74dbb4a5f d3fefcee74dbb4a5f
+vst r d7ff8000000000000 d7ff8000000000000 26
+vst s d7ff0000000000000 d7ff8000000000000 25
+vst h d7ff0000000000000 d7ff8000000000000 25
+cls r normal d7ff8000000000000 d7ff8000000000000 26 d7ff8000000000000 drop
+cls s significant d7ff0000000000000 d7ff8000000000000 25 dfff0000000000000 drop
+cls h significant d7ff0000000000000 d7ff8000000000000 25 dfff0000000000000 drop
+temp minor significant significant
+fever 0 0 0
+rep 0 anomaly 0 3 overnightSpO2 significant dfff0000000000000 drop d7ff0000000000000 overnightHRV significant dfff0000000000000 drop d7ff0000000000000 temp minor dbfee080000000000 drop -
+rep 1 anomaly 0 3 overnightSpO2 significant dfff0000000000000 drop d7ff0000000000000 overnightHRV significant dfff0000000000000 drop d7ff0000000000000 temp significant dfff0000000000000 drop -
+rep 2 anomaly 0 3 overnightSpO2 significant dfff0000000000000 drop d7ff0000000000000 overnightHRV significant dfff0000000000000 drop d7ff0000000000000 temp significant d3ffc200000000000 rise -
+rep 3 anomaly 0 2 overnightSpO2 significant dfff0000000000000 drop d7ff0000000000000 overnightHRV significant dfff0000000000000 drop d7ff0000000000000
+circ 502 117
+end
+case base-044
+rst r d404ecde000000000 d3feb700000000000 10
+z r d400047abb459b41d d400047abb459b41d d3fe08e6666666666
+rst s d4057a85000000000 d3fd9800000000000 11
+z s d0000000000000000 d0000000000000000 d0000000000000000
+rst h d404c5a2000000000 d4010a20000000000 11
+z h dbff10d526a726e29 dbff10d526a726e29 dbff10d526a726e29
+vst r dfff0000000000000 d7ff8000000000000 10
+vst s d7ff8000000000000 d7ff8000000000000 11
+vst h d7ff8000000000000 d7ff8000000000000 11
+cls r significant dfff0000000000000 d7ff8000000000000 10 d7ff0000000000000 rise
+cls s normal d7ff8000000000000 d7ff8000000000000 11 d7ff8000000000000 drop
+cls h normal d7ff8000000000000 d7ff8000000000000 11 d7ff8000000000000 drop
+temp minor normal normal
+fever 0 0 0
+rep 0 anomaly 0 2 restingHR significant d7ff0000000000000 rise dfff0000000000000 temp minor d3fe6b80000000000 rise -
+rep 1 anomaly 0 1 restingHR significant d7ff0000000000000 rise dfff0000000000000
+rep 2 anomaly 0 1 restingHR significant d7ff0000000000000 rise dfff0000000000000
+rep 3 anomaly 0 1 restingHR significant d7ff0000000000000 rise dfff0000000000000
+circ 1116 51
+end
+case temp-000
+cov d3ff0000000000000
+ver 0 pub d40414645294a5295
+ver 1 pub d40414645294a5295
+nmw d40414645294a5295
+nml d404146fb00000000
+base d4041492d55555555 d4041534aaaaaaaab d40414e4800000000
+off d3fef3caaaaaaaac0
+band normal
+flags 0 0 0 0
+nrep d4041c62000000000 d4041492d55555555 d3fef3caaaaaaaac0 normal 0 0 0 0
+end
+case temp-001
+cov d3ff0000000000000
+ver 0 pub d40418fd0dd67c8a6
+ver 1 pub d40418fd0dd67c8a6
+nmw d40418fd0dd67c8a6
+nml d40418edbca1af287
+base d40419d8aaaaaaaab d40419d8aaaaaaaab d40419d8aaaaaaaab
+off d3ff212aaaaaaaaa0
+band abnormalRise
+flags 1 0 1 0
+nrep d40422e2000000000 d40419d8aaaaaaaab d3ff212aaaaaaaaa0 abnormalRise 1 0 1 0
+end
+case temp-002
+cov d3ff0000000000000
+ver 0 pub d4040fdde38e38e39
+ver 1 pub d4040fdde38e38e39
+nmw d4040fdde38e38e39
+nml d4040fe76f4de9bd3
+base d4041071800000000 d40410dc000000000 d4041130aaaaaaaab
+off dbfd1dc0000000000
+band normal
+flags 0 0 0 0
+nrep d4040e36000000000 d4041071800000000 dbfd1dc0000000000 normal 0 0 0 0
+end
+case temp-003
+cov d3ff0000000000000
+ver 0 pub d4041107c0b81702e
+ver 1 pub d4041107c0b81702e
+nmw d4041107c0b81702e
+nml d40410e78f78f78f8
+base d404121b000000000 d4041386aaaaaaaab -
+off dbff9820000000000
+band abnormalDrop
+flags 0 1 0 0
+nrep d404055a000000000 d404121b000000000 dbff9820000000000 abnormalDrop 0 1 0 0
+end
+case temp-004
+cov d3ff0000000000000
+ver 0 pub d40412f80d79435e5
+ver 1 pub d40412f80d79435e5
+nmw d40412f80d79435e5
+nml d40412f80d79435e5
+base - - -
+off -
+band -
+flags 0 0 0 0
+nrep d40419ee000000000 - - - 0 0 0 0
+end
+case temp-005
+cov d3fbc71c71c71c71c
+ver 0 rej d3fbc71c71c71c71c
+ver 1 pub d40412a9dddddddde
+nmw -
+nml d40412a9dddddddde
+base - - -
+off -
+band -
+flags 0 0 0 1
+nrep d404159a000000000 - - - 0 0 0 1
+end
+case temp-006
+cov d3fc2492492492492
+ver 0 rej d3fc2492492492492
+ver 1 pub d4040da4a49249249
+nmw -
+nml d4040da4a49249249
+base d4040ae5555555555 d4040ae5555555555 d4040ae5555555555
+off d400048aaaaaaaab0
+band abnormalRise
+flags 1 0 0 0
+nrep d4041b2e000000000 d4040ae5555555555 d400048aaaaaaaab0 abnormalRise 1 0 0 0
+end
+case temp-007
+cov d3fc745d1745d1746
+ver 0 rej d3fc745d1745d1746
+ver 1 pub d4040d9d656f1826a
+nmw -
+nml d4040d9d656f1826a
+base d4040a9eaaaaaaaab d4040a9eaaaaaaaab d4040a9eaaaaaaaab
+off d3fee0d5555555540
+band normal
+flags 0 0 1 0
+nrep d4041222000000000 d4040a9eaaaaaaaab d3fee0d5555555540 normal 0 0 1 0
+end
+case temp-008
+cov d3fc5555555555555
+ver 0 rej d3fc5555555555555
+ver 1 pub d4041820db6db6db7
+nmw -
+nml d4041820db6db6db7
+base d40415f2000000000 d40415c1555555555 d40415f2000000000
+off d3fd2000000000000
+band normal
+flags 0 0 0 0
+nrep d4041832000000000 d40415f2000000000 d3fd2000000000000 normal 0 0 0 0
+end
+case temp-009
+cov d3fcc71c71c71c71c
+ver 0 rej d3fcc71c71c71c71c
+ver 1 pub d404085cda12f684c
+nmw -
+nml d404085cda12f684c
+base d404098d000000000 d4040994000000000 d40409e1800000000
+off dbff9260000000000
+band abnormalDrop
+flags 0 1 0 1
+nrep d403f9f4000000000 d404098d000000000 dbff9260000000000 abnormalDrop 0 1 0 1
+end
+case temp-010
+cov d3fe0000000000000
+ver 0 rej d3fe0000000000000
+ver 1 pub d4041cd4edb6db6db
+nmw -
+nml d4041cd4edb6db6db
+base d4041c54000000000 d4041b0caaaaaaaab -
+off dbfe6180000000000
+band normal
+flags 0 0 0 1
+nrep d40416ce000000000 d4041c54000000000 dbfe6180000000000 normal 0 0 0 1
+end
+case temp-011
+cov d3fd0000000000000
+ver 0 rej d3fd0000000000000
+ver 1 pub d4040879861861862
+nmw -
+nml d4040879861861862
+base - - -
+off -
+band -
+flags 0 0 0 1
+nrep d403fbbc000000000 - - - 0 0 0 1
+end
+case temp-012
+cov d3fcc71c71c71c71c
+ver 0 rej d3fcc71c71c71c71c
+ver 1 pub d4040f12400000000
+nmw -
+nml d4040f12400000000
+base - - -
+off -
+band -
+flags 0 0 0 0
+nrep d40409a2000000000 - - - 0 0 0 0
+end
+case temp-013
+cov d3fd3333333333333
+ver 0 rej d3fd3333333333333
+ver 1 pub d4041d748f5c28f5c
+nmw -
+nml d4041d748f5c28f5c
+base d4041bc0666666666 d4041c09555555555 d4041c99800000000
+off d3fe26e6666666680
+band normal
+flags 0 0 0 0
+nrep d404205c000000000 d4041bc0666666666 d3fe26e6666666680 normal 0 0 0 0
+end
+case temp-014
+cov d3fd745d1745d1746
+ver 0 rej d3fd745d1745d1746
+ver 1 pub d404157ec00000000
+nmw -
+nml d404157ec00000000
+base d4041541a2e8ba2e9 d4041500000000000 d40414e0000000000
+off dbffc3745d1745d20
+band abnormalDrop
+flags 0 1 0 1
+nrep d4040726000000000 d4041541a2e8ba2e9 dbffc3745d1745d20 abnormalDrop 0 1 0 1
+end
+case temp-015
+cov d3ff0000000000000
+ver 0 pub d4040efd777777777
+ver 1 pub d4040efd777777777
+nmw d4040efd777777777
+nml d4040ec8969696969
+base - - -
+off -
+band -
+flags 0 0 1 0
+nrep d4041aa8000000000 - - - 0 0 1 0
+end
+case temp-016
+cov d3ff0000000000000
+ver 0 pub d4041b90000000000
+ver 1 pub d4041b90000000000
+nmw d4041b90000000000
+nml d4041b90000000000
+base d40418f6000000000 d4041915555555555 d404188a800000000
+off d3fd3800000000000
+band normal
+flags 0 0 0 0
+nrep d4041b66000000000 d40418f6000000000 d3fd3800000000000 normal 0 0 0 0
+end
+case temp-017
+cov d3ff0000000000000
+ver 0 pub d40416cac00000000
+ver 1 pub d40416cac00000000
+nmw d40416cac00000000
+nml d404165771c71c71c
+base d404168d666666666 d404168a000000000 d404168a000000000
+off dbff646ccccccccc0
+band abnormalDrop
+flags 0 1 0 0
+nrep d4040b6a000000000 d404168d666666666 dbff646ccccccccc0 abnormalDrop 0 1 0 0
+end
+case temp-018
+cov d3ff0000000000000
+ver 0 pub d404146e492492492
+ver 1 pub d404146e492492492
+nmw d404146e492492492
+nml d404146e492492492
+base d40413f9800000000 d4041520aaaaaaaab -
+off dbff36f0000000000
+band abnormalDrop
+flags 0 1 0 0
+nrep d4040a42000000000 d40413f9800000000 dbff36f0000000000 abnormalDrop 0 1 0 0
+end
+case temp-019
+cov d3ff0000000000000
+ver 0 pub d404129d0f0f0f0f1
+ver 1 pub d404129d0f0f0f0f1
+nmw d404129d0f0f0f0f1
+nml d40412806bca1af28
+base d4041245333333333 d4041126aaaaaaaab d4041245333333333
+off dc000553333333330
+band abnormalDrop
+flags 0 1 0 1
+nrep d40401f0000000000 d4041245333333333 dc000553333333330 abnormalDrop 0 1 0 1
+end
+case temp-020
+cov d3fdd1745d1745d17
+ver 0 nm
+ver 1 pub d4040edbc71c71c72
+nmw -
+nml -
+base - - -
+off -
+band -
+flags 0 0 0 0
+nrep d4041208000000000 - - - 0 0 0 0
+end
+case temp-021
+cov d3fd8000000000000
+ver 0 nm
+ver 1 pub d40416ccccccccccd
+nmw -
+nml -
+base - - -
+off -
+band -
+flags 0 0 0 0
+nrep d4040906000000000 - - - 0 0 0 0
+end
+case temp-022
+cov d3fe5555555555555
+ver 0 pub d40410c899999999a
+ver 1 pub d40410c899999999a
+nmw d40410c899999999a
+nml d40410c899999999a
+base - - -
+off -
+band -
+flags 0 0 0 0
+nrep d4040810000000000 - - - 0 0 0 0
+end
+case temp-023
+cov d3fd2492492492492
+ver 0 nm
+ver 1 pub d4041914000000000
+nmw -
+nml -
+base - - -
+off -
+band -
+flags 0 0 0 1
+nrep d4040e40000000000 - - - 0 0 0 1
+end
+case temp-024
+cov d3fe8000000000000
+ver 0 nm
+ver 1 pub d4040dfee38e38e39
+nmw -
+nml -
+base - - -
+off -
+band -
+flags 0 0 0 0
+nrep d4040cec000000000 - - - 0 0 0 0
+end
+case temp-025
+cov d3fd3333333333333
+ver 0 rej d3fd3333333333333
+ver 1 pub d4040fe7249249249
+nmw -
+nml d4040fe7249249249
+base d4040f31800000000 d4040ec6aaaaaaaab d4040ec6aaaaaaaab
+off dbffc970000000000
+band abnormalDrop
+flags 0 1 0 1
+nrep d40400e6000000000 d4040f31800000000 dbffc970000000000 abnormalDrop 0 1 0 1
+end
+case temp-026
+cov d3fc999999999999a
+ver 0 rej d3fc999999999999a
+ver 1 pub d40410c0276276276
+nmw -
+nml d40410c0276276276
+base d404106c000000000 d404106c000000000 d404106c000000000
+off dbfa7800000000000
+band normal
+flags 0 0 0 0
+nrep d404100e000000000 d404106c000000000 dbfa7800000000000 normal 0 0 0 0
+end
+case temp-027
+cov d3fd3333333333333
+ver 0 rej d3fd3333333333333
+ver 1 pub d404195d249249249
+nmw -
+nml d404195d249249249
+base d404176db6db6db6e d404171b555555555 d404176db6db6db6e
+off d3fe2c12492492480
+band normal
+flags 0 0 1 0
+nrep d4041c1e000000000 d404176db6db6db6e d3fe2c12492492480 normal 0 0 1 0
+end
+case temp-028
+cov d3fc999999999999a
+ver 0 rej d3fc999999999999a
+ver 1 pub d404193b13b13b13b
+nmw -
+nml d404193b13b13b13b
+base d40418bf000000000 d40417e8aaaaaaaab -
+off dbfedac0000000000
+band normal
+flags 0 0 0 1
+nrep d4041154000000000 d40418bf000000000 dbfedac0000000000 normal 0 0 0 1
+end
+case temp-029
+cov d3fdb6db6db6db6db
+ver 0 rej d3fdb6db6db6db6db
+ver 1 pub d4040b0accccccccd
+nmw -
+nml d4040b0accccccccd
+base - - -
+off -
+band -
+flags 0 0 1 0
+nrep d404154c000000000 - - - 0 0 1 0
+end
+case temp-030
+cov d3ff0000000000000
+ver 0 pub d4040b83d2d2d2d2d
+ver 1 pub d4040b83d2d2d2d2d
+nmw d4040b83d2d2d2d2d
+nml d4040b6f249249249
+base d4040bd3ccccccccd d4040d3aaaaaaaaab d4040b5cdb6db6db7
+off dbfd8de6666666680
+band normal
+flags 0 0 0 1
+nrep d40408b8000000000 d4040bd3ccccccccd dbfd8de6666666680 normal 0 0 0 1
+end
+case temp-031
+cov d3ff0000000000000
+ver 0 pub d4041af64a33f128d
+ver 1 pub d4041af64a33f128d
+nmw d4041af64a33f128d
+nml d4041af64a33f128d
+base d4041c9dccccccccd d4041c58000000000 d4041cf6aaaaaaaab
+off dbfbcf99999999a00
+band normal
+flags 0 0 0 0
+nrep d4041bb6000000000 d4041c9dccccccccd dbfbcf99999999a00 normal 0 0 0 0
+end
+case temp-032
+cov d3ff0000000000000
+ver 0 pub d4041d7b582192e2a
+ver 1 pub d4041d7b582192e2a
+nmw d4041d7b582192e2a
+nml d4041d9c514514514
+base d4041d8a000000000 d4041db6000000000 d4041d7b99999999a
+off dbfbbc00000000000
+band normal
+flags 0 0 0 0
+nrep d4041cac000000000 d4041d8a000000000 dbfbbc00000000000 normal 0 0 0 0
+end
+case temp-033
+cov d3ff0000000000000
+ver 0 pub d4041ce85a5a5a5a6
+ver 1 pub d4041ce85a5a5a5a6
+nmw d4041ce85a5a5a5a6
+nml d4041cebd6cdfa1d7
+base d4041cf3000000000 d4041d0a000000000 -
+off d3ff45a0000000000
+band abnormalRise
+flags 1 0 1 0
+nrep d4042720000000000 d4041cf3000000000 d3ff45a0000000000 abnormalRise 1 0 1 0
+end
+case temp-034
+cov d3ff0000000000000
+ver 0 pub d4041038c35e50d79
+ver 1 pub d4041038c35e50d79
+nmw d4041038c35e50d79
+nml d4041032069069069
+base d40410deedb6db6db d40410a2000000000 d40410fd555555555
+off dbffe2ddb6db6db60
+band abnormalDrop
+flags 0 1 0 1
+nrep d40401c8000000000 d40410deedb6db6db dbffe2ddb6db6db60 abnormalDrop 0 1 0 1
+end
+case temp-035
+cov d3ff0000000000000
+ver 0 pub d7ff8000000000000
+ver 1 pub d7ff8000000000000
+nmw d7ff8000000000000
+nml d7ff8000000000000
+base dfff0000000000000 d4041ac2aaaaaaaab -
+off d7ff8000000000000
+band normal
+flags 0 0 0 0
+nrep d7ff8000000000000 dfff0000000000000 d7ff8000000000000 normal 0 0 0 0
+end
+case temp-036
+cov d3feccccccccccccd
+ver 0 pub d7ff8000000000000
+ver 1 pub d7ff8000000000000
+nmw d7ff8000000000000
+nml d7ff8000000000000
+base - - -
+off -
+band -
+flags 0 0 1 0
+nrep d7ff0000000000000 - - - 0 0 1 0
+end
+case temp-037
+cov d3ff0000000000000
+ver 0 pub dfff0000000000000
+ver 1 pub dfff0000000000000
+nmw dfff0000000000000
+nml dfff0000000000000
+base dfff0000000000000 d4040ea6000000000 d4040e64000000000
+off d7ff0000000000000
+band abnormalRise
+flags 1 0 0 0
+nrep d4041ae4000000000 dfff0000000000000 d7ff0000000000000 abnormalRise 1 0 0 0
+end
+case temp-038
+cov d3ff0000000000000
+ver 0 pub d7ff8000000000000
+ver 1 pub d7ff8000000000000
+nmw d7ff8000000000000
+nml d7ff8000000000000
+base d7ff8000000000000 d7ff8000000000000 d7ff8000000000000
+off d7ff8000000000000
+band normal
+flags 0 0 0 0
+nrep d7ff8000000000000 d7ff8000000000000 d7ff8000000000000 normal 0 0 0 0
+end
+case temp-039
+cov d3ff0000000000000
+ver 0 pub d7ff8000000000000
+ver 1 pub d7ff8000000000000
+nmw d7ff8000000000000
+nml d7ff8000000000000
+base dfff0000000000000 dfff0000000000000 dfff0000000000000
+off d7ff0000000000000
+band abnormalRise
+flags 1 0 1 0
+nrep d7ff0000000000000 dfff0000000000000 d7ff0000000000000 abnormalRise 1 0 1 0
+end

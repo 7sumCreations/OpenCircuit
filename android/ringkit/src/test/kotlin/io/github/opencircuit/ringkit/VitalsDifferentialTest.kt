@@ -25,7 +25,13 @@ import kotlin.test.assertTrue
  * samples, windows that straddle the day's edges, and hostile windows and widths), and on each of
  * those days the energy write ledger and write window: flushes replayed in order and out of order
  * with each plan's state committed, upgrade-day seeding, write-window queries, and (hostile days)
- * unreadable stored states. The format is documented at the top of the generator's `main.swift`.
+ * unreadable stored states; prior-day series of resting HR, SpO2 and HRV (robust and vitals baselines,
+ * z at three noise floors, classification, temperature severity, suspected fever, the status report,
+ * and the circular bedtime median — including short, long, flat, artifact and unreadable series); and
+ * nights of skin temperature (coverage, both verdicts, both nightly means, baselines at several
+ * windows, offset, band, anomaly flags and the night report — including partial, clustered, sparse and
+ * thin nights, readings on the window's end, unsorted and duplicated nights, and unreadable readings,
+ * nights and tonights). The format is documented at the top of the generator's `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
  * `d` + 16 hex digits), which must agree within 1e-9; every double that is not bit-identical is
@@ -100,6 +106,8 @@ class VitalsDifferentialTest {
         "hrs" -> renderHrs(c)
         "energy" -> renderEnergy(c)
         "day" -> renderDay(c)
+        "base" -> renderBase(c)
+        "temp" -> renderTemp(c)
         else -> error("unknown case kind ${c.kind} in ${c.id}")
     }
 
@@ -303,6 +311,83 @@ class VitalsDifferentialTest {
         return out
     }
 
+    /** The noise floors every base case's z is evaluated at (fixed in both programs). */
+    private val noiseFloors = listOf(0.0, 0.3, 5.0)
+
+    private fun doubles(c: VCase, tag: String): List<Double> = tokens(c, tag).map { toDouble(it) }
+
+    /** Prior-day series → robust and vitals baselines, classification, temperature severity, fever, status, bedtimes. */
+    private fun renderBase(c: VCase): List<String> {
+        val tags = listOf("r", "s", "h")
+        val vitals = listOf(VitalsBaseline.Vital.RESTING_HR, VitalsBaseline.Vital.OVERNIGHT_SPO2, VitalsBaseline.Vital.OVERNIGHT_HRV)
+        val series = tags.map { doubles(c, "p$it") }
+        val today = doubles(c, "td")
+        val offsets = doubles(c, "to")
+        val bedtimes = tokens(c, "bm").map { it.toInt() }
+        val tonightBed = tokens(c, "bt").single().toInt()
+        val out = mutableListOf<String>()
+        for (v in 0..2) {
+            val s = RobustBaseline.stats(series[v])
+            out += s?.let { "rst ${tags[v]} ${d(it.median)} ${d(it.mad)} ${it.n}" } ?: "rst ${tags[v]} none"
+            out += s?.let { st -> "z ${tags[v]}" + noiseFloors.joinToString("") { " " + d(RobustBaseline.z(today[v], st, noiseFloor = it)) } } ?: "z ${tags[v]} none"
+        }
+        for (v in 0..2) {
+            val s = VitalsBaseline.stats(series[v])
+            out += s?.let { "vst ${tags[v]} ${d(it.mean)} ${d(it.sd)} ${it.n}" } ?: "vst ${tags[v]} none"
+        }
+        for (v in 0..2) {
+            val cl = VitalsBaseline.classify(today[v], series[v], vitals[v])
+            out += "cls ${tags[v]} ${cl.severity.rawValue} ${optD(cl.baseline?.mean)} ${optD(cl.baseline?.sd)} ${cl.baseline?.n ?: "-"} ${d(cl.delta)} ${cl.direction.rawValue}"
+        }
+        out += "temp" + offsets.joinToString("") { " " + (VitalsBaseline.tempSeverity(it)?.rawValue ?: "-") }
+        out += "fever" + offsets.joinToString("") { " " + if (VitalsBaseline.suspectedFever(today[0], series[0], it)) "1" else "0" }
+        val inputs = (0..2).map { VitalsBaseline.VitalInput(vitals[it], today[it], series[it]) }
+        val reportOffsets: List<Double?> = offsets + null
+        for ((j, offset) in reportOffsets.withIndex()) {
+            val r = VitalsBaseline.report(inputs, offset)
+            out += "rep $j ${r.status.rawValue} ${if (r.feverSuspected) 1 else 0} ${r.signals.size}" + r.signals.joinToString("") {
+                " ${it.vital?.rawValue ?: "temp"} ${it.severity.rawValue} ${d(it.delta)} ${it.direction.rawValue} ${optD(it.baselineMean)}"
+            }
+        }
+        val median = RobustBaseline.circularMedianMinutes(bedtimes)
+        out += "circ ${median ?: "-"} ${median?.let { RobustBaseline.circularDeltaMinutes(tonightBed, it) } ?: "-"}"
+        return out
+    }
+
+    /** One night of skin temperature → coverage, verdicts, nightly means, baselines, offset, band, flags, report. */
+    private fun renderTemp(c: VCase): List<String> {
+        val w = tokens(c, "w")
+        val window = DateInterval(milli(w[0]), milli(w[1]))
+        val samples = tokens(c, "s").chunked(2).map { (t, x) -> TemperatureSample(milli(t), toDouble(x)) }
+        val nights = tokens(c, "n").chunked(2).map { (t, x) -> SkinTempBaseline.NightlyTemp(milli(t), toDouble(x)) }
+        val windows = tokens(c, "wn").map { it.toInt() }
+        val tonight = toDouble(tokens(c, "tn").single())
+        val prev = inDouble(tokens(c, "pv").single())
+        fun verdict(v: SkinTempBaseline.NightlyVerdict): String = when (v) {
+            is SkinTempBaseline.NightlyVerdict.Published -> "pub ${d(v.celsius)}"
+            SkinTempBaseline.NightlyVerdict.NotMeasured -> "nm"
+            is SkinTempBaseline.NightlyVerdict.RejectedCoverage -> "rej ${d(v.coverage)}"
+        }
+        fun bits(f: SkinTempBaseline.AnomalyFlags): String =
+            listOf(f.abnormalRise, f.abnormalDrop, f.fluctuationRise, f.fluctuationDrop).joinToString(" ") { if (it) "1" else "0" }
+        val out = mutableListOf(
+            "cov ${d(SkinTempBaseline.coverage(samples, window))}",
+            "ver 0 ${verdict(SkinTempBaseline.nightlyVerdict(samples, window))}",
+            "ver 1 ${verdict(SkinTempBaseline.nightlyVerdict(samples, window, minSamples = 1, minCoverage = 0.0))}",
+            "nmw ${optD(SkinTempBaseline.nightlyMean(samples, window))}",
+            "nml ${optD(SkinTempBaseline.nightlyMean(samples.map { it.celsius }))}",
+            "base" + windows.joinToString("") { " " + optD(SkinTempBaseline.baseline(nights, windowNights = it)) },
+        )
+        val baseline = SkinTempBaseline.baseline(nights)
+        val offset = baseline?.let { SkinTempBaseline.offset(tonight, it) }
+        out += "off ${optD(offset)}"
+        out += "band ${offset?.let { SkinTempBaseline.deviationBand(it)?.rawValue } ?: "-"}"
+        out += "flags ${bits(SkinTempBaseline.anomalyFlags(tonight, baseline, prev))}"
+        val r = SkinTempBaseline.report(tonight, nights, prev)
+        out += "nrep ${d(r.nightlyC)} ${optD(r.baselineC)} ${optD(r.offsetC)} ${r.band?.rawValue ?: "-"} ${bits(r.flags)}"
+        return out
+    }
+
     // --- comparison ---
 
     /**
@@ -329,6 +414,32 @@ class VitalsDifferentialTest {
         "an unreadable stored ledger state writes nothing" to (44..47).flatMap { k ->
             (0..4).map { b -> Divergence("day-%03d".format(k), "bad $b") }
         }.toSet(),
+        // PORTING D-83: an unreadable (NaN or infinite) prior day, today, offset, reading or night is a
+        // missing one, where upstream counts it (NaN or infinite stats and baselines, a NaN nightly mean
+        // published, "normal" verdicts and bands from NaN, flags raised by an infinity). Exactly the lines
+        // of the "unreadable" base and temperature cases that the unreadable values reach.
+        "an unreadable reading, day, night or offset is a missing one" to mapOf(
+            "base-040" to "rst r|rst s|rst h|z s|z h|vst r|vst s|vst h|cls r|cls s|cls h|rep 0|rep 1|rep 2|rep 3",
+            "base-041" to "rst r|z r|rst s|rst h|z h|vst r|vst s|vst h|cls r|cls s|cls h|temp",
+            "base-042" to "rst r|z r|rst s|z s|rst h|vst r|vst s|vst h|cls r|cls s|cls h|rep 0",
+            "base-043" to "rst r|rst s|z s|rst h|z h|vst r|vst s|vst h|cls r|cls s|cls h|rep 0|rep 1|rep 2|rep 3",
+            "base-044" to "rst r|z r|rst s|rst h|z h|vst r|vst s|vst h|cls r|cls s|cls h|temp|rep 0|rep 1|rep 2|rep 3",
+            "temp-035" to "ver 0|ver 1|nmw|nml|base|band|nrep",
+            "temp-036" to "ver 0|ver 1|nmw|nml|flags|nrep",
+            "temp-037" to "ver 0|ver 1|nmw|nml|base|off|nrep",
+            "temp-038" to "ver 0|ver 1|nmw|nml|base|band|nrep",
+            "temp-039" to "ver 0|ver 1|nmw|nml|base|flags|nrep",
+        ).flatMap { (case, kinds) -> kinds.split('|').map { Divergence(case, it) } }.toSet(),
+        // PORTING D-85: a robust z whose quotient overflows on finite readings is clamped by its sign
+        // (4), where upstream reads 0. The zero noise floor against the perfectly flat baseline of the
+        // "flat" cases whose resting HR moved by 4 and by 10 bpm.
+        "an overflowing robust z is clamped by its sign" to setOf(Divergence("base-032", "z r"), Divergence("base-033", "z r")),
+        // PORTING D-86: a reading exactly on the end of a whole-hour night counts in its last hour, where
+        // upstream gives it an hour of its own (coverage one hour higher; the shipped verdict rejects with
+        // that coverage). Every "endreading" case.
+        "a reading on the window's end counts in the last hour" to (25..29).flatMap { k ->
+            listOf("cov", "ver 0").map { Divergence("temp-%03d".format(k), it) }
+        }.toSet(),
     )
 
     /** The tokens that identify a golden line among its case's lines: the first two for indexed kinds, else the first. */
@@ -337,6 +448,7 @@ class VitalsDifferentialTest {
         val n = if (t[0] in setOf(
                 "roll", "sum", "trimp", "strain", "trimphr", "kcal", "dist", "steps", "keytel", "basal", "baseline", "est",
                 "lplan", "aplan", "seed", "splan", "bad",
+                "rst", "z", "vst", "cls", "rep", "ver",
             )
         ) {
             2
@@ -448,6 +560,10 @@ class VitalsDifferentialTest {
             "energy/typical", "energy/edge-profile", "energy/nonfinite",
             "day/workday", "day/spring-forward", "day/fall-back", "day/duplicated", "day/unsorted", "day/steps-only",
             "day/hr-only", "day/straddle", "day/sparse", "day/sleep-heavy", "day/spans", "day/hostile",
+            "base/steady", "base/fever", "base/desat", "base/hrvdrop", "base/short", "base/long", "base/flat", "base/artifact",
+            "base/unreadable",
+            "temp/full", "temp/partial", "temp/clustered", "temp/sparse", "temp/thin", "temp/endreading", "temp/history",
+            "temp/unreadable",
         )
         for (s in expected) assertTrue((shapes[s] ?: 0) >= 3, "shape $s has ${shapes[s] ?: 0} cases")
 
@@ -469,6 +585,13 @@ class VitalsDifferentialTest {
             "ledger-write", "ledger-nothing-new", "ledger-late-bucket", "ledger-fall-netted", "ledger-workout-consumed",
             "ledger-clamped-to-now", "ledger-unreadable-state-written", "seed-carry", "seed-then-write",
             "win-none", "win-day-floor", "win-widened",
+            "base-rstats-none", "base-rstats-capped", "base-vstats-none", "base-vstats-capped", "base-z-clamped", "base-z-floor-scale",
+            "base-cls-minor", "base-cls-significant", "base-cls-normal-past-floor", "base-temp-minor", "base-temp-significant",
+            "base-fever", "base-status-normal", "base-status-watch", "base-status-anomaly", "base-circ-wrap", "base-unreadable",
+            "temp-published", "temp-not-measured", "temp-rejected", "temp-end-reading", "temp-out-of-window", "temp-partial-hour-window",
+            "temp-baseline", "temp-baseline-none", "temp-band-normal", "temp-band-abnormalRise", "temp-band-abnormalDrop", "temp-band-none",
+            "temp-flag-abnormal", "temp-flag-fluct-rise", "temp-flag-fluct-drop", "temp-flag-gated", "temp-duplicated-nights",
+            "temp-unreadable",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }
