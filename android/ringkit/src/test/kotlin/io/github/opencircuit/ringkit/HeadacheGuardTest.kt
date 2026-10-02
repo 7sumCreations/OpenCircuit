@@ -262,4 +262,16 @@ class HeadacheGuardTest {
         assertTrue(ieeeEquals(0.0, -0.0) && ieeeEquals(null, null))
         assertTrue(!ieeeEquals(Double.NaN, Double.NaN) && !ieeeEquals(null, 0.0) && !ieeeEquals(0.0, null))
     }
+
+    @Test
+    fun aFeatureExactlyAtTheCapShareIsLeftUntouched() {
+        // Upstream caps only a share strictly ABOVE the limit. At an exact tie the re-solved weight is
+        // the same number in exact arithmetic but not in doubles: with a 1/3 share and three equal
+        // weights, share * others / (1 - share) rounds to 0.9999999999999998, so capping a tie would
+        // move a weight that upstream leaves alone.
+        val three = listOf(Feature.HRV_DEVIATION, Feature.RESTING_HR_DEVIATION, Feature.SLEEP_EFFICIENCY_DROP)
+            .map { Contribution(it, 1.0, 1.0, 1.0, null) }
+        val capped = HeadacheSignals.applySingleFeatureCap(three, Tuning(maxSingleFeatureShare = 1.0 / 3.0))
+        assertEquals(three.map { 1.0.toRawBits() }, capped.map { it.effectiveWeight.toRawBits() })
+    }
 }
