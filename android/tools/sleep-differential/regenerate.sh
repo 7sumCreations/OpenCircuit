@@ -21,7 +21,10 @@
 #      `swift build --product <generator> -j 4`, scratch space inside the temporary directory
 #      (debug, so the generator may count internal branches);
 #   5. runs the generator, which writes inputs.txt, goldens.txt and coverage.txt into the target's
-#      directory under android/ringkit/src/test/resources/ and prints the branch counts.
+#      directory under android/ringkit/src/test/resources/ and prints the branch counts. The vitals
+#      generator runs with SWIFT_DETERMINISTIC_HASHING=1: upstream's energy ledger adds a
+#      dictionary's values, a Swift dictionary's order is seeded per process, and without a fixed
+#      seed the last bit of some goldens changes from one run to the next.
 #
 # Requires git and Swift 6 (the Command Line Tools are enough: no Xcode, no XCTest). Gradle never
 # runs this script; the Kotlin tests only read the files it writes.
@@ -45,8 +48,8 @@ for arg in "$@"; do
 done
 target=${target:-sleep}
 case "$target" in
-  sleep) GENERATOR=SleepDifferential; RESOURCE=sleep-differential ;;
-  vitals) GENERATOR=VitalsDifferential; RESOURCE=vitals-differential ;;
+  sleep) GENERATOR=SleepDifferential; RESOURCE=sleep-differential; HASHING=0 ;;
+  vitals) GENERATOR=VitalsDifferential; RESOURCE=vitals-differential; HASHING=1 ;;
 esac
 
 SCRIPT_DIR=$(CDPATH='' cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -77,5 +80,9 @@ swift build --package-path "$work/tool" --scratch-path "$work/scratch" --product
 bin=$(swift build --package-path "$work/tool" --scratch-path "$work/scratch" --show-bin-path)
 
 mkdir -p "$OUT_DIR"
-"$bin/$GENERATOR" "$OUT_DIR"
+if [ "$HASHING" = 1 ]; then
+  SWIFT_DETERMINISTIC_HASHING=1 "$bin/$GENERATOR" "$OUT_DIR"
+else
+  "$bin/$GENERATOR" "$OUT_DIR"
+fi
 echo "regenerate: wrote $(cd "$OUT_DIR" && ls inputs.txt goldens.txt coverage.txt | tr '\n' ' ')" >&2

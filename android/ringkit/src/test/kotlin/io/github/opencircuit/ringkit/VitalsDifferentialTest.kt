@@ -215,6 +215,89 @@ class VitalsDifferentialTest {
                 " ${it.start.toEpochMilli()} ${it.end.toEpochMilli()} ${d(it.hrKcal)} ${d(it.stepKcal)} ${d(it.elevatedMinutes)}"
             }
         }
+        out += renderLedger(c, profile, day, steps, hr, windows, sleepWindow)
+        return out
+    }
+
+    private fun planLine(tag: String, k: Int, p: ActiveEnergyLedger.Plan): String {
+        val nonZero = p.watermarks.withIndex().filter { it.value != 0.0 }
+        return "$tag $k ${p.writes.size}" + p.writes.joinToString("") { " ${it.start.toEpochMilli()} ${it.end.toEpochMilli()} ${d(it.kcal)}" } +
+            " ${p.watermarks.size} ${nonZero.size}" + nonZero.joinToString("") { " ${it.index} ${d(it.value)}" } +
+            " ${d(p.carryRemaining)} ${d(p.workoutConsumed)} ${d(p.totalKcal)}"
+    }
+
+    /** The state a caller commits after each plan: marks, carry, the saved total and the workout energy credited. */
+    private class LedgerState(var marks: List<Double> = emptyList(), var carry: Double = 0.0, var saved: Double = 0.0, var credited: Double = 0.0)
+
+    /** The day's write-ledger lines: two flush replays, seeding, write windows and (hostile days) unreadable states. */
+    private fun renderLedger(
+        c: VCase,
+        profile: UserProfile,
+        day: Instant,
+        steps: Int,
+        hr: List<HRSample>,
+        windows: List<StepWindow>,
+        sleepWindow: DateInterval?,
+    ): List<String> {
+        fun estimate(h: List<HRSample>, w: List<StepWindow>, st: Int) =
+            Calories.dailyEstimate(h, st, profile, sleepWindow, w, dayStart = day, bucketSeconds = 900.0)
+        fun placed(w: List<StepWindow>): Int = w.filter { it.delta > 0 }.sumOf { it.delta }
+        val out = mutableListOf<String>()
+        fun flush(tag: String, k: Int, e: Calories.DailyEstimate, now: Instant, workout: Double, s: LedgerState) {
+            val p = ActiveEnergyLedger.plan(e.buckets, s.marks, day, now, s.carry, workout - s.credited, s.saved)
+            out += planLine(tag, k, p)
+            s.marks = p.watermarks
+            s.carry = p.carryRemaining
+            s.saved += p.totalKcal
+            s.credited += p.workoutConsumed
+        }
+
+        val cuts = tokens(c, "lp").map { milli(it) }
+        val workouts = tokens(c, "lw").map { toDouble(it) }
+        val inOrder = LedgerState()
+        for ((k, cut) in cuts.withIndex()) {
+            val h = hr.filter { it.start < cut }
+            val w = windows.filter { it.end <= cut }
+            flush("lplan", k, estimate(h, w, if (k >= cuts.size - 2) steps else placed(w)), cut, workouts[k], inOrder)
+        }
+
+        val arrivals = tokens(c, "la").map { milli(it) }
+        fun batches(tag: String, n: Int): List<Int> = tokens(c, tag).single().let { t -> if (t == "-") emptyList() else t.map { it - '0' } }
+            .also { check(it.size == n) { "${c.id}: $tag has ${it.size} batches for $n items" } }
+        val hrBatch = batches("lah", hr.size)
+        val windowBatch = batches("law", windows.size)
+        val outOfOrder = LedgerState()
+        for ((k, now) in arrivals.withIndex()) {
+            val h = hr.filterIndexed { i, _ -> hrBatch[i] <= k }
+            val w = windows.filterIndexed { i, _ -> windowBatch[i] <= k }
+            flush("aplan", k, estimate(h, w, if (k == arrivals.size - 1) steps else placed(w)), now, 0.0, outOfOrder)
+        }
+
+        val whole = estimate(hr, windows, steps)
+        for ((k, legacy) in tokens(c, "ls").map { toDouble(it) }.withIndex()) {
+            val s = ActiveEnergyLedger.seed(whole.buckets, legacy, day)
+            val nonZero = s.watermarks.withIndex().filter { it.value != 0.0 }
+            out += "seed $k ${s.watermarks.size} ${nonZero.size}" + nonZero.joinToString("") { " ${it.index} ${d(it.value)}" } + " ${d(s.carry)}"
+            out += planLine("splan", k, ActiveEnergyLedger.plan(whole.buckets, s.watermarks, day, day.plusSeconds(26 * 3600L), s.carry))
+        }
+
+        fun optMilli(t: String): Instant? = if (t == "-") null else milli(t)
+        out += "win" + tokens(c, "rq").chunked(4).joinToString("") { (anchor, notBefore, now, kcal) ->
+            ActiveEnergyWindow.resolve(optMilli(anchor), optMilli(notBefore), milli(now), day, toDouble(kcal))
+                ?.let { " ${it.start.toEpochMilli()} ${it.end.toEpochMilli()}" } ?: " - -"
+        }
+
+        if (c.shape == "hostile") {
+            val bad = listOf(
+                listOf(Double.NaN) to Triple(0.0, 0.0, 0.0), listOf(-40.0) to Triple(0.0, 0.0, 0.0),
+                emptyList<Double>() to Triple(Double.NaN, 0.0, 0.0), emptyList<Double>() to Triple(0.0, Double.NaN, 0.0),
+                emptyList<Double>() to Triple(0.0, 0.0, Double.NaN),
+            )
+            for ((k, b) in bad.withIndex()) {
+                val (marks, scalars) = b
+                out += planLine("bad", k, ActiveEnergyLedger.plan(whole.buckets, marks, day, day.plusSeconds(26 * 3600L), scalars.first, scalars.second, scalars.third))
+            }
+        }
         return out
     }
 
@@ -238,12 +321,26 @@ class VitalsDifferentialTest {
         "a bucket width outside one second to one billion seconds is not attributed" to (44..47).flatMap { k ->
             listOf(3, 4).map { w -> Divergence("day-%03d".format(k), "est $w") }
         }.toSet(),
+        // PORTING D-79: the energy ledger writes nothing from a stored state it cannot read (a NaN or
+        // negative watermark, a NaN carry, workout credit or saved total), where upstream writes the day.
+        // All five unreadable states of every "hostile" day.
+        "an unreadable stored ledger state writes nothing" to (44..47).flatMap { k ->
+            (0..4).map { b -> Divergence("day-%03d".format(k), "bad $b") }
+        }.toSet(),
     )
 
     /** The tokens that identify a golden line among its case's lines: the first two for indexed kinds, else the first. */
     private fun lineKind(line: String): String {
         val t = line.split(' ')
-        val n = if (t[0] in setOf("roll", "sum", "trimp", "strain", "trimphr", "kcal", "dist", "steps", "keytel", "basal", "baseline", "est")) 2 else 1
+        val n = if (t[0] in setOf(
+                "roll", "sum", "trimp", "strain", "trimphr", "kcal", "dist", "steps", "keytel", "basal", "baseline", "est",
+                "lplan", "aplan", "seed", "splan", "bad",
+            )
+        ) {
+            2
+        } else {
+            1
+        }
         return t.take(n).joinToString(" ")
     }
 
@@ -367,6 +464,9 @@ class VitalsDifferentialTest {
             "day-baseline-derived", "day-baseline-none", "day-sleep-excluded", "day-pieces-none", "day-span-samples",
             "day-attributed", "day-legacy-fallback", "day-netted-bucket", "day-residual-steps", "day-straddling-window",
             "day-duplicated-samples", "day-subsecond-width", "day-wide-width",
+            "ledger-write", "ledger-nothing-new", "ledger-late-bucket", "ledger-fall-netted", "ledger-workout-consumed",
+            "ledger-clamped-to-now", "ledger-unreadable-state-written", "seed-carry", "seed-then-write",
+            "win-none", "win-day-floor", "win-widened",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }

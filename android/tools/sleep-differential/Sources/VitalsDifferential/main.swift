@@ -42,6 +42,15 @@
 //     sw <start ms> <end ms> | sw -     the sleep window excluded from exercise and energy
 //     seg <start ms> <end ms> <stage> ...  the sleep segments (stage raw names), in order
 //     bw <doubles>                      the attribution bucket widths to evaluate
+//     lp <ms>...                        the ledger replay's flush times, in order: flush k sees the
+//                                       heart rate that starts before it and the step windows that
+//                                       end by it (the last two flushes see the whole day)
+//     lw <doubles>                      the day's workout energy known at each of those flushes
+//     la <ms>...                        a second replay's flush times, data arriving out of order
+//     lah <digits> | lah -              per heart-rate sample, in order, the flush it arrives by
+//     law <digits> | law -              per step window, in order, the flush it arrives by
+//     ls <doubles>                      legacy written totals to seed the day's ledger from
+//     rq (<anchor ms|-> <notBefore ms|-> <now ms> <kcal>)...   write-window queries
 //   end
 // goldens.txt, per case:
 //   case <id>
@@ -71,12 +80,29 @@
 //           legacy <kcal> <minutes>     Calories.legacyDailyEstimate
 //           est <k> <kcal> <minutes> <n> (<start ms> <end ms> <hrKcal> <stepKcal> <minutes>)*
 //                                       Calories.dailyEstimate with bucket width k and the day start
+//           lplan <k> <plan>            ActiveEnergyLedger.plan at flush k of the in-order replay,
+//                                       over that flush's 900 s daily estimate, every plan's state
+//                                       committed before the next (watermarks, carry, saved total,
+//                                       workout energy credited)
+//           aplan <k> <plan>            the same for the out-of-order replay (no workout energy)
+//           seed <k> <n> <nz> (<slot> <mark>)* <carry>   ActiveEnergyLedger.seed of the whole day's
+//                                       buckets with legacy total k: the marks' count, then the
+//                                       non-zero marks, then the carry
+//           splan <k> <plan>            plan at 26 h from that seed
+//           win (<start ms> <end ms> | - -)*   ActiveEnergyWindow.resolve for each query
+//           bad <k> <plan>              (hostile days) plan of the whole day at 26 h from an
+//                                       unreadable stored state k: a NaN watermark, a watermark of
+//                                       -40, a NaN carry, a NaN workout credit, a NaN saved total
+//     where <plan> is <n writes> (<start ms> <end ms> <kcal>)* <marks count> <non-zero marks>
+//     (<slot> <mark>)* <carry remaining> <workout consumed> <total kcal>
 //   end
 //
 // Shapes include, from the start, the inputs a deliberate difference from upstream would touch:
 // duplicated groups and samples, reversed samples, heart-rate days that cross both 2026 clock
-// changes in New York, unreadable (NaN / infinite) resting HR and baseline readings, and bucket
-// widths below one second and above one billion seconds.
+// changes in New York, unreadable (NaN / infinite) resting HR and baseline readings, bucket
+// widths below one second and above one billion seconds, and unreadable stored ledger states.
+// Upstream's ledger adds a dictionary's values (seeded per process): regenerate.sh runs this
+// program with Swift's deterministic hashing so every run writes the same bytes.
 
 import Foundation
 @testable import OpenCircuitKit
@@ -620,6 +646,122 @@ func dayCase(_ index: Int) -> Case {
         hit("day-subsecond-width", w < 1 && !e.buckets.isEmpty)
         hit("day-wide-width", w > 1e9 && !e.buckets.isEmpty)
     }
+
+    // The write ledger over the same day, flushed as a sync would: each flush prices what has arrived
+    // with the 900 s daily estimate, plans against the state the previous flush committed, and commits.
+    func estimate900(_ h: [HRSample], _ w: [StepWindow], _ st: Int) -> Calories.DailyEstimate {
+        Calories.dailyEstimate(hrSamples: h, steps: st, profile: profile, sleepWindow: sleepWindow,
+                               stepWindows: w, dayStart: day, bucketSeconds: 900)
+    }
+    func planLine(_ tag: String, _ k: Int, _ p: ActiveEnergyLedger.Plan) -> String {
+        let nz = p.watermarks.enumerated().filter { $0.element != 0 }
+        return "\(tag) \(k) \(p.writes.count)" + p.writes.map { " \(ms($0.start)) \(ms($0.end)) \(d($0.kcal))" }.joined()
+            + " \(p.watermarks.count) \(nz.count)" + nz.map { " \($0.offset) \(d($0.element))" }.joined()
+            + " \(d(p.carryRemaining)) \(d(p.workoutConsumed)) \(d(p.totalKcal))"
+    }
+    func placedSteps(_ w: [StepWindow]) -> Int { w.filter { $0.delta > 0 }.reduce(0) { $0 + $1.delta } }
+    struct LedgerState { var marks: [Double] = []; var carry = 0.0; var saved = 0.0; var credited = 0.0; var lastEnd: Date? = nil }
+    func flush(_ tag: String, _ k: Int, _ e: Calories.DailyEstimate, _ now: Date, _ workout: Double, _ s: inout LedgerState) {
+        let p = ActiveEnergyLedger.plan(buckets: e.buckets, watermarks: s.marks, dayStart: day, now: now, carry: s.carry,
+                                        uncreditedWorkoutKcal: workout - s.credited, savedKcal: s.saved)
+        c.goldens.append(planLine(tag, k, p))
+        hit("ledger-write", !p.writes.isEmpty)
+        hit("ledger-fall-netted", p.carryRemaining > s.carry)
+        hit("ledger-workout-consumed", p.workoutConsumed > 0)
+        hit("ledger-clamped-to-now", p.writes.contains { $0.end == now })
+        hit("ledger-late-bucket", s.lastEnd.map { last in p.writes.contains { $0.start < last } } ?? false)
+        s.marks = p.watermarks
+        s.carry = p.carryRemaining
+        s.saved += p.totalKcal
+        s.credited += p.workoutConsumed
+        if let end = p.writes.map({ $0.end }).max() { s.lastEnd = max(s.lastEnd ?? end, end) }
+    }
+
+    // In order: flush k sees heart rate starting before it and step windows ending by it; the last two
+    // flushes see the whole day (with the day's own step count), so the last one has nothing new.
+    let cuts = [8, 12, 16, 20, 26, 26].map { at($0 * 3600) }
+    let workouts: [Double] = index % 3 == 0 ? [0, 0, 30, 30, 30, 30] : [0, 0, 0, 0, 0, 0]
+    var inOrder = LedgerState()
+    for (k, cut) in cuts.enumerated() {
+        let h = hr.filter { $0.start < cut }
+        let w = windows.filter { $0.end <= cut }
+        let whole = k >= cuts.count - 2
+        let before = inOrder.saved
+        flush("lplan", k, estimate900(h, w, whole ? steps : placedSteps(w)), cut, workouts[k], &inOrder)
+        hit("ledger-nothing-new", k == cuts.count - 1 && inOrder.saved == before)
+    }
+    // Out of order: each sample and window arrives by the first flush at or after its time, sometimes
+    // one or two flushes late, so an earlier bucket can gain energy after later ones were written.
+    let arrivals = [10, 14, 18, 22, 27].map { at($0 * 3600) }
+    func batch(_ t: Date) -> Int {
+        let first = arrivals.firstIndex { $0 >= t } ?? (arrivals.count - 1)
+        return min(arrivals.count - 1, first + (rng.chance(30) ? rng.int(1, 2) : 0))
+    }
+    let hrBatch = hr.map { batch($0.start) }
+    let windowBatch = windows.map { batch($0.end) }
+    var outOfOrder = LedgerState()
+    for (k, now) in arrivals.enumerated() {
+        let h = zip(hr, hrBatch).filter { $0.1 <= k }.map { $0.0 }
+        let w = zip(windows, windowBatch).filter { $0.1 <= k }.map { $0.0 }
+        flush("aplan", k, estimate900(h, w, k == arrivals.count - 1 ? steps : placedSteps(w)), now, 0, &outOfOrder)
+    }
+    // Upgrade-day seeding from a legacy total, then the plan that follows it.
+    let whole = estimate900(hr, windows, steps)
+    let legacies = [whole.activeKcal * 0.5, whole.activeKcal + 37.5]
+    for (k, legacy) in legacies.enumerated() {
+        let s = ActiveEnergyLedger.seed(buckets: whole.buckets, legacyWrittenKcal: legacy, dayStart: day)
+        let nz = s.watermarks.enumerated().filter { $0.element != 0 }
+        c.goldens.append("seed \(k) \(s.watermarks.count) \(nz.count)" + nz.map { " \($0.offset) \(d($0.element))" }.joined() + " \(d(s.carry))")
+        hit("seed-carry", s.carry > 0)
+        let p = ActiveEnergyLedger.plan(buckets: whole.buckets, watermarks: s.watermarks, dayStart: day, now: at(26 * 3600), carry: s.carry)
+        c.goldens.append(planLine("splan", k, p))
+        hit("seed-then-write", !p.writes.isEmpty)
+    }
+    // Write windows. Every energy is a multiple of 1.25 kcal, so every widened start stays on the grid.
+    let wake = sleepWindow?.end
+    let queries: [(Date?, Date?, Date, Double)] = [
+        (nil, wake, at(9 * 3600), 0),
+        (nil, wake, at(9 * 3600), 1.25 * Double(rng.int(1, 4000))),
+        (at(10 * 3600), wake, at(10 * 3600 + 44), 190),
+        (Date(timeIntervalSince1970: 0), nil, at(13 * 3600), 1.25 * Double(rng.int(0, 400))),
+        (at(-3 * 86_400), wake, at(12 * 3600), 5000),
+        (at(30 * 3600), wake, at(11 * 3600), .infinity),
+        (at(12 * 3600), nil, at(12 * 3600), 10),
+        (day, at(-7200), at(3600), .nan),
+        (at(12 * 3600), nil, at(12 * 3600), 0),
+        (nil, nil, at(-1), 0),
+    ]
+    var win = "win"
+    for q in queries {
+        let r = ActiveEnergyWindow.resolve(anchor: q.0, notBefore: q.1, now: q.2, dayStart: day, kcal: q.3)
+        win += r.map { " \(ms($0.start)) \(ms($0.end))" } ?? " - -"
+        let unwidened = ActiveEnergyWindow.resolve(anchor: q.0, notBefore: q.1, now: q.2, dayStart: day)
+        hit("win-none", r == nil)
+        hit("win-day-floor", r?.start == day)
+        hit("win-widened", r != nil && unwidened != nil && r!.start < unwidened!.start)
+    }
+    c.goldens.append(win)
+    // Unreadable stored states (hostile days only): what upstream plans from each.
+    if shape == "hostile" {
+        let bad: [([Double], Double, Double, Double)] = [([.nan], 0, 0, 0), ([-40], 0, 0, 0), ([], .nan, 0, 0), ([], 0, .nan, 0), ([], 0, 0, .nan)]
+        for (k, b) in bad.enumerated() {
+            let p = ActiveEnergyLedger.plan(buckets: whole.buckets, watermarks: b.0, dayStart: day, now: at(26 * 3600),
+                                            carry: b.1, uncreditedWorkoutKcal: b.2, savedKcal: b.3)
+            c.goldens.append(planLine("bad", k, p))
+            hit("ledger-unreadable-state-written", !p.writes.isEmpty)
+        }
+    }
+    func digits(_ xs: [Int]) -> String { xs.isEmpty ? "-" : xs.map { String($0) }.joined() }
+    func optMs(_ t: Date?) -> String { t.map { String(ms($0)) } ?? "-" }
+    c.inputs += [
+        "lp" + cuts.map { " \(ms($0))" }.joined(),
+        "lw" + workouts.map { " " + d($0) }.joined(),
+        "la" + arrivals.map { " \(ms($0))" }.joined(),
+        "lah \(digits(hrBatch))",
+        "law \(digits(windowBatch))",
+        "ls" + legacies.map { " " + d($0) }.joined(),
+        "rq" + queries.map { " \(optMs($0.0)) \(optMs($0.1)) \(ms($0.2)) \(d($0.3))" }.joined(),
+    ]
 
     let valid = hr.filter { LiveHR.validBPM.contains($0.bpm) }
     let sleepMean = RestingHR.sleepMean(hr: valid, sleep: segments, minSleepSamples: RestingHR.minSleepSamples)

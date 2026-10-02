@@ -37,11 +37,20 @@ branch kcal-positive 42
 branch kcal-zero 54
 branch keytel-positive 87
 branch keytel-zero 150
+branch ledger-clamped-to-now 59
+branch ledger-fall-netted 1
+branch ledger-late-bucket 163
+branch ledger-nothing-new 48
+branch ledger-unreadable-state-written 20
+branch ledger-workout-consumed 15
+branch ledger-write 386
 branch scale-clamped-high 51
 branch scale-clamped-low 62
 branch scale-linear 47
 branch scale-neutral 180
 branch scale-nonfinite-input 70
+branch seed-carry 48
+branch seed-then-write 47
 branch strain-above-21 30
 branch strain-duplicated-series 6
 branch strain-none-few 54
@@ -54,3 +63,6 @@ branch stress-negative-input 16
 branch stress-scored 56
 branch trimp-interval-fallback 108
 branch trimp-nan 72
+branch win-day-floor 156
+branch win-none 96
+branch win-widened 106
