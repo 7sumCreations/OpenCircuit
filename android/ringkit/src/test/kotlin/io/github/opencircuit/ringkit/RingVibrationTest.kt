@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 /**
  * Tests for `RingVibration` / `VibrationPattern` / `Command.vibrate` — port of upstream
  * ios/OpenCircuitKit/Tests/OpenCircuitKitTests/RingAlarmTests.swift:24-39 (@ b1c2fdd) ONLY.
- * The rest of RingAlarmTests (alarm scheduling, `RingAlarm`) ports with E20.
+ * The rest of RingAlarmTests (alarm scheduling, `RingAlarm`) is in `RingAlarmTest`.
  *
  * The expected frames are typed from the capture list in
  * `S/RingVibration.swift:12-15` (🟢 12/12 buzzes on a Gen 3 ring), never from `Opcodes.kt`.

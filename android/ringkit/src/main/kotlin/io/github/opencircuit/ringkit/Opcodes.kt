@@ -157,9 +157,10 @@ object Command {
 
     /**
      * Open a HISTORY sync "up to NOW" on [channel] — the official app's history behaviour
-     * (🟢 PROTOCOL.md §3). Use this, NOT [syncAll], for sleep/vitals history. [now] is injectable so tests can pin the clock.
+     * (🟢 PROTOCOL.md §3). Use this, NOT [syncAll], for sleep/vitals history. [now] is required (upstream
+     * defaults it to the device clock): the module reads no clock, so the caller passes its own.
      */
-    fun syncUpToNow(now: Instant = Instant.now(), channel: Int = SYNC_CHANNEL_SLEEP): ByteArray =
+    fun syncUpToNow(now: Instant, channel: Int = SYNC_CHANNEL_SLEEP): ByteArray =
         syncSince(now.epochSecond, channel)
 }
 
