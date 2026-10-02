@@ -52,3 +52,24 @@ internal fun Duration.wholeSecondsTowardZero(): Long = if (isNegative && nano > 
  * range fits a `Duration`, so this never throws (a Swift `Date` never overflows either).
  */
 internal fun secondsBetween(from: Instant, to: Instant): Double = SleepStaging.seconds(Duration.between(from, to))
+
+/**
+ * [t] moved by [seconds] — Swift's `t.addingTimeInterval(seconds)` — to the nearest nanosecond; null
+ * for a NaN offset (a Swift `Date` built from NaN compares false with everything). A Swift `Date`
+ * goes on to infinity where an `Instant` cannot: a result past either end of `Instant`'s range
+ * saturates at [Instant.MAX] or [Instant.MIN] instead of throwing.
+ */
+internal fun addingSeconds(t: Instant, seconds: Double): Instant? {
+    if (seconds.isNaN()) return null
+    val end = if (seconds > 0) Instant.MAX else Instant.MIN
+    if (kotlin.math.abs(seconds) > 1e17) return end // past the whole range from any instant
+    val whole = kotlin.math.floor(seconds)
+    val nanos = Math.round((seconds - whole) * 1e9)
+    return try {
+        t.plusSeconds(whole.toLong()).plusNanos(nanos)
+    } catch (e: java.time.DateTimeException) {
+        end
+    } catch (e: ArithmeticException) {
+        end
+    }
+}
