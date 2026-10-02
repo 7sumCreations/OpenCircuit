@@ -19,8 +19,11 @@ import kotlin.test.assertTrue
  * gaps, leads and pads are caller values. So here windows arrive negative, NaN or infinite, minutes
  * arrive outside the day and at the ends of `Int`, readings arrive tied, unsorted, duplicated or
  * before Foundation's distant past, the clock arrives at the ends of `Instant` and across clock
- * changes, a stored `lastFired` arrives in the future, and a stored raw name arrives misspelt. Kept
- * out of the upstream-port classes so their counts stay exact.
+ * changes, a stored `lastFired` arrives in the future, and a stored raw name arrives misspelt. For the
+ * overnight-signals notification the stored frozen-day count, unlock floor and per-day ledger arrive at
+ * the ends of their ranges, the shares it names arrive NaN, infinite, signed-zero or negative with a
+ * limit below zero, and the clock arrives across clock changes and at the ends of time. Kept out of the
+ * upstream-port classes so their counts stay exact.
  *
  * Every upstream outcome quoted below was measured on the pinned Swift build (Swift 6.3.2). Where the
  * port deliberately differs the test says so, and `PORTING.md` records why.
@@ -380,6 +383,174 @@ class HealthAlertsHazardTest {
             assertTrue(TempFeverNotifications.NOTIFICATION_SET.containsAll(out))
         }
     }
+
+    // MARK: the overnight-signals notification
+
+    @Test
+    fun theDeliveryWindowReadsTheZonesWallClock() {
+        // 07:00 inclusive to 21:00 exclusive, by the wall clock in the zone given, seconds ignored.
+        // Measured upstream (UTC): 06:59:59 no, 07:00 yes, 20:59:59 yes, 21:00 no, 00:00 no.
+        val day = listOf("06:59:59", "07:00:00", "20:59:59", "21:00:00", "00:00:00")
+            .map { HeadacheSignsNotifications.withinDeliveryWindow(Instant.parse("2026-07-20T${it}Z"), utc) }
+        assertEquals(listOf(false, true, true, false, false), day)
+        // Measured upstream in New York across both 2026 clock changes: the zone's own wall clock opens
+        // and closes the window (01:30 EST, 05:59 EST / 06:59 EDT, 07:00 EDT, 07:59 EDT, 20:59 EDT,
+        // 21:00 EDT; 01:30 EDT, 01:30 EST, 06:59 EST, 07:00 EST, 20:59 EST, 21:00 EST).
+        val ny = ZoneId.of("America/New_York")
+        val dst = listOf(
+            "2026-03-08T06:30:00Z", "2026-03-08T10:59:00Z", "2026-03-08T11:00:00Z", "2026-03-08T11:59:00Z",
+            "2026-03-09T00:59:00Z", "2026-03-09T01:00:00Z", "2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z",
+            "2026-11-01T11:59:00Z", "2026-11-01T12:00:00Z", "2026-11-02T01:59:00Z", "2026-11-02T02:00:00Z",
+        ).map { HeadacheSignsNotifications.withinDeliveryWindow(Instant.parse(it), ny) }
+        assertEquals(listOf(false, false, true, true, true, false, false, false, false, true, true, false), dst)
+        // Far instants, measured upstream (UTC): Foundation's distant past and distant future are
+        // midnight (outside); 1e13 s is 17:46:40 (inside, day key 3188570520), 8 h later outside.
+        val far = listOf(SleepEdit.DISTANT_PAST, Instant.ofEpochSecond(64_092_211_200L), Instant.ofEpochSecond(10_000_000_000_000L), Instant.ofEpochSecond(10_000_000_028_800L))
+        assertEquals(listOf(false, false, true, false), far.map { HeadacheSignsNotifications.withinDeliveryWindow(it, utc) })
+        assertEquals(3_188_570_520L, HeadacheSignsNotifications.dayKey(far[2], utc))
+        // KEPT DIFFERENCE: before about 4713 BC (Julian day 0) Foundation's time of day stops being the
+        // wall clock (measured over 400 000 random instants: no disagreement after it); −1e13 s is
+        // 06:13:20 here, outside the window, where upstream answers inside.
+        assertFalse(HeadacheSignsNotifications.withinDeliveryWindow(Instant.ofEpochSecond(-10_000_000_000_000L), utc))
+        assertTrue(HeadacheSignsNotifications.withinDeliveryWindow(Instant.ofEpochSecond(-9_999_999_971_200L), utc))
+        // An instant java.time cannot place in the zone is outside the window and has no day key, so the
+        // notification is never raised on a clock the port cannot read; nothing throws.
+        for (z in listOf(utc, ny, ZoneId.of("Pacific/Kiritimati"))) {
+            for (t in listOf(Instant.MIN, Instant.MAX)) {
+                assertFalse(HeadacheSignsNotifications.withinDeliveryWindow(t, z))
+                assertNull(HeadacheSignsNotifications.dayKey(t, z))
+                assertEquals(emptyList(), overnight(now = t, zone = z))
+            }
+        }
+    }
+
+    @Test
+    fun topSignalsDropUnreadableAndNonPositiveSharesAndClampTheLimit() {
+        // Measured upstream: a NaN share is dropped (NaN > 0 is false); infinite shares tie and break by
+        // declaration order, ahead of 1e308; −0.0, −1 and −∞ are dropped, the smallest subnormal kept.
+        fun top(w: Map<HeadacheSignals.Feature, Double>, limit: Int = 2) = HeadacheSignsNotifications.topSignals(w, limit).map { it.rawValue }
+        assertEquals(listOf("scheduleShift"), top(mapOf(HeadacheSignals.Feature.HRV_DEVIATION to Double.NaN, HeadacheSignals.Feature.SCHEDULE_SHIFT to 0.08)))
+        assertEquals(
+            listOf("hrvDeviation", "scheduleShift", "sleepEfficiencyDrop"),
+            top(
+                mapOf(
+                    HeadacheSignals.Feature.SLEEP_EFFICIENCY_DROP to 1e308, HeadacheSignals.Feature.SCHEDULE_SHIFT to Double.POSITIVE_INFINITY,
+                    HeadacheSignals.Feature.HRV_DEVIATION to Double.POSITIVE_INFINITY,
+                ),
+                3,
+            ),
+        )
+        assertEquals(
+            listOf("restingHRDeviation"),
+            top(
+                mapOf(
+                    HeadacheSignals.Feature.HRV_DEVIATION to -0.0, HeadacheSignals.Feature.SCHEDULE_SHIFT to -1.0,
+                    HeadacheSignals.Feature.RESTING_HR_DEVIATION to Double.MIN_VALUE, HeadacheSignals.Feature.SKIN_TEMP_DEVIATION to Double.NEGATIVE_INFINITY,
+                ),
+                3,
+            ),
+        )
+        // A limit below zero takes nothing, as 0 does (upstream's `max(0, limit)`); Int.MAX takes every
+        // ring-derived contributor, the calendar lookup never.
+        val two = mapOf(HeadacheSignals.Feature.HRV_DEVIATION to 0.1, HeadacheSignals.Feature.SCHEDULE_SHIFT to 0.2, HeadacheSignals.Feature.PERIMENSTRUAL to 9.0)
+        for (limit in listOf(-1, Int.MIN_VALUE, 0)) assertEquals(emptyList(), top(two, limit), "limit $limit")
+        assertEquals(listOf("scheduleShift", "hrvDeviation"), top(two, Int.MAX_VALUE))
+        assertEquals(emptyList(), top(mapOf(HeadacheSignals.Feature.PERIMENSTRUAL to 1.0)))
+        // Every feature on one share, the map built in REVERSE declaration order: declaration order wins.
+        val all = HeadacheSignals.Feature.entries.reversed().associateWith { 0.5 }
+        assertEquals(
+            listOf(
+                "sleepEfficiencyDrop", "arousalLetdown", "hrvDeviation", "restingHRDeviation", "sleepFragmentation", "sleepDurationDeviation",
+                "scheduleShift", "skinTempDeviation",
+            ),
+            top(all, 100),
+        )
+    }
+
+    @Test
+    fun theOvernightCandidateFollowsUpstreamOnHostileCountsTuningAndLedgers() {
+        // Measured upstream at 2026-07-20 08:00 UTC, a flagged band, enabled, not retired, unsuppressed.
+        val fires = listOf(HealthNotification.HEADACHE_SIGNS)
+        // Stored frozen-day counts and a hostile unlock floor compare as plain numbers.
+        assertEquals(emptyList(), overnight(frozenDayCount = Int.MIN_VALUE))
+        assertEquals(emptyList(), overnight(frozenDayCount = -1))
+        assertEquals(fires, overnight(frozenDayCount = Int.MAX_VALUE))
+        assertEquals(fires, overnight(frozenDayCount = 0, tuning = HeadacheSignals.Tuning(minDaysForBanding = 0)))
+        assertEquals(fires, overnight(frozenDayCount = -1, tuning = HeadacheSignals.Tuning(minDaysForBanding = -5)))
+        assertEquals(fires, overnight(frozenDayCount = Int.MAX_VALUE, tuning = HeadacheSignals.Tuning(minDaysForBanding = Int.MAX_VALUE)))
+        assertEquals(emptyList(), overnight(tuning = HeadacheSignals.Tuning(minDaysForBanding = Int.MAX_VALUE)))
+        // The stored per-day ledger: only a strictly newer day passes; another notification's entry never holds it.
+        assertEquals(emptyList(), overnight(ledger = mapOf(HealthNotification.HEADACHE_SIGNS to Long.MAX_VALUE)))
+        assertEquals(fires, overnight(ledger = mapOf(HealthNotification.HEADACHE_SIGNS to Long.MIN_VALUE)))
+        assertEquals(emptyList(), overnight(ledger = mapOf(HealthNotification.HEADACHE_SIGNS to 20_260_720L)))
+        assertEquals(fires, overnight(ledger = mapOf(HealthNotification.HEADACHE_SIGNS to 20_260_719L)))
+        assertEquals(fires, overnight(ledger = mapOf(HealthNotification.FEVER to 20_260_720L)))
+        // Foundation's distant future and distant past are midnight: outside the window.
+        assertEquals(emptyList(), overnight(now = Instant.ofEpochSecond(64_092_211_200L)))
+        assertEquals(emptyList(), overnight(now = SleepEdit.DISTANT_PAST))
+        // The per-day filter keeps order and duplicates, as the per-night one (measured).
+        assertEquals(
+            listOf(HealthNotification.HEADACHE_SIGNS, HealthNotification.HEADACHE_SIGNS),
+            HeadacheSignsNotifications.freshForDay(
+                listOf(HealthNotification.HEADACHE_SIGNS, HealthNotification.HEADACHE_SIGNS, HealthNotification.FEVER),
+                day = 5L,
+                lastNotifiedDay = mapOf(HealthNotification.FEVER to 5L),
+            ),
+        )
+    }
+
+    @Test
+    fun everyCopyIsUpstreamsWordForWord() {
+        // Upstream's copy for no signal, each single signal and every ordered pair (91 in all, a repeated
+        // signal included), joined as "title|body" lines: SHA-256 measured on the pinned build. The longest
+        // body is 179 characters.
+        val features = HeadacheSignals.Feature.entries
+        val signals = listOf(emptyList<HeadacheSignals.Feature>()) + features.map { listOf(it) } + features.flatMap { a -> features.map { b -> listOf(a, b) } }
+        val copies = signals.map { HeadacheSignsNotifications.copy(it) }
+        val joined = copies.joinToString("\n") { "${it.title}|${it.body}" }
+        val sha = java.security.MessageDigest.getInstance("SHA-256").digest(joined.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        assertEquals(91, copies.size)
+        assertEquals("b4d135fcbe7d01610f331b723fede6a20d4a4db97f82fc5933358dfad44d28bf", sha)
+        assertEquals(179, copies.maxOf { it.body.codePointCount(0, it.body.length) })
+        // Whole strings, measured: the daytime term alone, the calendar lookup (named when passed in, as
+        // upstream — `topSignals` never passes it), a repeated signal, a mixed pair, and a third signal ignored.
+        val tail = " (estimate). That is what we measured — it is not a forecast."
+        assertEquals(
+            HeadacheSignsNotifications.Text("Your recent signals stood out", "Daytime heart rate drifted furthest from your usual range over the past two days$tail"),
+            HeadacheSignsNotifications.copy(listOf(HeadacheSignals.Feature.AROUSAL_LETDOWN)),
+        )
+        assertEquals(
+            HeadacheSignsNotifications.Text("Last night was unusual for you", "Cycle phase drifted furthest from your usual range last night$tail"),
+            HeadacheSignsNotifications.copy(listOf(HeadacheSignals.Feature.PERIMENSTRUAL)),
+        )
+        assertEquals(
+            HeadacheSignsNotifications.Text("Your recent signals stood out", "Daytime heart rate and daytime heart rate drifted furthest from your usual range over the past two days$tail"),
+            HeadacheSignsNotifications.copy(listOf(HeadacheSignals.Feature.AROUSAL_LETDOWN, HeadacheSignals.Feature.AROUSAL_LETDOWN)),
+        )
+        assertEquals(
+            HeadacheSignsNotifications.Text(
+                "Last night was unusual for you",
+                "Daytime heart rate over the past two days and cycle phase last night drifted furthest from your usual range$tail",
+            ),
+            HeadacheSignsNotifications.copy(listOf(HeadacheSignals.Feature.AROUSAL_LETDOWN, HeadacheSignals.Feature.PERIMENSTRUAL, HeadacheSignals.Feature.HRV_DEVIATION)),
+        )
+        assertEquals(
+            HeadacheSignsNotifications.Text("Last night was unusual for you", "Heart rate variability and resting heart rate drifted furthest from your usual range last night$tail"),
+            HeadacheSignsNotifications.copy(listOf(HeadacheSignals.Feature.HRV_DEVIATION, HeadacheSignals.Feature.RESTING_HR_DEVIATION, HeadacheSignals.Feature.AROUSAL_LETDOWN)),
+        )
+    }
+
+    /** The shipped decision at 2026-07-20 08:00 UTC with every gate set to "would fire", varying one thing. */
+    private fun overnight(
+        frozenDayCount: Int = 30,
+        now: Instant = Instant.parse("2026-07-20T08:00:00Z"),
+        ledger: Map<HealthNotification, Long> = emptyMap(),
+        tuning: HeadacheSignals.Tuning = HeadacheSignals.Tuning(),
+        zone: ZoneId = utc,
+    ): List<HealthNotification> = HeadacheSignsNotifications.candidates(
+        enabled = true, band = HeadacheSignals.Band.FLAGGED, suppressedBy = null, frozenDayCount = frozenDayCount, retired = false,
+        now = now, lastNotifiedDay = ledger, tuning = tuning, zone = zone,
+    )
 
     @Test
     fun aStoredRawNameIsMatchedExactly() {
