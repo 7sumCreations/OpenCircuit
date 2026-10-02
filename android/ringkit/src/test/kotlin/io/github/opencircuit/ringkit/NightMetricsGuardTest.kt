@@ -137,6 +137,18 @@ class NightMetricsGuardTest {
     }
 
     /**
+     * Swift's `Int` is 64-bit: a pairwise difference of two 32-bit values never wraps, and neither
+     * does the sum of the two middle differences. A Kotlin `Int` subtraction or sum would.
+     */
+    @Test
+    fun hrvShiftDifferencesDoNotWrap() {
+        assertEquals(2_147_483_648.0, BulkSleep.hrvShift(listOf(Int.MAX_VALUE), listOf(-1)), "one difference past Int.MAX_VALUE")
+        assertEquals(-4_294_967_295.0, BulkSleep.hrvShift(listOf(Int.MIN_VALUE), listOf(Int.MAX_VALUE)))
+        // diffs 2^30+1 and 2^30+3: each fits 32 bits, their sum (2^31+4) does not.
+        assertEquals(1_073_741_826.0, BulkSleep.hrvShift(listOf(1_073_741_825, 1_073_741_827), listOf(0)), "the midpoint sum")
+    }
+
+    /**
      * For finite values the Swift sort is a stable ascending sort in which -0.0 and 0.0 tie — checked
      * against Kotlin's stable `sortedWith` on seeded arrays: every size from 0 to 200 of random values,
      * and 400 arrays of up to 600 values built from ascending and descending stretches of uneven
