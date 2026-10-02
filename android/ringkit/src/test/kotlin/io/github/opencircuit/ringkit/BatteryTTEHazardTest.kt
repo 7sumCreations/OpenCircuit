@@ -85,8 +85,10 @@ class BatteryTTEHazardTest {
         assertNull(BatteryTTE.estimatedDepletionDate(listOf(s(250, 0.0), s(80, 10.0)), now = t0))
         assertNull(BatteryTTE.timeToFull(listOf(s(60, 0.0), s(255, 0.5)), now = t0))
         assertEquals(6_840.0, BatteryTTE.timeToFull(listOf(s(-5, 0.0), s(60, 0.5), s(62, 0.6)), now = t0))
-        // Upstream already answers nothing here (the window ends below 0, or the rate guard trips).
-        assertNull(BatteryTTE.timeToEmpty(listOf(s(90, 0.0), s(80, 1.0), s(-5, 2.0)), now = t0))
+        // Upstream answers nothing for [90, 80, −5 @ 2 h] (the window ends below 0); here the −5 is left
+        // out and [90, 80] is a clean 10 %/h slope.
+        assertEquals(28_800.0, BatteryTTE.timeToEmpty(listOf(s(90, 0.0), s(80, 1.0), s(-5, 2.0)), now = t0))
+        // Upstream answers nothing here either (the rate guard trips); here nothing readable is left.
         assertNull(BatteryTTE.timeToEmpty(listOf(s(Int.MAX_VALUE, 0.0), s(Int.MIN_VALUE, 1.0)), now = t0))
         assertNull(BatteryTTE.timeToFull(listOf(s(Int.MIN_VALUE, 0.0), s(Int.MAX_VALUE - 5, 1.0)), now = t0, target = Int.MAX_VALUE))
 
