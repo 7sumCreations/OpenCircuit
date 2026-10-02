@@ -93,12 +93,17 @@ class SleepEditGuardTest {
         assertEquals(first, listOf(SleepEdit.recompute(base, w, coverage = coverage), SleepEdit.recompute(base, t, coverage = coverage)))
     }
 
+    private val gappedNight = listOf(seg(0.0, 3.0, SleepStage.ASLEEP_CORE), seg(5.0, 8.0, SleepStage.ASLEEP_DEEP))
+
     /**
-     * Re-applying an edit to its own result, as measured on the pinned build over the same grid of
-     * windows: idempotent for nights without an interior gap (every window form, with and without
-     * coverage; the three-time form without coverage), but not after a trim that cut into a night with
-     * an interior gap — the trimmed edge becomes a new recording edge and is filled. An edit must be
-     * applied to the ring's own segments, never to a previous edit's output.
+     * Re-applying an edit to its own result, over the grid measured on the pinned build (6 bases, 3
+     * coverages, 4 bedtimes, 3 wakes = 216 window edits): idempotent for every night without an
+     * interior gap, but not after a trim that cut into the gap of the gapped night — the trimmed edge
+     * becomes a new recording edge and is filled. 18 of the 216 window edits change, as measured
+     * upstream; of the three-time edits, 45 on the gapped night (as measured upstream) and 45 more on
+     * the same night with an in-bed layer. Kept as upstream: see
+     * [aNightsEditedOutputCanBeARingNightUpstreamFills] for why idempotence cannot be had without
+     * changing what a first application shows. An edit must be applied to the ring's own segments.
      */
     @Test
     fun reapplyingAnEditMatchesUpstream() {
@@ -107,24 +112,37 @@ class SleepEditGuardTest {
             listOf(seg(0.0, 8.0, SleepStage.ASLEEP_CORE)),
             listOf(seg(0.0, 8.0, SleepStage.IN_BED), seg(0.0, 8.0, SleepStage.ASLEEP_CORE)),
             listOf(seg(1.0, 2.5, SleepStage.ASLEEP_CORE), seg(2.5, 4.0, SleepStage.ASLEEP_DEEP), seg(4.0, 6.5, SleepStage.ASLEEP_REM)),
+            gappedNight,
+            listOf(seg(0.0, 8.0, SleepStage.IN_BED)) + gappedNight,
         )
+        val gappedBases = setOf(4, 5)
         val coverages = listOf(null, MeasuredCoverage(listOf(DateInterval(at(0.0), at(6.0)))), MeasuredCoverage(listOf(DateInterval(at(2.0), at(5.0)))))
-        var checked = 0
+        var windows = 0
+        var threeTimes = 0
+        val windowChanged = mutableListOf<Int>()
+        val timesChanged = mutableListOf<Int>()
         for ((bi, base) in bases.withIndex()) for (c in coverages) for (s in listOf(-1.0, 0.0, 0.5, 3.5)) for (e in listOf(4.5, 7.0, 9.0)) {
             val w = SleepEdit.Window(at(s), at(e))
             val once = SleepEdit.recompute(base, w, coverage = c)
-            assertEquals(once, SleepEdit.recompute(once, w, coverage = c), "window $s-$e on base $bi")
-            checked++
-            if (c == null && bi <= 2) {
-                for (o in listOf(s, s + 0.5, 1.0).filter { it >= s && it < e }) {
-                    val t = SleepEdit.Times(at(s), at(o), at(e))
-                    val o1 = SleepEdit.recompute(base, t)
-                    assertEquals(o1, SleepEdit.recompute(o1, t), "times $s/$o/$e on base $bi")
-                    checked++
-                }
+            val again = SleepEdit.recompute(once, w, coverage = c)
+            windows++
+            if (again != once) windowChanged += bi
+            if (bi !in gappedBases) assertEquals(once, again, "window $s-$e on base $bi")
+            for (o in listOf(s, s + 0.5, 1.0).filter { it >= s && it < e }) {
+                val t = SleepEdit.Times(at(s), at(o), at(e))
+                val o1 = SleepEdit.recompute(base, t, coverage = c)
+                val o2 = SleepEdit.recompute(o1, t, coverage = c)
+                threeTimes++
+                if (o2 != o1) timesChanged += bi
+                if (bi !in gappedBases) assertEquals(o1, o2, "times $s/$o/$e on base $bi")
             }
         }
-        assertTrue(checked > 150, "the grid ran")
+        assertEquals(216, windows, "upstream's measured window grid")
+        assertEquals(List(18) { 4 }, windowChanged, "18 of 216 window edits re-fill, all on the gapped night, as measured upstream")
+        assertEquals(594, threeTimes)
+        assertEquals(45, timesChanged.count { it == 4 }, "45 three-time edits re-fill on the gapped night, as measured upstream")
+        assertEquals(45, timesChanged.count { it == 5 }, "as many with an in-bed layer, which the three-time form sets aside")
+        assertEquals(90, timesChanged.size)
 
         val gapped = listOf(seg(0.0, 3.0, SleepStage.ASLEEP_CORE), seg(5.0, 8.0, SleepStage.ASLEEP_DEEP))
         val w = SleepEdit.Window(at(-1.0), at(4.5))
@@ -140,6 +158,37 @@ class SleepEditGuardTest {
         assertEquals(
             "(-3600,16200,inBed,measured) (-3600,0,asleepCore,measured) (0,10800,asleepCore,measured) (10800,16200,asleepCore,measured)",
             describe(SleepEdit.recompute(o1, t)),
+        )
+    }
+
+    /**
+     * Why re-application stays upstream's (the owner asked for idempotence; this is the trade-off).
+     * `recompute` sees only segments, and an edit's output can be, segment for segment, a night the
+     * ring itself recorded: trimming the gapped night to 0–4.5 h leaves exactly `[0–3 h core]`, and a
+     * ring night of `[0–3 h core]` edited to 0–4.5 h must show 3–4.5 h filled — that is upstream's
+     * first application, what the wearer sees. The same input cannot answer both, so an idempotent
+     * `recompute` would change a first application. The same holds for the three-time form.
+     */
+    @Test
+    fun aNightsEditedOutputCanBeARingNightUpstreamFills() {
+        val ringNight = listOf(seg(0.0, 3.0, SleepStage.ASLEEP_CORE))
+        val w = SleepEdit.Window(at(0.0), at(4.5))
+        val trimmed = SleepEdit.recompute(gappedNight, w)
+        assertEquals(ringNight, trimmed, "the trimmed gapped night is indistinguishable from the ring night")
+        assertEquals(
+            "(0,10800,asleepCore,measured) (10800,16200,asleepCore,measured)",
+            describe(SleepEdit.recompute(ringNight, w)),
+            "upstream's first application fills the ring night to the edited wake",
+        )
+        assertEquals(SleepEdit.recompute(ringNight, w), SleepEdit.recompute(trimmed, w), "so re-applying to the trimmed night must fill too")
+
+        val t = SleepEdit.Times(at(0.0), at(0.0), at(4.5))
+        val trimmedTimes = SleepEdit.recompute(gappedNight, t)
+        val ringNightTimes = listOf(seg(0.0, 4.5, SleepStage.IN_BED), seg(0.0, 3.0, SleepStage.ASLEEP_CORE))
+        assertEquals(ringNightTimes, trimmedTimes, "the three-time form: the same, with the in-bed envelope")
+        assertEquals(
+            "(0,16200,inBed,measured) (0,10800,asleepCore,measured) (10800,16200,asleepCore,measured)",
+            describe(SleepEdit.recompute(ringNightTimes, t)),
         )
     }
 

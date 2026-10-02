@@ -273,7 +273,9 @@ object SleepEdit {
      *
      * Apply an edit to the ring's OWN segments: re-running it on its own output is not idempotent when a
      * trim cut into the recording (a trimmed edge becomes a new recording edge and is filled), exactly as
-     * upstream.
+     * upstream. It cannot be made idempotent without changing a first application: such an output can be,
+     * segment for segment, a night the ring recorded, which the same edit must fill (measured in
+     * `SleepEditGuardTest`; PORTING, the `SleepEdit.swift` row).
      */
     fun recompute(
         baseSegments: List<SleepSegment>,
