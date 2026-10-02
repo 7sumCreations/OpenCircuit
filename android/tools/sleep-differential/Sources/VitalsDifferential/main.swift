@@ -65,6 +65,12 @@
 //     wn <ints>                         baseline windows to evaluate
 //     tn <double>                       tonight's mean
 //     pv <double|->                     the previous night's mean
+//   kind wb (readiness sub-scores, one query per line):
+//     q <sleep|-> <stress|-> <vitals status raw name|-> <activity|->
+//   kind act (activity goals, one query per line):
+//     q <steps> <stepGoal> <minutes> <minutesGoal> <kcal> <kcalGoal>   (the last four are doubles)
+//   kind trend (one query per line):
+//     q <today> <deadband> <prior scores...>
 //   end
 // goldens.txt, per case:
 //   case <id>
@@ -132,6 +138,12 @@
 //           flags <a> <b> <c> <d>       anomalyFlags(tonight, 30-night baseline, previous night):
 //                                       abnormal rise, abnormal drop, fluctuation rise, drop (0 | 1)
 //           nrep <nightly> <baseline|-> <offset|-> <band|-> <a> <b> <c> <d>   report (30 nights)
+//   wb:     wbs <k> <score|-> <tier|-> <anchored score|-> <sleep|-> <recovery|-> <vitals|-> <activity|->
+//                                       WellnessBalance.score and anchoredScore of query k; the
+//                                       factors in declaration order, "-" for an absent one
+//   act:    acs <k> <score> <tier> <steps|-> <activeMinutes|-> <activeKcal|->
+//                                       ActivityScore.score of query k, factors as above
+//   trend:  trd <k> <up|steady|down>    WellnessBalance.trend of query k
 //   end
 //
 // Shapes include, from the start, the inputs a deliberate difference from upstream would touch:
@@ -139,9 +151,11 @@
 // changes in New York, unreadable (NaN / infinite) resting HR and baseline readings, bucket
 // widths below one second and above one billion seconds, unreadable stored ledger states,
 // unreadable prior days, todays, offsets, readings and nights, a zero noise floor against a
-// perfectly flat baseline, and readings exactly on the end of a whole-hour night.
-// Upstream's ledger adds a dictionary's values (seeded per process): regenerate.sh runs this
-// program with Swift's deterministic hashing so every run writes the same bytes.
+// perfectly flat baseline, readings exactly on the end of a whole-hour night, readiness and
+// activity inputs whose rounded score depends on the order the factors are summed, sub-scores and
+// goals outside their ranges, and trend sums that leave 32 bits.
+// Upstream's ledger and both scores add a dictionary's values (seeded per process): regenerate.sh
+// runs this program with Swift's deterministic hashing so every run writes the same bytes.
 
 import Foundation
 @testable import OpenCircuitKit
@@ -1061,6 +1075,194 @@ func tempCase(_ index: Int) -> Case {
     return c
 }
 
+// MARK: - Sub-scores → readiness; goals → activity score; daily scores → trend
+
+/// Every ordering of `xs`, used only to pick inputs whose rounded score depends on the order the
+/// present factors are summed (upstream sums them in a dictionary's order, seeded per process).
+func orderings<T>(_ xs: [T]) -> [[T]] {
+    if xs.count <= 1 { return [xs] }
+    var out: [[T]] = []
+    for i in xs.indices {
+        var rest = xs
+        let x = rest.remove(at: i)
+        for o in orderings(rest) { out.append([x] + o) }
+    }
+    return out
+}
+
+/// The set of rounded scores the weighted mean of `values` can take over every summation order.
+func scoresOverOrders<F: Hashable>(_ values: [F: Double], _ weights: [F: Double]) -> Set<Int> {
+    Set(orderings(Array(values.keys)).map { order -> Int in
+        var num = 0.0, den = 0.0
+        for f in order { num += weights[f]! * values[f]!; den += weights[f]! }
+        return Int((num / den * 100).rounded())
+    })
+}
+
+let wbShapes = ["full", "partial", "edge", "tie", "unanchored"]
+let wbCasesPerShape = 3
+let wbQueriesPerCase = 16
+let wbFactors: [WellnessBalance.Result.Factor] = [.sleep, .recovery, .vitals, .activity]
+let vitalsStatuses: [VitalsBaseline.Status] = [.normal, .watch, .anomaly]
+let edgeSubScores = [Int(Int32.min), -1, 0, 1, 14, 15, 59, 60, 84, 85, 90, 91, 100, 101, Int(Int32.max)]
+
+/// The factor values `WellnessBalance.score` would build for an input (to search for order-sensitive inputs).
+func wbFactorValues(_ i: WellnessBalance.Input) -> [WellnessBalance.Result.Factor: Double] {
+    WellnessBalance.score(i)?.factors ?? [:]
+}
+
+func wbCase(_ index: Int) -> Case {
+    let shape = wbShapes[index / wbCasesPerShape]
+    let k = index % wbCasesPerShape
+    var rng = SplitMix64(state: 0x5742_414C &+ UInt64(index))
+    var c = Case(id: String(format: "wb-%03d", index), kind: "wb", shape: shape)
+    var queries: [WellnessBalance.Input] = []
+    func random(_ chance: Int) -> WellnessBalance.Input {
+        WellnessBalance.Input(
+            sleepScore: rng.chance(chance) ? rng.int(0, 100) : nil,
+            overnightStress: rng.chance(chance) ? rng.int(15, 90) : nil,
+            vitalsStatus: rng.chance(chance) ? rng.pick(vitalsStatuses) : nil,
+            activityScore: rng.chance(chance) ? rng.int(0, 100) : nil)
+    }
+    while queries.count < wbQueriesPerCase {
+        switch shape {
+        case "full": queries.append(random(100))
+        case "partial": queries.append(k == 0 && queries.isEmpty ? WellnessBalance.Input() : random(50))
+        case "edge":
+            queries.append(WellnessBalance.Input(
+                sleepScore: rng.chance(75) ? rng.pick(edgeSubScores) : nil,
+                overnightStress: rng.chance(75) ? rng.pick(edgeSubScores) : nil,
+                vitalsStatus: rng.chance(75) ? rng.pick(vitalsStatuses) : nil,
+                activityScore: rng.chance(75) ? rng.pick(edgeSubScores) : nil))
+        case "tie":
+            let q = random(70)
+            let f = wbFactorValues(q)
+            if f.count > 1 && scoresOverOrders(f, WellnessBalance.factorWeights).count > 1 { queries.append(q) }
+        default: // unanchored: no sleep sub-score
+            var q = random(70)
+            q.sleepScore = nil
+            queries.append(q)
+        }
+    }
+    func opt(_ x: Int?) -> String { x.map { String($0) } ?? "-" }
+    for (j, q) in queries.enumerated() {
+        c.inputs.append("q \(opt(q.sleepScore)) \(opt(q.overnightStress)) \(q.vitalsStatus?.rawValue ?? "-") \(opt(q.activityScore))")
+        let r = WellnessBalance.score(q)
+        let anchored = WellnessBalance.anchoredScore(q)
+        c.goldens.append("wbs \(j) \(optI(r?.score)) \(r?.tier.rawValue ?? "-") \(optI(anchored?.score))"
+            + wbFactors.map { " " + optD(r?.factors[$0]) }.joined())
+        hit("wb-none", r == nil)
+        hit("wb-anchor-nil", r != nil && anchored == nil)
+        hit("wb-renormalised", (1...3).contains(r?.factors.count ?? 0))
+        if let r { hit("wb-tier-\(r.tier.rawValue)") }
+        hit("wb-clamped", [q.sleepScore, q.activityScore].contains { $0.map { $0 < 0 || $0 > 100 } == true }
+            || q.overnightStress.map { $0 < 15 || $0 > 90 } == true)
+        hit("wb-order-sensitive", r.map { $0.factors.count > 1 && scoresOverOrders($0.factors, WellnessBalance.factorWeights).count > 1 } == true)
+    }
+    return c
+}
+
+let actShapes = ["typical", "disabled", "edge", "tie"]
+let actCasesPerShape = 3
+let actFactors: [ActivityScore.Result.Factor] = [.steps, .activeMinutes, .activeKcal]
+let stepGoalChoices = [10_000, 8_000, 7_500, 12_000]
+
+func actCase(_ index: Int) -> Case {
+    let shape = actShapes[index / actCasesPerShape]
+    var rng = SplitMix64(state: 0x4143_5453 &+ UInt64(index))
+    var c = Case(id: String(format: "act-%03d", index), kind: "act", shape: shape)
+    var queries: [ActivityScore.Input] = []
+    func typical() -> ActivityScore.Input {
+        ActivityScore.Input(steps: rng.int(0, 15_000), stepGoal: rng.pick(stepGoalChoices),
+                            activeMinutes: rng.real(0, 60), activeMinutesGoal: rng.chance(80) ? 30 : rng.real(5, 90),
+                            activeKcal: rng.real(0, 800), activeKcalGoal: rng.chance(80) ? 500 : rng.real(100, 900))
+    }
+    let count = shape == "tie" ? 8 : 16
+    while queries.count < count {
+        switch shape {
+        case "typical": queries.append(typical())
+        case "disabled":
+            var q = typical()
+            let off: [Double] = [0, -0.0, -30, .nan]
+            if rng.chance(50) { q.stepGoal = rng.pick([0, -1, -10_000]) }
+            if rng.chance(50) { q.activeMinutesGoal = rng.pick(off) }
+            if rng.chance(50) { q.activeKcalGoal = rng.pick(off) }
+            queries.append(q)
+        case "edge":
+            // Hostile values upstream answers without trapping: never a NaN current value, never an
+            // infinite current over an infinite goal.
+            let currents: [Double] = [.infinity, -.infinity, -0.0, -5, 1e308, .leastNonzeroMagnitude, 0]
+            let goals: [Double] = [.infinity, .leastNonzeroMagnitude, 1e308, 30, 500]
+            var q = typical()
+            if rng.chance(50) { q.steps = rng.pick([Int(Int32.min), -1, Int(Int32.max)]) }
+            if rng.chance(30) { q.stepGoal = rng.pick([1, Int(Int32.max)]) }
+            if rng.chance(60) { q.activeMinutes = rng.pick(currents) }
+            if rng.chance(40) { q.activeMinutesGoal = rng.pick(goals) }
+            if rng.chance(60) { q.activeKcal = rng.pick(currents) }
+            if rng.chance(40) { q.activeKcalGoal = rng.pick(goals) }
+            if q.activeMinutes.isInfinite && q.activeMinutesGoal.isInfinite { q.activeMinutesGoal = 30 }
+            if q.activeKcal.isInfinite && q.activeKcalGoal.isInfinite { q.activeKcalGoal = 500 }
+            queries.append(q)
+        default: // tie: steps on a whole grid, minutes on a one-second grid, energy on a 0.1 kcal grid
+            let q = ActivityScore.Input(steps: rng.int(0, 12_000), stepGoal: rng.pick(stepGoalChoices),
+                                        activeMinutes: Double(rng.int(0, 2_400)) / 60, activeMinutesGoal: 30,
+                                        activeKcal: Double(rng.int(0, 7_000)) / 10, activeKcalGoal: 500)
+            let f = ActivityScore.score(q).factors
+            if f.count > 1 && scoresOverOrders(f, ActivityScore.factorWeights).count > 1 { queries.append(q) }
+        }
+    }
+    for (j, q) in queries.enumerated() {
+        c.inputs.append("q \(q.steps) \(q.stepGoal) \(d(q.activeMinutes)) \(d(q.activeMinutesGoal)) \(d(q.activeKcal)) \(d(q.activeKcalGoal))")
+        let r = ActivityScore.score(q)
+        c.goldens.append("acs \(j) \(r.score) \(r.tier.rawValue)" + actFactors.map { " " + optD(r.factors[$0]) }.joined())
+        hit("act-tier-\(r.tier.rawValue)")
+        hit("act-dropped-goal", r.factors.count < 3)
+        hit("act-no-factors", r.factors.isEmpty)
+        let ratios = [Double(q.steps) / Double(q.stepGoal), q.activeMinutes / q.activeMinutesGoal, q.activeKcal / q.activeKcalGoal]
+        hit("act-capped", ratios.contains { $0 > 1 })
+        hit("act-nonfinite", [q.activeMinutes, q.activeMinutesGoal, q.activeKcal, q.activeKcalGoal].contains { !$0.isFinite })
+        hit("act-order-sensitive", r.factors.count > 1 && scoresOverOrders(r.factors, ActivityScore.factorWeights).count > 1)
+    }
+    return c
+}
+
+let trendShapes = ["typical", "deadband", "extreme"]
+let trendCasesPerShape = 3
+let trendQueriesPerCase = 12
+
+func trendCase(_ index: Int) -> Case {
+    let shape = trendShapes[index / trendCasesPerShape]
+    var rng = SplitMix64(state: 0x5452_4E44 &+ UInt64(index))
+    var c = Case(id: String(format: "trend-%03d", index), kind: "trend", shape: shape)
+    let extremes = [Int(Int32.min), Int(Int32.min) + 1, -1, 0, 1, Int(Int32.max) - 1, Int(Int32.max)]
+    for j in 0..<trendQueriesPerCase {
+        var prior = (0..<rng.int(0, 14)).map { _ in rng.int(40, 95) }
+        var today = rng.int(30, 100)
+        var deadband = 3
+        switch shape {
+        case "deadband":
+            deadband = rng.pick([-5, -3, -1, 0, 1, 3, 10, Int(Int32.min), Int(Int32.max)])
+            if prior.isEmpty { prior = [rng.int(40, 95)] }
+            // Today a whole number of points from the prior mean's floor, so exact deadband hits occur.
+            today = prior.reduce(0, +) / prior.count + rng.int(-6, 6)
+        case "extreme":
+            prior = (0..<rng.int(1, 6)).map { _ in rng.pick(extremes) }
+            today = rng.pick(extremes)
+            deadband = rng.pick([3, 0, Int(Int32.min), Int(Int32.max)])
+        default: break
+        }
+        c.inputs.append("q \(today) \(deadband)" + ints(prior))
+        let t = WellnessBalance.trend(today: today, prior: prior, deadband: deadband)
+        c.goldens.append("trd \(j) \(t.rawValue)")
+        hit("trend-\(t.rawValue)")
+        hit("trend-negative-deadband", deadband < 0)
+        hit("trend-empty", prior.isEmpty)
+        let sum = prior.reduce(0, +)
+        hit("trend-64-bit", sum > Int(Int32.max) || sum < Int(Int32.min))
+    }
+    return c
+}
+
 // MARK: - Main
 
 let args = CommandLine.arguments
@@ -1078,6 +1280,9 @@ let cases = (0..<(rrShapes.count * rrCasesPerShape)).map(rrCase)
     + (0..<(dayShapes.count * dayCasesPerShape)).map(dayCase)
     + (0..<(baseShapes.count * baseCasesPerShape)).map(baseCase)
     + (0..<(tempShapes.count * tempCasesPerShape)).map(tempCase)
+    + (0..<(wbShapes.count * wbCasesPerShape)).map(wbCase)
+    + (0..<(actShapes.count * actCasesPerShape)).map(actCase)
+    + (0..<(trendShapes.count * trendCasesPerShape)).map(trendCase)
 let header = "# Generated by android/tools/sleep-differential (VitalsDifferential) from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

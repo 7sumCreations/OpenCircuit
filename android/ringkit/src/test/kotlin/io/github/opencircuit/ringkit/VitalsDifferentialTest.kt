@@ -31,7 +31,11 @@ import kotlin.test.assertTrue
  * nights of skin temperature (coverage, both verdicts, both nightly means, baselines at several
  * windows, offset, band, anomaly flags and the night report — including partial, clustered, sparse and
  * thin nights, readings on the window's end, unsorted and duplicated nights, and unreadable readings,
- * nights and tonights). The format is documented at the top of the generator's `main.swift`.
+ * nights and tonights); readiness sub-scores (score, tier, anchored score and every factor — full,
+ * partial, out-of-range, unanchored, and inputs whose rounded score depends on the summation order),
+ * activity goals (score, tier and every factor — typical, disabled and unreadable goals, infinite and
+ * negative values, order-sensitive inputs) and readiness trends (deadbands negative to `Int.MAX`,
+ * prior sums that leave 32 bits). The format is documented at the top of the generator's `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
  * `d` + 16 hex digits), which must agree within 1e-9; every double that is not bit-identical is
@@ -108,6 +112,9 @@ class VitalsDifferentialTest {
         "day" -> renderDay(c)
         "base" -> renderBase(c)
         "temp" -> renderTemp(c)
+        "wb" -> renderWb(c)
+        "act" -> renderAct(c)
+        "trend" -> renderTrend(c)
         else -> error("unknown case kind ${c.kind} in ${c.id}")
     }
 
@@ -388,6 +395,38 @@ class VitalsDifferentialTest {
         return out
     }
 
+    /** One query per line → its fields after the `q` tag. */
+    private fun queries(c: VCase): List<List<String>> = c.lines.map { line ->
+        line.split(' ').also { check(it[0] == "q") { "${c.id}: bad query line $line" } }.drop(1)
+    }
+
+    /** Readiness sub-scores → score, tier, anchored score and the factors in declaration order. */
+    private fun renderWb(c: VCase): List<String> = queries(c).mapIndexed { j, f ->
+        fun opt(t: String): Int? = if (t == "-") null else t.toInt()
+        val input = WellnessBalance.Input(
+            sleepScore = opt(f[0]), overnightStress = opt(f[1]),
+            vitalsStatus = if (f[2] == "-") null else VitalsBaseline.Status.entries.single { it.rawValue == f[2] },
+            activityScore = opt(f[3]),
+        )
+        val r = WellnessBalance.score(input)
+        val anchored = WellnessBalance.anchoredScore(input)
+        "wbs $j ${r?.score ?: "-"} ${r?.tier?.rawValue ?: "-"} ${anchored?.score ?: "-"}" +
+            WellnessBalance.Result.Factor.entries.joinToString("") { " " + optD(r?.factors?.get(it)) }
+    }
+
+    /** Activity goals → score, tier and the factors in declaration order. */
+    private fun renderAct(c: VCase): List<String> = queries(c).mapIndexed { j, f ->
+        val r = ActivityScore.score(
+            ActivityScore.Input(f[0].toInt(), f[1].toInt(), toDouble(f[2]), toDouble(f[3]), toDouble(f[4]), toDouble(f[5])),
+        )
+        "acs $j ${r.score} ${r.tier.rawValue}" + ActivityScore.Result.Factor.entries.joinToString("") { " " + optD(r.factors[it]) }
+    }
+
+    /** Today, a deadband and prior daily scores → the trend. */
+    private fun renderTrend(c: VCase): List<String> = queries(c).mapIndexed { j, f ->
+        "trd $j ${WellnessBalance.trend(f[0].toInt(), f.drop(2).map { it.toInt() }, deadband = f[1].toInt()).rawValue}"
+    }
+
     // --- comparison ---
 
     /**
@@ -440,6 +479,16 @@ class VitalsDifferentialTest {
         "a reading on the window's end counts in the last hour" to (25..29).flatMap { k ->
             listOf("cov", "ver 0").map { Divergence("temp-%03d".format(k), it) }
         }.toSet(),
+        // PORTING D-89: the scores add their factors in declaration order, where upstream adds them in
+        // a dictionary's order (seeded per process; fixed here by the generator's deterministic
+        // hashing: sleep, vitals, activity, recovery for four readiness factors). Of the 49
+        // order-sensitive readiness queries, exactly these five round one point lower in that order
+        // (a probe on the pinned build gives the port's answer when summed in declaration order, and
+        // either answer across launches); the 24 order-sensitive activity queries agree.
+        "the scores add their factors in declaration order" to setOf(
+            Divergence("wb-010", "wbs 14"), Divergence("wb-011", "wbs 6"), Divergence("wb-011", "wbs 7"),
+            Divergence("wb-011", "wbs 8"), Divergence("wb-011", "wbs 14"),
+        ),
     )
 
     /** The tokens that identify a golden line among its case's lines: the first two for indexed kinds, else the first. */
@@ -449,6 +498,7 @@ class VitalsDifferentialTest {
                 "roll", "sum", "trimp", "strain", "trimphr", "kcal", "dist", "steps", "keytel", "basal", "baseline", "est",
                 "lplan", "aplan", "seed", "splan", "bad",
                 "rst", "z", "vst", "cls", "rep", "ver",
+                "wbs", "acs", "trd",
             )
         ) {
             2
@@ -564,6 +614,9 @@ class VitalsDifferentialTest {
             "base/unreadable",
             "temp/full", "temp/partial", "temp/clustered", "temp/sparse", "temp/thin", "temp/endreading", "temp/history",
             "temp/unreadable",
+            "wb/full", "wb/partial", "wb/edge", "wb/tie", "wb/unanchored",
+            "act/typical", "act/disabled", "act/edge", "act/tie",
+            "trend/typical", "trend/deadband", "trend/extreme",
         )
         for (s in expected) assertTrue((shapes[s] ?: 0) >= 3, "shape $s has ${shapes[s] ?: 0} cases")
 
@@ -592,6 +645,11 @@ class VitalsDifferentialTest {
             "temp-baseline", "temp-baseline-none", "temp-band-normal", "temp-band-abnormalRise", "temp-band-abnormalDrop", "temp-band-none",
             "temp-flag-abnormal", "temp-flag-fluct-rise", "temp-flag-fluct-drop", "temp-flag-gated", "temp-duplicated-nights",
             "temp-unreadable",
+            "wb-none", "wb-anchor-nil", "wb-renormalised", "wb-tier-excellent", "wb-tier-good", "wb-tier-needsImprovement",
+            "wb-clamped", "wb-order-sensitive",
+            "act-tier-excellent", "act-tier-good", "act-tier-needsImprovement", "act-dropped-goal", "act-no-factors", "act-capped",
+            "act-nonfinite", "act-order-sensitive",
+            "trend-up", "trend-steady", "trend-down", "trend-negative-deadband", "trend-empty", "trend-64-bit",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }
