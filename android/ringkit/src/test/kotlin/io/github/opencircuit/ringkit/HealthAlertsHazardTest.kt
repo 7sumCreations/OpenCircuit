@@ -8,6 +8,7 @@ import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -311,6 +312,73 @@ class HealthAlertsHazardTest {
         // Duplicated candidates fire once each, in declaration order (measured: [highHR, fever]).
         val dup = listOf(HealthNotification.FEVER, HealthNotification.FEVER, HealthNotification.HIGH_HR, HealthNotification.HIGH_HR)
         assertEquals(listOf(HealthNotification.HIGH_HR, HealthNotification.FEVER), NotificationGate().filter(dup, t0, emptyMap(), off, utc))
+    }
+
+    // MARK: the temperature / fever routing and its per-night ledger
+
+    @Test
+    fun dayKeysAre64BitAndAgreeWithUpstreamFromTheGregorianSwitchOn() {
+        // Night keys are `year * 10 000 + month * 100 + day`. Measured upstream (UTC; New York): from
+        // 1582-10-15 on the keys agree — including past year 214 748, where a 32-bit key would wrap.
+        val ny = ZoneId.of("America/New_York")
+        val measured = listOf(
+            -12_219_292_800L to (15_821_015L to null), // 1582-10-15 00:00 UTC (New York's local date is the 14th — see below)
+            -12_219_206_400L to (15_821_016L to 15_821_015L),
+            -2_208_988_800L to (19_000_101L to 18_991_231L),
+            0L to (19_700_101L to 19_691_231L),
+            1_781_697_600L to (20_260_617L to 20_260_617L),
+            41_024_448_000L to (32_700_105L to 32_700_104L),
+            10_000_000_000_000L to (3_188_570_520L to 3_188_570_520L),
+        )
+        for ((s, keys) in measured) {
+            val t = Instant.ofEpochSecond(s)
+            assertEquals(keys.first, TempFeverNotifications.dayKey(t, utc), "UTC @ $s")
+            keys.second?.let { assertEquals(it, TempFeverNotifications.dayKey(t, ny), "New York @ $s") }
+        }
+        // KEPT DIFFERENCE: before 1582-10-15 Foundation's Gregorian calendar switches to the Julian one
+        // (measured: 1582-10-14 UTC → 15821004, New York's 1582-10-14 evening → 15821004), and far before
+        // year 1 it returns garbage (−1e13 s → 47130101). Here the calendar is the proleptic Gregorian
+        // one throughout: a ring's dates start in 2000.
+        assertEquals(15_821_014L, TempFeverNotifications.dayKey(Instant.ofEpochSecond(-12_219_379_200L), utc))
+        assertEquals(15_821_014L, TempFeverNotifications.dayKey(Instant.ofEpochSecond(-12_219_292_800L), ny))
+        assertTrue(assertNotNull(TempFeverNotifications.dayKey(Instant.ofEpochSecond(-10_000_000_000_000L), utc)) < 0L, "a negative year keys below zero")
+        // Both 2026 New York clock changes key the zone's own calendar day (measured: 20260308, 20261101).
+        val dst = listOf(
+            "2026-03-08T06:30:00Z", "2026-03-08T07:00:00Z", "2026-03-08T07:30:00Z",
+            "2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z", "2026-11-01T07:30:00Z",
+        ).map { TempFeverNotifications.dayKey(Instant.parse(it), ny) }
+        assertEquals(listOf(20_260_308L, 20_260_308L, 20_260_308L, 20_261_101L, 20_261_101L, 20_261_101L), dst)
+        // An instant java.time cannot place in the zone has no key (null), in every zone; nothing throws.
+        for (z in listOf(utc, ny, ZoneId.of("Pacific/Kiritimati"))) {
+            assertNull(TempFeverNotifications.dayKey(Instant.MAX, z))
+            assertNull(TempFeverNotifications.dayKey(Instant.MIN, z))
+        }
+    }
+
+    @Test
+    fun thePerNightLedgerComparesKeysAsNumbersAndKeepsDuplicates() {
+        // Measured: [fever, fever, highHR] for night 20260617 with fever last notified 20260616 → all
+        // three kept, in order (a candidate not in the ledger always passes).
+        val cands = listOf(HealthNotification.FEVER, HealthNotification.FEVER, HealthNotification.HIGH_HR)
+        assertEquals(cands, TempFeverNotifications.freshForNight(cands, night = 20_260_617L, lastNotifiedNight = mapOf(HealthNotification.FEVER to 20_260_616L)))
+        // Stored keys at the ends of Long: only a strictly newer night passes.
+        val f = listOf(HealthNotification.FEVER)
+        assertEquals(emptyList(), TempFeverNotifications.freshForNight(f, Long.MIN_VALUE, mapOf(HealthNotification.FEVER to Long.MAX_VALUE)))
+        assertEquals(emptyList(), TempFeverNotifications.freshForNight(f, Long.MAX_VALUE, mapOf(HealthNotification.FEVER to Long.MAX_VALUE)))
+        assertEquals(f, TempFeverNotifications.freshForNight(f, Long.MAX_VALUE, mapOf(HealthNotification.FEVER to Long.MIN_VALUE)))
+        assertEquals(f, TempFeverNotifications.freshForNight(f, 0L, mapOf(HealthNotification.FEVER to -1L)))
+        // Routing: every combination of the four flags and the fever flag raises exactly the flags set,
+        // in declaration order, all inside the temperature / fever set.
+        for (bits in 0 until 32) {
+            val flags = SkinTempBaseline.AnomalyFlags(bits and 1 != 0, bits and 2 != 0, bits and 4 != 0, bits and 8 != 0)
+            val out = TempFeverNotifications.notifications(flags, feverSuspected = bits and 16 != 0)
+            val expected = listOf(
+                HealthNotification.SKIN_TEMP_RISE, HealthNotification.SKIN_TEMP_DROP, HealthNotification.SKIN_TEMP_FLUCTUATION_RISE,
+                HealthNotification.SKIN_TEMP_FLUCTUATION_DROP, HealthNotification.FEVER,
+            ).filterIndexed { i, _ -> bits and (1 shl i) != 0 }
+            assertEquals(expected, out, "bits $bits")
+            assertTrue(TempFeverNotifications.NOTIFICATION_SET.containsAll(out))
+        }
     }
 
     @Test

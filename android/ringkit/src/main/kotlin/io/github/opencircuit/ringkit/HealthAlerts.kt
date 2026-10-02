@@ -2,7 +2,7 @@ package io.github.opencircuit.ringkit
 
 // Local health-alert policy — the PURE decision layer shared by the high-HR / low-SpO₂ /
 // elevated-HR-while-inactive alerts and the skin-temperature / fever notifications. Port of upstream
-// ios/OpenCircuitKit/Sources/OpenCircuitKit/HealthAlerts.swift (@ b1c2fdd), `:1-453`, plus the alert
+// ios/OpenCircuitKit/Sources/OpenCircuitKit/HealthAlerts.swift (@ b1c2fdd), `:1-528`, plus the alert
 // look-back from upstream's app (`HealthNotificationCenter.swift:207`, `:229-231`). `StepWindow`
 // (`:182-189`), which the daily energy estimate also takes, keeps its place at the top.
 //
@@ -18,6 +18,7 @@ package io.github.opencircuit.ringkit
 
 import java.time.Instant
 import java.time.ZoneId
+import java.util.Collections
 
 /**
  * One step-count snapshot's observation window and step delta, carrying the device's own timestamps.
@@ -409,6 +410,61 @@ object HealthAlertEvaluator {
         }
         return hits
     }
+}
+
+// MARK: - temperature / fever routing (skin-temperature flags + fever → notifications)
+
+object TempFeverNotifications {
+
+    /**
+     * The skin-temperature / fever notifications — the ones that de-dupe per night. Single source of
+     * truth for every classifier; adding a skin-temperature case means adding it here once. Read-only.
+     */
+    val NOTIFICATION_SET: Set<HealthNotification> = Collections.unmodifiableSet(
+        linkedSetOf(
+            HealthNotification.SKIN_TEMP_RISE, HealthNotification.SKIN_TEMP_DROP, HealthNotification.SKIN_TEMP_FLUCTUATION_RISE,
+            HealthNotification.SKIN_TEMP_FLUCTUATION_DROP, HealthNotification.FEVER,
+        ),
+    )
+
+    /**
+     * Timezone-stable `yyyymmdd` day key for a night's start-of-day — `year * 10 000 + month * 100 +
+     * day` of its calendar date in [zone] — used as the per-night ledger key instead of a raw instant,
+     * which shifts under westward travel between two syncs of the same night. A `Long`, as Swift's
+     * 64-bit `Int` (a year past 214 748 overflows 32 bits). The calendar is the proleptic Gregorian one
+     * (Foundation's switches to the Julian before 1582-10-15). Null for an instant `java.time` cannot
+     * place in [zone] (the first and last year of `Instant`'s range).
+     */
+    fun dayKey(night: Instant, zone: ZoneId): Long? {
+        val d = CalendarDay.date(night, zone) ?: return null
+        return d.year.toLong() * 10_000L + d.monthValue * 100L + d.dayOfMonth
+    }
+
+    /**
+     * Map the four skin-temperature anomaly flags + the suspected-fever flag to the notifications they
+     * raise, in declaration order. Pure routing; the de-dupe / quiet-hours gate and posting are the app's.
+     */
+    fun notifications(flags: SkinTempBaseline.AnomalyFlags, feverSuspected: Boolean): List<HealthNotification> {
+        val out = mutableListOf<HealthNotification>()
+        if (flags.abnormalRise) out += HealthNotification.SKIN_TEMP_RISE
+        if (flags.abnormalDrop) out += HealthNotification.SKIN_TEMP_DROP
+        if (flags.fluctuationRise) out += HealthNotification.SKIN_TEMP_FLUCTUATION_RISE
+        if (flags.fluctuationDrop) out += HealthNotification.SKIN_TEMP_FLUCTUATION_DROP
+        if (feverSuspected) out += HealthNotification.FEVER
+        return out
+    }
+
+    /**
+     * Per-NIGHT de-dupe: each of these flags pertains to ONE overnight summary, so once notified for a
+     * night it must not re-fire on later syncs of that night (the 2 h backoff alone would re-raise it
+     * all day). Keeps the candidates whose [night] key is strictly newer than the last night already
+     * notified for that candidate (a candidate with no entry always passes); order and duplicates kept.
+     */
+    fun freshForNight(candidates: List<HealthNotification>, night: Long, lastNotifiedNight: Map<HealthNotification, Long>): List<HealthNotification> =
+        candidates.filter { n ->
+            val last = lastNotifiedNight[n]
+            last == null || night > last
+        }
 }
 
 // MARK: - the alert look-back (from upstream's app)

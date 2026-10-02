@@ -7,6 +7,7 @@ import java.time.ZoneId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -16,7 +17,7 @@ import kotlin.test.assertTrue
  * and the anti-spam de-dupe gate. No real health values.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/HealthAlertsTests.swift (@ b1c2fdd),
- * each test named after upstream's with its line.
+ * 46 of 46, each test named after upstream's with its line.
  *
  * ZONE. Upstream builds every `at(h, m)` in the machine's zone (`Calendar(identifier: .gregorian)`)
  * and calls the quiet-hours gate with `Calendar.current`, so its instants and its gate always agree
@@ -433,6 +434,67 @@ class HealthAlertsTest {
                 quietHours = QuietHours(enabled = false), zone = zone,
             ).isEmpty(),
         )
+    }
+
+    // MARK: temperature / fever flag routing
+
+    @Test
+    fun tempFeverRouting() { // :437
+        // Upstream sets two `var` flags on a fresh value; here the value is built with them.
+        val flags = SkinTempBaseline.AnomalyFlags(abnormalRise = true, fluctuationDrop = true)
+        val notifs = TempFeverNotifications.notifications(flags = flags, feverSuspected = true)
+        assertEquals(
+            setOf(HealthNotification.SKIN_TEMP_RISE, HealthNotification.SKIN_TEMP_FLUCTUATION_DROP, HealthNotification.FEVER),
+            notifs.toSet(),
+        )
+        assertTrue(TempFeverNotifications.notifications(flags = SkinTempBaseline.AnomalyFlags(), feverSuspected = false).isEmpty())
+    }
+
+    @Test
+    fun freshForNightDropsAlreadyNotifiedNight() { // :447
+        val night = assertNotNull(TempFeverNotifications.dayKey(at(3), zone)) // this overnight's summary
+        val cands = listOf(HealthNotification.SKIN_TEMP_FLUCTUATION_DROP, HealthNotification.FEVER)
+        // Same night already notified for the fluctuation drop → drop it, keep the unnotified fever.
+        val fresh = TempFeverNotifications.freshForNight(cands, night = night, lastNotifiedNight = mapOf(HealthNotification.SKIN_TEMP_FLUCTUATION_DROP to night))
+        assertEquals(listOf(HealthNotification.FEVER), fresh, "same night must not re-fire the same flag")
+        // No prior night for either → both survive.
+        assertEquals(cands, TempFeverNotifications.freshForNight(cands, night = night, lastNotifiedNight = emptyMap()))
+    }
+
+    @Test
+    fun freshForNightReArmsOnNewerNight() { // :459
+        val lastNightDate = assertNotNull(CalendarDay.startOfDay(at(3), zone))
+        val lastNight = assertNotNull(TempFeverNotifications.dayKey(lastNightDate, zone))
+        // Upstream: `cal.date(byAdding: .day, value: 1, to: lastNightDate)` — one calendar day later in the zone.
+        val newerNight = assertNotNull(TempFeverNotifications.dayKey(lastNightDate.atZone(zone).plusDays(1).toInstant(), zone))
+        val fresh = TempFeverNotifications.freshForNight(
+            listOf(HealthNotification.SKIN_TEMP_FLUCTUATION_DROP), night = newerNight,
+            lastNotifiedNight = mapOf(HealthNotification.SKIN_TEMP_FLUCTUATION_DROP to lastNight),
+        )
+        assertEquals(listOf(HealthNotification.SKIN_TEMP_FLUCTUATION_DROP), fresh, "a new night's summary re-arms the alert")
+        // A stale (older) recompute of a night we've moved past must not re-fire.
+        assertTrue(
+            TempFeverNotifications.freshForNight(
+                listOf(HealthNotification.SKIN_TEMP_FLUCTUATION_DROP), night = lastNight,
+                lastNotifiedNight = mapOf(HealthNotification.SKIN_TEMP_FLUCTUATION_DROP to newerNight),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun dayKeyIsTimezoneStableAcrossWestwardTravel() { // :474
+        // The SAME night instant, keyed after westward travel (offset decreasing) between two syncs.
+        val east = ZoneId.of("America/New_York") // UTC-4 in June
+        val west = ZoneId.of("America/Los_Angeles") // UTC-7 in June
+        // 2026-06-17 12:00 UTC → 08:00 in ET, 05:00 in PT: same calendar day in both zones.
+        val night = Instant.parse("2026-06-17T12:00:00Z")
+        assertEquals(
+            TempFeverNotifications.dayKey(night, east),
+            TempFeverNotifications.dayKey(night, west),
+            "day key must be stable across timezone shifts of the same night",
+        )
+        // Sanity: the discarded start-of-day instants really do differ across the two zones.
+        assertNotEquals(CalendarDay.startOfDay(night, east), CalendarDay.startOfDay(night, west))
     }
 
     // MARK: Quiet hours (DND)
