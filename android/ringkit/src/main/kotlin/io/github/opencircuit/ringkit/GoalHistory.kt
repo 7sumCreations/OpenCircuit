@@ -270,7 +270,7 @@ object GoalHistory {
             if (hasClock) {
                 // Widen rather than replace, so two nights landing on one wake day both guard.
                 val existing = creditedNight[day]
-                creditedNight[day] = if (existing == null) arrayOf(s!!, e!!) else arrayOf(minOf(existing[0], s!!), maxOf(existing[1], e!!))
+                creditedNight[day] = if (existing == null) arrayOf(s, e) else arrayOf(minOf(existing[0], s), maxOf(existing[1], e))
             }
         }
 
@@ -411,5 +411,5 @@ object GoalHistory {
     private fun readOnlyCopy(counts: Map<Ring, Int>): Map<Ring, Int> =
         Collections.unmodifiableMap(EnumMap<Ring, Int>(Ring::class.java).apply { putAll(counts) })
 
-    private fun ieeeEquals(a: Double?, b: Double?): Boolean = if (a == null || b == null) a == null && b == null else a.toDouble() == b.toDouble()
+    private fun ieeeEquals(a: Double?, b: Double?): Boolean = if (a == null || b == null) a == null && b == null else a == b
 }
