@@ -2,6 +2,7 @@ package io.github.opencircuit.ringkit
 
 import org.junit.jupiter.api.Timeout
 import java.time.Instant
+import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.test.Test
@@ -15,8 +16,13 @@ import kotlin.test.assertTrue
  * `src/test/resources/vitals-differential/`. This test runs the Kotlin port over the same inputs,
  * renders the same canonical lines and compares them: HRV (clean, RMSSD, rolling, summary), the
  * stress index, TRIMP and strain over heart-rate series, TRIMP and TRIMP energy over timestamped
- * samples (including days across both 2026 clock changes, duplicated and reversed samples), and the
- * profile energies (BMR, distance, steps, Keytel, resting-HR-scaled basal, resting-HR baseline).
+ * samples (including days across both 2026 clock changes, duplicated and reversed samples), the
+ * profile energies (BMR, distance, steps, Keytel, resting-HR-scaled basal, resting-HR baseline), and
+ * synthetic days of heart rate, step windows and sleep (resting HR and its daily values in a zone,
+ * the derived resting baseline, the thresholds, the elevated pieces, exercise minutes, the legacy
+ * daily estimate and the attributed estimate with every bucket at several widths — including days
+ * across both 2026 New York clock changes and a day without a midnight, duplicated and unsorted
+ * samples, windows that straddle the day's edges, and hostile windows and widths).
  * The format is documented at the top of the generator's `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
@@ -91,6 +97,7 @@ class VitalsDifferentialTest {
         "bpm" -> renderBpm(c)
         "hrs" -> renderHrs(c)
         "energy" -> renderEnergy(c)
+        "day" -> renderDay(c)
         else -> error("unknown case kind ${c.kind} in ${c.id}")
     }
 
@@ -168,6 +175,49 @@ class VitalsDifferentialTest {
         return out
     }
 
+    private fun milli(t: String): Instant = Instant.ofEpochMilli(t.toLong())
+
+    private fun renderDay(c: VCase): List<String> {
+        val p = tokens(c, "profile")
+        val profile = UserProfile(
+            age = p[0].toInt(), weightKg = toDouble(p[1]), heightCm = toDouble(p[2]),
+            sex = when (p[3]) { "male" -> BiologicalSex.MALE; "female" -> BiologicalSex.FEMALE; else -> error("bad sex ${p[3]}") },
+        )
+        val zone = ZoneId.of(tokens(c, "zone").single())
+        val day = milli(tokens(c, "day").single())
+        val steps = tokens(c, "steps").single().toInt()
+        val hr = tokens(c, "s").chunked(3).map { (bpm, start, end) -> HRSample(bpm.toInt(), milli(start), milli(end)) }
+        val windows = tokens(c, "w").chunked(3).map { (start, end, delta) -> StepWindow(milli(start), milli(end), delta.toInt()) }
+        val sleepWindow = tokens(c, "sw").let { if (it == listOf("-")) null else DateInterval(milli(it[0]), milli(it[1])) }
+        val segments = tokens(c, "seg").chunked(3).map { (start, end, stage) ->
+            SleepSegment(milli(start), milli(end), SleepStage.entries.single { it.rawValue == stage })
+        }
+        val widths = tokens(c, "bw").map { toDouble(it) }
+        val maxHR = maxOf(220 - profile.age, 1)
+
+        val daily = RestingHR.dailyValues(hr, segments, zone = zone)
+        val baseline = ExerciseMinutes.restingBaseline(hr)
+        val pieces = ExerciseMinutes.elevatedPieces(hr, maxHR, sleepWindow)
+        val legacy = Calories.legacyDailyEstimate(hr, steps, profile, sleepWindow)
+        val out = mutableListOf(
+            "rhr ${optD(RestingHR.value(hr, segments))}",
+            "rhrdaily ${daily.size}" + daily.joinToString("") { " ${it.day.toEpochMilli()} ${d(it.bpm)}" },
+            "rb ${optD(baseline)}",
+            "thr $maxHR ${ExerciseMinutes.threshold(maxHR)} ${ExerciseMinutes.threshold(maxHR, baseline)}",
+            "pieces ${pieces.size}" + pieces.joinToString("") { " ${it.start.toEpochMilli()} ${it.end.toEpochMilli()} ${it.bpm}" },
+            "minutes ${d(ExerciseMinutes.estimate(hr, maxHR, sleepWindow))} " +
+                d(ExerciseMinutes.estimate(hr, maxHR, sleepWindow, deriveRestingHR = true)),
+            "legacy ${d(legacy.activeKcal)} ${d(legacy.elevatedMinutes)}",
+        )
+        for ((k, w) in widths.withIndex()) {
+            val e = Calories.dailyEstimate(hr, steps, profile, sleepWindow, windows, dayStart = day, bucketSeconds = w)
+            out += "est $k ${d(e.activeKcal)} ${d(e.elevatedMinutes)} ${e.buckets.size}" + e.buckets.joinToString("") {
+                " ${it.start.toEpochMilli()} ${it.end.toEpochMilli()} ${d(it.hrKcal)} ${d(it.stepKcal)} ${d(it.elevatedMinutes)}"
+            }
+        }
+        return out
+    }
+
     // --- comparison ---
 
     /**
@@ -182,12 +232,18 @@ class VitalsDifferentialTest {
         "an unreadable resting-HR reading is missing" to (20..29).flatMap { k ->
             (10..13).map { q -> Divergence("energy-%03d".format(k), "basal $q") }
         }.toSet(),
+        // PORTING D-74: a bucket width below one second or above one billion seconds is not
+        // attributed (the legacy estimate, no buckets), where upstream attributes it (half-second
+        // buckets; one 2e9-second bucket). Widths 3 (0.5 s) and 4 (2e9 s) of every "hostile" day.
+        "a bucket width outside one second to one billion seconds is not attributed" to (44..47).flatMap { k ->
+            listOf(3, 4).map { w -> Divergence("day-%03d".format(k), "est $w") }
+        }.toSet(),
     )
 
     /** The tokens that identify a golden line among its case's lines: the first two for indexed kinds, else the first. */
     private fun lineKind(line: String): String {
         val t = line.split(' ')
-        val n = if (t[0] in setOf("roll", "sum", "trimp", "strain", "trimphr", "kcal", "dist", "steps", "keytel", "basal", "baseline")) 2 else 1
+        val n = if (t[0] in setOf("roll", "sum", "trimp", "strain", "trimphr", "kcal", "dist", "steps", "keytel", "basal", "baseline", "est")) 2 else 1
         return t.take(n).joinToString(" ")
     }
 
@@ -291,6 +347,8 @@ class VitalsDifferentialTest {
             "bpm/rest", "bpm/workout", "bpm/mixed", "bpm/short", "bpm/exact", "bpm/duplicated", "bpm/extreme",
             "hrs/day", "hrs/spring-forward", "hrs/fall-back", "hrs/reversed", "hrs/duplicated", "hrs/quarter-second", "hrs/sparse", "hrs/point",
             "energy/typical", "energy/edge-profile", "energy/nonfinite",
+            "day/workday", "day/spring-forward", "day/fall-back", "day/duplicated", "day/unsorted", "day/steps-only",
+            "day/hr-only", "day/straddle", "day/sparse", "day/sleep-heavy", "day/spans", "day/hostile",
         )
         for (s in expected) assertTrue((shapes[s] ?: 0) >= 3, "shape $s has ${shapes[s] ?: 0} cases")
 
@@ -305,6 +363,10 @@ class VitalsDifferentialTest {
             "bmr-negative", "dist-nonpositive", "keytel-zero", "keytel-positive",
             "scale-neutral", "scale-clamped-high", "scale-clamped-low", "scale-linear", "scale-nonfinite-input",
             "baseline-none", "baseline-plain-mean", "baseline-trimmed", "baseline-nonfinite",
+            "day-rhr-sleep-mean", "day-rhr-isolated", "day-rhr-multi-day", "day-clock-change", "day-no-midnight",
+            "day-baseline-derived", "day-baseline-none", "day-sleep-excluded", "day-pieces-none", "day-span-samples",
+            "day-attributed", "day-legacy-fallback", "day-netted-bucket", "day-residual-steps", "day-straddling-window",
+            "day-duplicated-samples", "day-subsecond-width", "day-wide-width",
         )) {
             assertTrue((coverage[branch] ?: 0) >= 1, "branch $branch never reached (${coverage[branch] ?: 0})")
         }

@@ -32,6 +32,16 @@
 //     w <k> <avgHR> <seconds>           Keytel workout energy query k
 //     r <k> <restingHR|-> <baseline|->  resting-HR-scaled basal energy query k
 //     prior <k> <minDays> <doubles>     resting-HR baseline query k (prior days, oldest first)
+//   kind day (one synthetic day of heart rate, step windows and sleep):
+//     profile <age> <weightKg> <heightCm> <male|female>
+//     zone <time zone identifier>       the zone the daily resting HR groups days in
+//     day <ms>                          the start of the local day (the attribution's day start)
+//     steps <int>                       the day's step counter
+//     s <bpm> <start ms> <end ms> ...   every heart-rate sample, in order, as triples on one line
+//     w <start ms> <end ms> <delta> ... every step window, in order, as triples on one line
+//     sw <start ms> <end ms> | sw -     the sleep window excluded from exercise and energy
+//     seg <start ms> <end ms> <stage> ...  the sleep segments (stage raw names), in order
+//     bw <doubles>                      the attribution bucket widths to evaluate
 //   end
 // goldens.txt, per case:
 //   case <id>
@@ -52,14 +62,24 @@
 //           keytel <k> <kcal>           Calories.workoutActiveKcal
 //           basal <k> <scale> <kcal/h>  Calories.restingEnergyScale / basalKcalPerHour
 //           baseline <k> <double|->     Calories.restingBaselineBpm(prior:minDays:)
+//   day:    rhr <double|->              RestingHR.value(hr:sleep:) over every sample and segment
+//           rhrdaily <n> (<day ms> <bpm>)*   RestingHR.dailyValues(hr:sleep:calendar:) in the zone
+//           rb <double|->               ExerciseMinutes.restingBaseline
+//           thr <maxHR> <int> <int>     ExerciseMinutes.threshold(maxHR:) and with the resting baseline
+//           pieces <n> (<start ms> <end ms> <bpm>)*   ExerciseMinutes.elevatedPieces (sleep excluded)
+//           minutes <double> <double>   ExerciseMinutes.estimate, shipped and personalised models
+//           legacy <kcal> <minutes>     Calories.legacyDailyEstimate
+//           est <k> <kcal> <minutes> <n> (<start ms> <end ms> <hrKcal> <stepKcal> <minutes>)*
+//                                       Calories.dailyEstimate with bucket width k and the day start
 //   end
 //
 // Shapes include, from the start, the inputs a deliberate difference from upstream would touch:
 // duplicated groups and samples, reversed samples, heart-rate days that cross both 2026 clock
-// changes in New York, and unreadable (NaN / infinite) resting HR and baseline readings.
+// changes in New York, unreadable (NaN / infinite) resting HR and baseline readings, and bucket
+// widths below one second and above one billion seconds.
 
 import Foundation
-import OpenCircuitKit
+@testable import OpenCircuitKit
 
 // MARK: - Deterministic randomness
 
@@ -442,6 +462,186 @@ func energyCase(_ index: Int) -> Case {
     return c
 }
 
+// MARK: - Synthetic days → resting HR, exercise minutes, the daily energy estimate
+
+let dayShapes = ["workday", "spring-forward", "fall-back", "duplicated", "unsorted", "steps-only",
+                 "hr-only", "straddle", "sparse", "sleep-heavy", "spans", "hostile"]
+let dayCasesPerShape = 4
+let dayZones = ["America/New_York", "Europe/Athens", "Asia/Kolkata", "Australia/Lord_Howe", "UTC", "America/Santiago"]
+let stageCycle: [SleepStage] = [.inBed, .asleepCore, .asleepDeep, .asleepCore, .asleepREM, .awake]
+let baseWidths: [Double] = [900, 300, 3600]
+let hostileWidths: [Double] = [900, 300, 3600, 0.5, 2e9]
+
+/// The start of a local day in `zone`.
+func localDayStart(_ zone: String, _ y: Int, _ m: Int, _ dd: Int) -> Date {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(identifier: zone)!
+    return cal.startOfDay(for: cal.date(from: DateComponents(year: y, month: m, day: dd, hour: 12))!)
+}
+
+func dayCase(_ index: Int) -> Case {
+    let shape = dayShapes[index / dayCasesPerShape]
+    let slot = index % dayCasesPerShape
+    var rng = SplitMix64(state: 0x4441_0000 &+ UInt64(index))
+    var zone = dayZones[index % dayZones.count]
+    var date = (2026, 6, 1 + index % 28)
+    switch shape {
+    case "spring-forward": zone = "America/New_York"; date = (2026, 3, 8)
+    case "fall-back": zone = "America/New_York"; date = (2026, 11, 1)
+    case "workday" where slot == 3: zone = "America/Santiago"; date = (2026, 9, 6) // a day without a midnight
+    default: break
+    }
+    let day = localDayStart(zone, date.0, date.1, date.2)
+    func at(_ seconds: Int) -> Date { day.addingTimeInterval(Double(seconds)) }
+    let profile = UserProfile(age: rng.int(20, 70), weightKg: rng.real(45, 120), heightCm: rng.real(150, 200),
+                              sex: rng.chance(50) ? .male : .female)
+    let maxHR = max(220 - profile.age, 1)
+
+    var hr: [HRSample] = []
+    var windows: [StepWindow] = []
+    var segments: [SleepSegment] = []
+    var sleepWindow: DateInterval?
+    func epochs(_ a: Int, _ b: Int, cadence: Int, _ bpm: () -> Int) {
+        var t = a
+        while t < b { hr.append(HRSample(bpm: bpm(), start: at(t))); t += cadence }
+    }
+    func walk(_ a: Int, minutes: Int, steps: Int) {
+        windows.append(StepWindow(start: at(a), end: at(a + minutes * 60), delta: steps))
+    }
+
+    // The night before (an evening hour, then asleep), tiled by sleep segments.
+    let night = shape != "sparse"
+    let sleepStart = -rng.int(1, 3) * 3600 - rng.int(0, 3) * 900
+    let sleepEnd = rng.int(5, 7) * 3600 + rng.int(0, 3) * 900
+    let rest = rng.int(48, 66)
+    if night {
+        epochs(sleepStart - 3600, sleepEnd, cadence: 150) { rest + rng.int(-4, 8) }
+        var t = sleepStart
+        var k = 0
+        while t < sleepEnd {
+            let end = min(t + rng.int(2, 6) * 900, sleepEnd)
+            segments.append(SleepSegment(start: at(t), end: at(end), stage: stageCycle[k % stageCycle.count]))
+            t = end
+            k += 1
+        }
+        sleepWindow = DateInterval(start: at(sleepStart), end: at(sleepEnd))
+    }
+    // Daytime spot reads at the auto-measure cadence, then the next night's start.
+    epochs(sleepEnd + 600, 22 * 3600, cadence: 600) { rng.int(60, shape == "steps-only" ? 85 : 98) }
+    if night { epochs(24 * 3600 + 1800, 27 * 3600, cadence: 150) { rest + rng.int(-4, 8) } }
+    // Bouts of elevated heart rate, some with a walk inside them.
+    let bouts = ["steps-only", "sparse", "hostile"].contains(shape) ? 0 : rng.int(1, 3)
+    for _ in 0..<bouts {
+        let a = rng.int(32, 80) * 900
+        let minutes = rng.int(2, 12) * 5
+        let lo = rng.chance(30) ? maxHR / 2 : maxHR / 2 + rng.int(5, 30)
+        let hi = min(lo + rng.int(5, 40), 200)
+        epochs(a, a + minutes * 60, cadence: 150) { rng.int(lo, hi) }
+        if shape != "hr-only", rng.chance(50) { walk(a, minutes: minutes, steps: rng.int(100, minutes * 120)) }
+    }
+    if shape == "sleep-heavy", night {
+        epochs(sleepStart + 1800, sleepStart + 3000, cadence: 150) { rng.int(maxHR / 2 + 10, maxHR / 2 + 40) }
+    }
+    // Step windows across the waking day.
+    if shape != "hr-only" {
+        for _ in 0..<(shape == "hostile" ? 3 : rng.int(5, 12)) {
+            let minutes = shape == "hostile" ? rng.int(1, 2) : rng.pick([5, 10, 15, 15, 30, 45, 90])
+            walk(rng.int(28, 86) * 900 + rng.pick([0, 0, 300, 450]), minutes: minutes, steps: rng.int(20, minutes * 130))
+        }
+    }
+    switch shape {
+    case "straddle":
+        walk(-2700, minutes: 90, steps: rng.int(300, 900))            // opened before midnight
+        walk(25 * 3600, minutes: 90, steps: rng.int(300, 900))        // runs past the 26 h span
+        walk(12 * 3600, minutes: 0, steps: rng.int(10, 200))           // a point snapshot
+    case "hostile":
+        windows += [StepWindow(start: at(36_000), end: at(32_400), delta: 500),   // ends before it starts
+                    StepWindow(start: at(40_000), end: at(43_600), delta: -300),  // negative delta
+                    StepWindow(start: at(30 * 3600), end: at(31 * 3600), delta: 200), // outside the day
+                    StepWindow(start: at(50_000), end: at(50_000), delta: 0)]
+    case "spans":
+        hr = hr.map { s in
+            if rng.chance(20) { return HRSample(bpm: s.bpm, start: s.start, end: s.start.addingTimeInterval(Double(rng.int(1, 8) * 60))) }
+            if rng.chance(5) { return HRSample(bpm: s.bpm, start: s.start, end: s.start.addingTimeInterval(-300)) }
+            return s
+        }
+    case "duplicated":
+        hr = hr.flatMap { [$0, $0] }
+        windows += windows.prefix(2)
+    case "unsorted":
+        hr = hr.shuffledDeterministically(&rng)
+        windows = windows.shuffledDeterministically(&rng)
+        segments = segments.shuffledDeterministically(&rng)
+    case "sparse" where slot == 0:
+        windows = [] // a step count with no windows to place it: the legacy degrade
+    default: break
+    }
+    let placed = windows.filter { $0.delta > 0 }.reduce(0) { $0 + $1.delta }
+    let steps = shape == "hr-only" ? 0 : (shape == "hostile" && slot == 0 ? -50 : max(0, placed + rng.int(-200, 900)))
+    let widths = shape == "hostile" ? hostileWidths : baseWidths
+
+    var c = Case(id: String(format: "day-%03d", index), kind: "day", shape: shape)
+    let sex = profile.sex == .male ? "male" : "female"
+    c.inputs = [
+        "profile \(profile.age) \(d(profile.weightKg)) \(d(profile.heightCm)) \(sex)",
+        "zone \(zone)",
+        "day \(ms(day))",
+        "steps \(steps)",
+        "s" + hr.map { " \($0.bpm) \(ms($0.start)) \(ms($0.end))" }.joined(),
+        "w" + windows.map { " \(ms($0.start)) \(ms($0.end)) \($0.delta)" }.joined(),
+        sleepWindow.map { "sw \(ms($0.start)) \(ms($0.end))" } ?? "sw -",
+        "seg" + segments.map { " \(ms($0.start)) \(ms($0.end)) \($0.stage.rawValue)" }.joined(),
+        "bw" + widths.map { " " + d($0) }.joined(),
+    ]
+
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(identifier: zone)!
+    let rhr = RestingHR.value(hr: hr, sleep: segments)
+    let daily = RestingHR.dailyValues(hr: hr, sleep: segments, calendar: cal)
+    let baseline = ExerciseMinutes.restingBaseline(hr)
+    let pieces = ExerciseMinutes.elevatedPieces(hrSamples: hr, maxHR: maxHR, sleepWindow: sleepWindow)
+    let legacy = Calories.legacyDailyEstimate(hrSamples: hr, steps: steps, profile: profile, sleepWindow: sleepWindow)
+    c.goldens.append("rhr \(optD(rhr))")
+    c.goldens.append("rhrdaily \(daily.count)" + daily.map { " \(ms($0.day)) \(d($0.bpm))" }.joined())
+    c.goldens.append("rb \(optD(baseline))")
+    c.goldens.append("thr \(maxHR) \(ExerciseMinutes.threshold(maxHR: maxHR)) \(ExerciseMinutes.threshold(maxHR: maxHR, restingHR: baseline))")
+    c.goldens.append("pieces \(pieces.count)" + pieces.map { " \(ms($0.start)) \(ms($0.end)) \($0.bpm)" }.joined())
+    c.goldens.append("minutes \(d(ExerciseMinutes.estimate(hrSamples: hr, maxHR: maxHR, sleepWindow: sleepWindow))) "
+                     + d(ExerciseMinutes.estimate(hrSamples: hr, maxHR: maxHR, sleepWindow: sleepWindow, deriveRestingHR: true)))
+    c.goldens.append("legacy \(d(legacy.activeKcal)) \(d(legacy.elevatedMinutes))")
+    for (k, w) in widths.enumerated() {
+        let e = Calories.dailyEstimate(hrSamples: hr, steps: steps, profile: profile, sleepWindow: sleepWindow,
+                                       stepWindows: windows, dayStart: day, bucketSeconds: w)
+        c.goldens.append("est \(k) \(d(e.activeKcal)) \(d(e.elevatedMinutes)) \(e.buckets.count)"
+                         + e.buckets.map { " \(ms($0.start)) \(ms($0.end)) \(d($0.hrKcal)) \(d($0.stepKcal)) \(d($0.elevatedMinutes))" }.joined())
+        hit("day-attributed", !e.buckets.isEmpty)
+        hit("day-legacy-fallback", e.buckets.isEmpty)
+        hit("day-netted-bucket", e.buckets.contains { $0.hrKcal > 0 && $0.stepKcal > 0 })
+        hit("day-subsecond-width", w < 1 && !e.buckets.isEmpty)
+        hit("day-wide-width", w > 1e9 && !e.buckets.isEmpty)
+    }
+
+    let valid = hr.filter { LiveHR.validBPM.contains($0.bpm) }
+    let sleepMean = RestingHR.sleepMean(hr: valid, sleep: segments, minSleepSamples: RestingHR.minSleepSamples)
+    let sustained = RestingHR.hasSustainedWindow(hr: valid, window: RestingHR.sustainedWindow)
+    let threshold = ExerciseMinutes.threshold(maxHR: maxHR)
+    hit("day-rhr-sleep-mean", sleepMean != nil)
+    hit("day-rhr-sustained", rhr != nil && sleepMean == nil && sustained)
+    hit("day-rhr-isolated", rhr != nil && sleepMean == nil && !sustained)
+    hit("day-rhr-multi-day", daily.count >= 3)
+    hit("day-clock-change", shape == "spring-forward" || shape == "fall-back")
+    hit("day-no-midnight", zone == "America/Santiago" && date == (2026, 9, 6))
+    hit("day-baseline-derived", baseline != nil)
+    hit("day-baseline-none", baseline == nil)
+    hit("day-sleep-excluded", sleepWindow.map { w in hr.contains { $0.bpm >= threshold && w.contains($0.start) } } ?? false)
+    hit("day-pieces-none", pieces.isEmpty)
+    hit("day-span-samples", hr.contains { $0.end != $0.start })
+    hit("day-residual-steps", steps > placed)
+    hit("day-straddling-window", shape == "straddle")
+    hit("day-duplicated-samples", shape == "duplicated")
+    return c
+}
+
 // MARK: - Main
 
 let args = CommandLine.arguments
@@ -456,6 +656,7 @@ let cases = (0..<(rrShapes.count * rrCasesPerShape)).map(rrCase)
     + (0..<(bpmShapes.count * bpmCasesPerShape)).map(bpmCase)
     + (0..<(hrsShapes.count * hrsCasesPerShape)).map(hrsCase)
     + (0..<(energyShapes.count * energyCasesPerShape)).map(energyCase)
+    + (0..<(dayShapes.count * dayCasesPerShape)).map(dayCase)
 let header = "# Generated by android/tools/sleep-differential (VitalsDifferential) from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]
