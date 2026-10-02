@@ -365,11 +365,11 @@ object HealthAlertEvaluator {
     /**
      * Drop HR samples whose DEVICE timestamp lies inside any activity interval `[start, end]` or within
      * [pad] seconds after its end (the recovery tail). Only ever SUPPRESSES on positive evidence: no
-     * intervals → the series unchanged. A NaN pad is 0 (upstream's NaN bound would swallow every later
-     * reading).
+     * intervals → the series unchanged (a copy: the caller editing its list later changes nothing here,
+     * as with upstream's array). A NaN pad is 0 (upstream's NaN bound would swallow every later reading).
      */
     fun nonExercising(hr: List<HRSample>, activeIntervals: List<ActivityInterval>, pad: Double = RECOVERY_PAD): List<HRSample> {
-        if (activeIntervals.isEmpty()) return hr
+        if (activeIntervals.isEmpty()) return hr.toList()
         val tail = if (pad.isNaN()) 0.0 else pad
         val spans = activeIntervals.map { it.start to checkNotNull(addingSeconds(it.end, tail)) }
         return hr.filter { sample -> spans.none { (from, to) -> sample.start >= from && sample.start <= to } }
