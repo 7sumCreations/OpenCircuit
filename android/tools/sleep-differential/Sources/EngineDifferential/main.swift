@@ -34,6 +34,18 @@
 //   kind angles (the platform's cos, sin and log at the regularity's own arguments):
 //     range <lo> <hi>                   bedtime minutes lo..<hi
 //     lx <doubles>                      arguments for log (values of R in (0, 1])
+//   kind assess (one day of the headache signals index; times are seconds since 1970):
+//     d <day> <now> <lastRingData|-> <truncated 0/1> <fever 0/1> <logged 0/1> <perimenstrual 0/1/->
+//       <skinTempOffset|-> <inBedStart|-> <dayHRPrevious|-> <dayHRTwoDaysAgo|->
+//     s <rhr|hrv|eff|frag|dur> <today> <prior doubles>   one per series present
+//     b <prior in-bed starts>           h <prior day HRs>           i <prior frozen indices>
+//   kind ix (the same day lines, then one series' today swept):
+//     x <series> <today0> <step> <count>   today_k = today0 + k · step
+//   kind pct:   p <sorted doubles>      f <fractions>
+//   kind rank:  r <positives count> <doubles>   (the first <count> are the positives)
+//   kind se:    n <nPos> <nNeg>         a <aucs>
+//   kind tail:  q <observed> <flagged> <positives> <total>   (one line each)
+//               w <successes> <trials> <z>                   (one line each)
 //   end
 // goldens.txt, per case:
 //   case <id>
@@ -49,6 +61,17 @@
 //   flat:   fl <x0> <tokens>            the regularity of [x] * count for x = x0 ..< x0 + 144
 //   angles: cs <m0> (<cos> <sin>)*      cos and sin of 2π·m/1440 for m = m0 ..< m0 + 40
 //           ln <doubles>                log of each lx argument
+//   assess: v scored <index> <band raw> <ring features> <coverage> <suppression|->
+//           | v building <days> | v interrupted <since|-> | v insufficient (<feature>=<reason>)*
+//           c (<feature> <z|-> <contribution|-> <effectiveWeight> <absentReason|->)*  or "c -"
+//           q <100 · weighted / total, the quotient the index is rounded from>     or "q -"
+//   ix:     ix <k0> <64 indices>        iq <k0> <64 quotients>
+//   pct:    pc <HeadacheSignals.percentile(sorted, f) per fraction>
+//   rank:   mr <HeadacheEvaluation.midranks(values)>
+//           au <auc(positives, negatives)|-> <hanleyMcNeilSE(auc, nPos, nNeg)|->
+//   se:     se <hanleyMcNeilSE(auc, nPos, nNeg)|-> per auc
+//   tail:   tl (<hypergeometricUpperTail|-> <w if ≤ 0.01, n if not, - if nil>)* per q line
+//           wl <wilsonUpperBound|-> per w line
 //   end
 // coverage.txt: "branch <name> <count>" for every name reached, sorted.
 //
@@ -398,6 +421,339 @@ func anglesCase(_ index: Int) -> Case {
     return c
 }
 
+// MARK: - Headache signals: the whole assessment, the index's rounding, the percentile
+
+let hsDay = 1_753_660_800
+let hsSeriesNames = ["rhr", "hrv", "eff", "frag", "dur"]
+let hsSeriesBases: [Double] = [60, 50, 90, 40, 420]
+
+/// One day's input, as plain values (the Kotlin test builds the same `DayInput` from these lines).
+struct HSDay {
+    var day = hsDay
+    var now = hsDay + 8 * 3600
+    var last: Int? = hsDay + 7 * 3600
+    var series: [String: (today: Double, prior: [Double])] = [:]
+    var offset: Double? = 0
+    var inBed: Int? = 1_380
+    var priorInBed: [Int] = Array(repeating: 1_380, count: 14)
+    var prev: Double? = 70
+    var prev2: Double? = 70
+    var dayHRPrior: [Double] = Array(repeating: 70, count: 14)
+    var peri: Bool? = false
+    var truncated = false
+    var fever = false
+    var logged = false
+    var priorIndices: [Int] = []
+
+    func input() -> HeadacheSignals.DayInput {
+        func s(_ name: String) -> HeadacheSignals.Series? { series[name].map { HeadacheSignals.Series(today: $0.today, prior: $0.prior) } }
+        return HeadacheSignals.DayInput(
+            day: Date(timeIntervalSince1970: Double(day)), now: Date(timeIntervalSince1970: Double(now)),
+            lastRingDataAt: last.map { Date(timeIntervalSince1970: Double($0)) },
+            restingHR: s("rhr"), hrvSDNN: s("hrv"), sleepEfficiencyPct: s("eff"),
+            sleepFragmentationMin: s("frag"), sleepDurationMin: s("dur"), skinTempOffsetC: offset,
+            inBedStartMinutes: inBed, priorInBedStartMinutes: priorInBed, dayHRPrevious: prev,
+            dayHRTwoDaysAgo: prev2, dayHRPrior: dayHRPrior, isPerimenstrual: peri,
+            sleepLikelyTruncated: truncated, feverSuspected: fever, headacheAlreadyLoggedToday: logged,
+            priorIndices: priorIndices)
+    }
+
+    func lines() -> [String] {
+        func b(_ x: Bool) -> String { x ? "1" : "0" }
+        var out = ["d \(day) \(now) \(optI(last)) \(b(truncated)) \(b(fever)) \(b(logged)) \(peri.map(b) ?? "-") \(optD(offset)) \(optI(inBed)) \(optD(prev)) \(optD(prev2))"]
+        for name in hsSeriesNames {
+            if let s = series[name] { out.append("s \(name) \(d(s.today))" + s.prior.map { " " + d($0) }.joined()) }
+        }
+        out.append("b" + ints(priorInBed))
+        out.append("h" + dayHRPrior.map { " " + d($0) }.joined())
+        out.append("i" + ints(priorIndices))
+        return out
+    }
+}
+
+/// The verdict in three canonical lines: `v …`, `c …` (every contribution, or "-"), `q …` (the
+/// weighted quotient the index is rounded from, or "-").
+func renderVerdict(_ v: HeadacheSignals.Verdict) -> [String] {
+    switch v {
+    case .notEnabled:
+        return ["v notEnabled", "c -", "q -"]
+    case .buildingBaseline(let n):
+        hit("assess-building")
+        return ["v building \(n)", "c -", "q -"]
+    case .interrupted(let since):
+        hit("assess-interrupted")
+        return ["v interrupted " + (since.map { String(Int($0.timeIntervalSince1970)) } ?? "-"), "c -", "q -"]
+    case .insufficientData(let missing):
+        hit("assess-insufficient")
+        let tokens = HeadacheSignals.Feature.allCases.compactMap { f in missing[f].map { "\(f.rawValue)=\($0.rawValue)" } }
+        return ["v insufficient" + tokens.map { " " + $0 }.joined(), "c -", "q -"]
+    case .scored(let a):
+        hit("assess-scored")
+        let total = a.contributions.reduce(0.0) { $0 + $1.effectiveWeight }
+        let weighted = a.contributions.reduce(0.0) { $0 + $1.effectiveWeight * ($1.contribution ?? 0) }
+        let q = 100 * weighted / total
+        hit("assess-band-flagged", a.band == .flagged)
+        hit("assess-band-elevated", a.band == .elevated)
+        hit("assess-suppressed", a.suppressedBy != nil)
+        let quality = a.contributions.map { c -> Bool in
+            c.isPresent && c.effectiveWeight != c.feature.weight && c.effectiveWeight != c.feature.weight / 2
+        }
+        hit("assess-capped", quality.contains(true))
+        let cs = a.contributions.map { c in "\(c.feature.rawValue) \(optD(c.z)) \(optD(c.contribution)) \(d(c.effectiveWeight)) \(c.absentReason?.rawValue ?? "-")" }
+        return ["v scored \(a.index) \(a.band.rawValue) \(a.ringFeatureCount) \(d(a.coverageFraction)) \(a.suppressedBy?.rawValue ?? "-")",
+                "c " + cs.joined(separator: " "), "q \(d(q))"]
+    }
+}
+
+func randomSeries(_ rng: inout SplitMix64, base: Double, spread: Double, count: Int) -> [Double] {
+    (0..<count).map { _ in base + rng.real(-spread, spread) }
+}
+
+let assessShapes = ["typical", "deviant", "sparse", "cold", "gap", "flags", "extreme", "unreadable", "band", "capped"]
+let assessCasesPerShape = 4
+
+func assessCase(_ index: Int) -> Case {
+    let shape = assessShapes[index / assessCasesPerShape]
+    var rng = SplitMix64(state: 0x4853_0000 &+ UInt64(index))
+    var day = HSDay()
+    func fill(present: Int, deviation: Double, priorCount: ClosedRange<Int>) {
+        for (k, name) in hsSeriesNames.enumerated() where rng.chance(present) {
+            let base = hsSeriesBases[k]
+            let floor = [5.0, 8, 5, 15, 30][k]
+            let prior = randomSeries(&rng, base: base, spread: floor * rng.real(0, 1.5), count: rng.int(priorCount.lowerBound, priorCount.upperBound))
+            day.series[name] = (base + floor * rng.real(-deviation, deviation), prior)
+        }
+        day.offset = rng.chance(present) ? rng.real(-deviation / 2, deviation / 2) : nil
+        day.inBed = rng.chance(present) ? 1_380 + rng.int(-180, 180) : nil
+        day.priorInBed = (0..<rng.int(priorCount.lowerBound, priorCount.upperBound)).map { _ in 1_380 + rng.int(-40, 40) }
+        day.prev = rng.chance(present) ? 70 + rng.real(-deviation * 5, deviation * 5) : nil
+        day.prev2 = rng.chance(present) ? 70 + rng.real(-deviation * 5, deviation * 5) : nil
+        day.dayHRPrior = randomSeries(&rng, base: 70, spread: rng.real(0, 8), count: rng.int(priorCount.lowerBound, priorCount.upperBound))
+        day.peri = rng.chance(50) ? rng.chance(30) : nil
+    }
+    switch shape {
+    case "typical":
+        fill(present: 90, deviation: 1.5, priorCount: 14...60)
+    case "deviant":
+        fill(present: 95, deviation: 5, priorCount: 14...60)
+        day.priorIndices = (0..<rng.int(21, 80)).map { _ in rng.chance(40) ? 0 : rng.int(1, 60) }
+    case "sparse":
+        fill(present: 35, deviation: 3, priorCount: 7...30)
+        day.priorIndices = (0..<rng.int(0, 30)).map { _ in rng.int(0, 40) }
+    case "cold":
+        fill(present: 90, deviation: 2, priorCount: 0...8)
+    case "gap":
+        fill(present: 90, deviation: 2, priorCount: 14...30)
+        day.last = [nil, day.now - 24 * 3600, day.now - 24 * 3600 + 1, day.now + 3600][index % assessCasesPerShape]
+    case "flags":
+        fill(present: 90, deviation: 4, priorCount: 14...30)
+        day.truncated = true
+        day.fever = index % 2 == 0
+        day.logged = index % 4 >= 2
+        day.priorIndices = (0..<rng.int(21, 60)).map { _ in rng.int(0, 30) }
+    case "extreme":
+        // Finite extremes: they take the same path in the port as upstream.
+        fill(present: 95, deviation: 2, priorCount: 14...30)
+        day.series["rhr"]?.today = [1e308, -1e308, 1e-300, 70][index % assessCasesPerShape]
+        day.offset = [1e300, -1e300, 0.5, 1.0][index % assessCasesPerShape]
+        day.inBed = [Int(Int32.max), Int(Int32.min), -60, 1_440 * 3][index % assessCasesPerShape]
+        day.prev = [1e300, 70, -1e300, 70][index % assessCasesPerShape]
+    case "unreadable":
+        // A reading that cannot be read (NaN or infinite) among real ones: upstream reads it as an
+        // ordinary 0, the port as a missing reading (PORTING.md D-108). A NaN offset traps upstream,
+        // so the offset here is only ever infinite.
+        fill(present: 100, deviation: 1, priorCount: 14...30)
+        day.series["eff"]?.today = 70 // one real deviation, so the denominator shows
+        let bad = [Double.nan, .infinity, -.infinity][index % 3]
+        day.series[["rhr", "hrv", "frag", "dur"][index % 4]]?.today = bad
+        if index % 2 == 1 { day.offset = index % 4 == 1 ? .infinity : -.infinity }
+        if index % 4 == 2 { day.prev = .nan }
+        hit("assess-unreadable-input")
+    case "band":
+        // One saturated feature over a user whose own trailing indices sit low: the index clears the
+        // band's percentiles but one feature can never flag — elevated.
+        for (k, name) in hsSeriesNames.enumerated() { day.series[name] = (hsSeriesBases[k], randomSeries(&rng, base: hsSeriesBases[k], spread: 1, count: 20)) }
+        day.series["eff"]?.today = 70
+        day.priorIndices = (0..<rng.int(21, 70)).map { _ in rng.int(0, 16 + 4 * (index % 4)) }
+    case "capped":
+        // Four ring features, efficiency the largest: its share of the pool is over 35 % and is capped.
+        day.series["eff"] = (90 - rng.real(0, 25), randomSeries(&rng, base: 90, spread: 2, count: 20))
+        day.series["hrv"] = (50 + rng.real(-25, 25), randomSeries(&rng, base: 50, spread: 4, count: 20))
+        day.offset = rng.real(-1.5, 1.5)
+        day.inBed = 1_380 + rng.int(-120, 120)
+        day.prev = nil
+        day.peri = nil
+    default:
+        fatalError("unknown assess shape \(shape)")
+    }
+    var c = Case(id: String(format: "assess-%03d", index), kind: "assess", shape: shape)
+    c.inputs = day.lines()
+    c.goldens = renderVerdict(HeadacheSignals.assess(day.input()))
+    return c
+}
+
+/// One feature's today swept across a grid, the rest of the day held: the index's rounding at and
+/// around every half.
+let indexSweeps: [(name: String, today0: Double, step: Double, peri: Bool?, truncated: Bool)] = [
+    ("eff", 90, -1.0 / 64, false, false),
+    ("eff", 90, -1.0 / 64, nil, true),
+    ("frag", 40, 1.0 / 16, true, false),
+]
+let sweepCount = 512
+
+func indexSweepCase(_ index: Int) -> Case {
+    let sweep = indexSweeps[index]
+    var day = HSDay()
+    for (k, name) in hsSeriesNames.enumerated() { day.series[name] = (hsSeriesBases[k], Array(repeating: hsSeriesBases[k], count: 14)) }
+    day.peri = sweep.peri
+    day.truncated = sweep.truncated
+    var c = Case(id: String(format: "ix-%03d", index), kind: "ix", shape: "sweep")
+    c.inputs = day.lines() + ["x \(sweep.name) \(d(sweep.today0)) \(d(sweep.step)) \(sweepCount)"]
+    var indices: [Int] = []
+    var quotients: [String] = []
+    for k in 0..<sweepCount {
+        var probe = day
+        probe.series[sweep.name]?.today = sweep.today0 + Double(k) * sweep.step
+        guard case .scored(let a) = HeadacheSignals.assess(probe.input()) else { fatalError("sweep day did not score") }
+        let total = a.contributions.reduce(0.0) { $0 + $1.effectiveWeight }
+        let weighted = a.contributions.reduce(0.0) { $0 + $1.effectiveWeight * ($1.contribution ?? 0) }
+        let q = 100 * weighted / total
+        hit("ix-near-half", abs(q - q.rounded(.down) - 0.5) < 1e-9)
+        indices.append(a.index)
+        quotients.append(d(q))
+    }
+    for k0 in stride(from: 0, to: sweepCount, by: 64) {
+        c.goldens.append("ix \(k0)" + ints(Array(indices[k0..<(k0 + 64)])))
+        c.goldens.append("iq \(k0) " + quotients[k0..<(k0 + 64)].joined(separator: " "))
+    }
+    return c
+}
+
+let pctShapes = ["ints", "reals", "short"]
+
+func percentileCase(_ index: Int) -> Case {
+    let shape = pctShapes[index / 4]
+    var rng = SplitMix64(state: 0x5043_5400 &+ UInt64(index))
+    let n: Int
+    switch shape {
+    case "ints": n = rng.int(2, 80)
+    case "reals": n = rng.int(2, 80)
+    default: n = index % 4 // 0, 1, 2, 3 values
+    }
+    let values: [Double] = (0..<n).map { _ in shape == "reals" ? rng.real(-50, 150) : Double(rng.int(0, 100)) }
+    let sorted = values.sorted()
+    let fractions: [Double] = [0, 0.25, 0.5, 0.75, 0.9, 1] + (0..<10).map { _ in rng.real(0, 1) }
+    var c = Case(id: String(format: "pct-%03d", index), kind: "pct", shape: shape)
+    c.inputs = ["p" + sorted.map { " " + d($0) }.joined(), "f" + fractions.map { " " + d($0) }.joined()]
+    c.goldens = ["pc" + fractions.map { " " + d(HeadacheSignals.percentile(sorted, $0)) }.joined()]
+    hit("pct-empty", sorted.isEmpty)
+    hit("pct-single", sorted.count == 1)
+    hit("pct-interpolated", sorted.count > 1 && fractions.contains { f in let r = f * Double(sorted.count - 1); return r != r.rounded(.down) })
+    return c
+}
+
+// MARK: - Headache evaluation: ranks, the AUC and its error, the exact tail, the Wilson bound
+
+let rankShapes = ["ties", "signed", "unreadable", "long"]
+
+func rankCase(_ index: Int) -> Case {
+    let shape = rankShapes[index / 4]
+    var rng = SplitMix64(state: 0x524B_0000 &+ UInt64(index))
+    let n = shape == "long" ? rng.int(21, 70) : rng.int(1, 20)
+    let pool: [Double]
+    switch shape {
+    case "ties": pool = [0, 1, 2, 3, 4]
+    case "signed": pool = [0, -0.0, 1, -1, 0.5]
+    case "unreadable": pool = [.nan, .infinity, -.infinity, 0, 1, 2]
+    default: pool = [.nan, 0, 1, 2, 3, -0.0]
+    }
+    let values = (0..<n).map { _ in rng.pick(pool) }
+    let nPos = rng.int(0, n)
+    let ranks = HeadacheEvaluation.midranks(values)
+    let a = HeadacheEvaluation.auc(positiveScores: Array(values.prefix(nPos)), negativeScores: Array(values.dropFirst(nPos)))
+    let se = a.flatMap { HeadacheEvaluation.hanleyMcNeilSE(auc: $0, nPos: nPos, nNeg: n - nPos) }
+    hit("rank-ties", Set(values.map(\.bitPattern)).count < values.count)
+    hit("rank-signed-zero", values.contains { $0 == 0 && $0.sign == .minus })
+    hit("rank-nan", values.contains { $0.isNaN })
+    hit("rank-past-insertion-sort", n > 20)
+    hit("auc-nil", a == nil)
+    hit("auc-value", a != nil)
+    var c = Case(id: String(format: "rank-%03d", index), kind: "rank", shape: shape)
+    c.inputs = ["r \(nPos)" + values.map { " " + d($0) }.joined()]
+    c.goldens = ["mr" + ranks.map { " " + d($0) }.joined(), "au \(optD(a)) \(optD(se))"]
+    return c
+}
+
+func seCase(_ index: Int) -> Case {
+    let sizes = [(1, 1), (3, 5), (48, 312), (400, 7)][index]
+    let aucs: [Double] = (0...20).map { Double($0) / 20 } + [.nan, -0.5, 1.5, 0.66, 0.839]
+    var c = Case(id: String(format: "se-%03d", index), kind: "se", shape: "grid")
+    c.inputs = ["n \(sizes.0) \(sizes.1)", "a" + aucs.map { " " + d($0) }.joined()]
+    let ses = aucs.map { HeadacheEvaluation.hanleyMcNeilSE(auc: $0, nPos: sizes.0, nNeg: sizes.1) }
+    hit("se-nil", ses.contains { $0 == nil })
+    hit("se-value", ses.contains { $0 != nil })
+    c.goldens = ["se" + ses.map { " " + optD($0) }.joined()]
+    return c
+}
+
+let tailShapes = ["small", "year", "large", "edge"]
+let workingAlphaForTokens = 0.01
+
+func tailCase(_ index: Int) -> Case {
+    let shape = tailShapes[index / 4]
+    var rng = SplitMix64(state: 0x5441_494C &+ UInt64(index))
+    var quads: [(Int, Int, Int, Int)] = []
+    switch shape {
+    case "small":
+        for _ in 0..<40 {
+            let n = rng.int(1, 40), f = rng.int(0, n), p = rng.int(0, n)
+            quads.append((rng.int(0, min(f, p) + 2), f, p, n))
+        }
+    case "year":
+        for _ in 0..<40 {
+            let n = rng.int(100, 400), f = n / 10 + rng.int(-3, 3), p = rng.int(8, 60)
+            quads.append((rng.int(0, min(f, p)), f, p, n))
+        }
+    case "large":
+        for k in 0..<6 {
+            let n = k == 0 ? 100_000 : rng.int(1_000, 60_000), f = n / 10, p = n / 8
+            let expected = f * p / n
+            quads.append((expected + rng.int(-20, 60), f, p, n))
+        }
+    default:
+        // Every guard and bound: no rows, negative counts, more flags or positives than rows, an
+        // observation at the forced floor, above the ceiling, at the ceiling.
+        quads = [(0, 0, 0, 0), (1, -1, 2, 5), (1, 2, -1, 5), (-1, 2, 2, 5), (1, 6, 2, 5), (1, 2, 6, 5),
+                 (2, 8, 4, 10), (5, 5, 4, 10), (4, 5, 4, 10), (0, 0, 0, 10), (1, 10, 10, 10), (10, 10, 10, 10)]
+            + (0..<10).map { _ in let n = rng.int(1, 12); return (rng.int(-1, n + 1), rng.int(0, n), rng.int(0, n), n) }
+    }
+    let triples: [(Int, Int, Double)] = (0..<12).map { k in
+        let t = rng.int(0, 60), s = rng.int(-1, t + 1)
+        return (s, t, [1.645, 1.96, 0, -1.645, .nan, .infinity][k % 6])
+    }
+    var c = Case(id: String(format: "tail-%03d", index), kind: "tail", shape: shape)
+    c.inputs = quads.map { "q \($0.0) \($0.1) \($0.2) \($0.3)" } + triples.map { "w \($0.0) \($0.1) \(d($0.2))" }
+    var tokens: [String] = []
+    for (o, f, p, n) in quads {
+        let v = HeadacheEvaluation.hypergeometricUpperTail(observed: o, flagged: f, positives: p, total: n)
+        // The value, and whether it clears the working alpha: a discrete answer a last-bit
+        // difference in log or exp could flip.
+        tokens.append(optD(v) + " " + (v.map { $0 <= workingAlphaForTokens ? "w" : "n" } ?? "-"))
+        hit("tail-nil", v == nil)
+        hit("tail-certain", v == 1)
+        hit("tail-impossible", v == 0 && o > 0)
+        hit("tail-summed", v.map { $0 > 0 && $0 < 1 } ?? false)
+        hit("tail-large", n > 10_000)
+        hit("tail-below-alpha", v.map { $0 > 0 && $0 <= workingAlphaForTokens } ?? false)
+    }
+    let wilson = triples.map { HeadacheEvaluation.wilsonUpperBound(successes: $0.0, trials: $0.1, z: $0.2) }
+    hit("wilson-nil", wilson.contains { $0 == nil })
+    hit("wilson-value", wilson.contains { $0.map { !$0.isNaN } ?? false })
+    hit("wilson-nan", wilson.contains { $0.map(\.isNaN) ?? false })
+    c.goldens = ["tl " + tokens.joined(separator: " "), "wl" + wilson.map { " " + optD($0) }.joined()]
+    return c
+}
+
 // MARK: - Swift's random draws, as the headache evaluation tests make them
 //
 // Upstream's HeadacheEvaluationTests build their synthetic years from a test-local SplitMix64 driving
@@ -534,6 +890,12 @@ let cases = (0..<(dayShapes.count * dayCasesPerShape)).map(dayCase)
     + (0..<(bedShapes.count * bedCasesPerShape)).map(bedCase)
     + (0..<flatCounts.count).map(flatCase)
     + (0..<3).map(anglesCase)
+    + (0..<(assessShapes.count * assessCasesPerShape)).map(assessCase)
+    + (0..<indexSweeps.count).map(indexSweepCase)
+    + (0..<(pctShapes.count * 4)).map(percentileCase)
+    + (0..<(rankShapes.count * 4)).map(rankCase)
+    + (0..<4).map(seCase)
+    + (0..<(tailShapes.count * 4)).map(tailCase)
 let header = "# Generated by android/tools/sleep-differential (EngineDifferential) from upstream OpenCircuitKit; do not edit by hand."
 var inputs = [header]
 var goldens = [header]

@@ -24,8 +24,14 @@ import kotlin.test.assertTrue
  * sleep regularity over regular, irregular, midnight-straddling, outside-the-day, opposite and short
  * bedtimes, and for every constant bedtime at three lengths (each answer 99 or 100 depending on the
  * last bits of the platform maths); and the platform's own `cos`, `sin` and `log` at the regularity's
- * arguments, compared with `StrictMath`. The format is documented at the top of the generator's
- * `main.swift`.
+ * arguments, compared with `StrictMath`. The headache signals index: whole assessments over typical,
+ * deviant, sparse, cold-start, ring-silent, flagged, finite-extreme, unreadable, banded and capped days
+ * (verdict, every contribution, and the quotient the index is rounded from), one series swept across
+ * every half of the index's rounding, and the band's percentile. Its evaluation: midranks over ties,
+ * signed zeros and NaN (past Swift's insertion-sort size too), the AUC and its Hanley-McNeil error,
+ * the exact hypergeometric tail (`log` / `exp`, with whether each value clears the 0.01 working
+ * alpha, so a last-bit difference that flipped it would show) and the Wilson bound. The format is
+ * documented at the top of the generator's `main.swift`.
  *
  * Comparison rule: every line is compared WHOLE, token by token and exactly, except doubles (tokens
  * `d` + 16 hex digits), which must agree within 1e-9; every double that is not bit-identical is
@@ -123,7 +129,130 @@ class EngineDifferentialTest {
         "bed" -> renderBed(c)
         "flat" -> renderFlat(c)
         "angles" -> renderAngles(c)
+        "assess" -> renderVerdict(HeadacheSignals.assess(headacheDay(c)))
+        "ix" -> renderIndexSweep(c)
+        "pct" -> renderPercentile(c)
+        "rank" -> renderRank(c)
+        "se" -> renderStandardErrors(c)
+        "tail" -> renderTail(c)
         else -> error("unknown kind ${c.kind}")
+    }
+
+    // --- the headache signals index and its evaluation ---
+
+    private fun ints(c: ECase, prefix: String): List<Int> =
+        c.lines.single { it == prefix || it.startsWith("$prefix ") }.split(' ').drop(1).map { it.toInt() }
+
+    private fun doubles(c: ECase, prefix: String): List<Double> =
+        c.lines.single { it == prefix || it.startsWith("$prefix ") }.split(' ').drop(1).map { toDouble(it) }
+
+    private fun headacheDay(c: ECase): HeadacheSignals.DayInput {
+        val t = c.lines.single { it.startsWith("d ") }.split(' ').drop(1)
+        check(t.size == 11) { "${c.id}: bad day line" }
+        fun at(s: String): Instant? = if (s == "-") null else Instant.ofEpochSecond(s.toLong())
+        val series = c.lines.filter { it.startsWith("s ") }.associate { line ->
+            val s = line.split(' ')
+            s[1] to HeadacheSignals.Series(today = toDouble(s[2]), prior = s.drop(3).map { toDouble(it) })
+        }
+        return HeadacheSignals.DayInput(
+            day = at(t[0])!!, now = at(t[1])!!, lastRingDataAt = at(t[2]),
+            restingHR = series["rhr"], hrvSDNN = series["hrv"], sleepEfficiencyPct = series["eff"],
+            sleepFragmentationMin = series["frag"], sleepDurationMin = series["dur"],
+            skinTempOffsetC = inDouble(t[7]), inBedStartMinutes = inInt(t[8]), priorInBedStartMinutes = ints(c, "b"),
+            dayHRPrevious = inDouble(t[9]), dayHRTwoDaysAgo = inDouble(t[10]), dayHRPrior = doubles(c, "h"),
+            isPerimenstrual = if (t[6] == "-") null else t[6] == "1",
+            sleepLikelyTruncated = t[3] == "1", feverSuspected = t[4] == "1", headacheAlreadyLoggedToday = t[5] == "1",
+            priorIndices = ints(c, "i"),
+        )
+    }
+
+    /** The quotient the index is rounded from, formed as upstream forms it from the capped contributions. */
+    private fun quotient(a: HeadacheSignals.Assessment): Double {
+        val total = a.contributions.fold(0.0) { acc, c -> acc + c.effectiveWeight }
+        val weighted = a.contributions.fold(0.0) { acc, c -> acc + c.effectiveWeight * (c.contribution ?: 0.0) }
+        return 100 * weighted / total
+    }
+
+    private fun renderVerdict(v: HeadacheSignals.Verdict): List<String> = when (v) {
+        HeadacheSignals.Verdict.NotEnabled -> listOf("v notEnabled", "c -", "q -")
+        is HeadacheSignals.Verdict.BuildingBaseline -> listOf("v building ${v.daysRemaining}", "c -", "q -")
+        is HeadacheSignals.Verdict.Interrupted -> listOf("v interrupted " + (v.since?.epochSecond?.toString() ?: "-"), "c -", "q -")
+        is HeadacheSignals.Verdict.InsufficientData -> listOf(
+            "v insufficient" + HeadacheSignals.Feature.entries.mapNotNull { f -> v.missing[f]?.let { " ${f.rawValue}=${it.rawValue}" } }.joinToString(""),
+            "c -",
+            "q -",
+        )
+        is HeadacheSignals.Verdict.Scored -> {
+            val a = v.assessment
+            listOf(
+                "v scored ${a.index} ${a.band.rawValue} ${a.ringFeatureCount} ${d(a.coverageFraction)} ${a.suppressedBy?.rawValue ?: "-"}",
+                "c " + a.contributions.joinToString(" ") { k ->
+                    "${k.feature.rawValue} ${optD(k.z)} ${optD(k.contribution)} ${d(k.effectiveWeight)} ${k.absentReason?.rawValue ?: "-"}"
+                },
+                "q ${d(quotient(a))}",
+            )
+        }
+    }
+
+    private fun renderIndexSweep(c: ECase): List<String> {
+        val base = headacheDay(c)
+        val x = c.lines.single { it.startsWith("x ") }.split(' ')
+        val (name, today0, step, count) = listOf(x[1], toDouble(x[2]), toDouble(x[3]), x[4].toInt())
+        val indices = mutableListOf<Int>()
+        val quotients = mutableListOf<String>()
+        for (k in 0 until count as Int) {
+            val today = (today0 as Double) + k.toDouble() * (step as Double)
+            fun moved(s: HeadacheSignals.Series?) = s?.copy(today = today)
+            val day = when (name) {
+                "rhr" -> base.copy(restingHR = moved(base.restingHR))
+                "hrv" -> base.copy(hrvSDNN = moved(base.hrvSDNN))
+                "eff" -> base.copy(sleepEfficiencyPct = moved(base.sleepEfficiencyPct))
+                "frag" -> base.copy(sleepFragmentationMin = moved(base.sleepFragmentationMin))
+                "dur" -> base.copy(sleepDurationMin = moved(base.sleepDurationMin))
+                else -> error("${c.id}: unknown series $name")
+            }
+            val a = (HeadacheSignals.assess(day) as? HeadacheSignals.Verdict.Scored)?.assessment ?: error("${c.id}: sweep day $k did not score")
+            indices += a.index
+            quotients += d(quotient(a))
+        }
+        return (0 until count step 64).flatMap { k0 ->
+            listOf(
+                "ix $k0" + indices.subList(k0, k0 + 64).joinToString("") { " $it" },
+                "iq $k0 " + quotients.subList(k0, k0 + 64).joinToString(" "),
+            )
+        }
+    }
+
+    private fun renderPercentile(c: ECase): List<String> {
+        val sorted = doubles(c, "p")
+        return listOf("pc" + doubles(c, "f").joinToString("") { " " + d(HeadacheSignals.percentile(sorted, it)) })
+    }
+
+    private fun renderRank(c: ECase): List<String> {
+        val t = c.lines.single { it.startsWith("r ") }.split(' ')
+        val nPos = t[1].toInt()
+        val values = t.drop(2).map { toDouble(it) }
+        val a = HeadacheEvaluation.auc(values.take(nPos), values.drop(nPos))
+        val se = a?.let { HeadacheEvaluation.hanleyMcNeilSE(auc = it, nPos = nPos, nNeg = values.size - nPos) }
+        return listOf("mr" + HeadacheEvaluation.midranks(values).joinToString("") { " " + d(it) }, "au ${optD(a)} ${optD(se)}")
+    }
+
+    private fun renderStandardErrors(c: ECase): List<String> {
+        val (nPos, nNeg) = ints(c, "n")
+        return listOf("se" + doubles(c, "a").joinToString("") { " " + optD(HeadacheEvaluation.hanleyMcNeilSE(auc = it, nPos = nPos, nNeg = nNeg)) })
+    }
+
+    private fun renderTail(c: ECase): List<String> {
+        val tail = c.lines.filter { it.startsWith("q ") }.joinToString(" ") { line ->
+            val (o, f, p, n) = line.split(' ').drop(1).map { it.toInt() }
+            val v = HeadacheEvaluation.hypergeometricUpperTail(observed = o, flagged = f, positives = p, total = n)
+            optD(v) + " " + (v?.let { if (it <= 0.01) "w" else "n" } ?: "-")
+        }
+        val wilson = c.lines.filter { it.startsWith("w ") }.joinToString("") { line ->
+            val s = line.split(' ')
+            " " + optD(HeadacheEvaluation.wilsonUpperBound(successes = s[1].toInt(), trials = s[2].toInt(), z = toDouble(s[3])))
+        }
+        return listOf("tl $tail", "wl$wilson")
     }
 
     private fun angle(m: Int): Double = 2.0 * Math.PI * m.toDouble() / 1440.0
@@ -210,12 +339,18 @@ class EngineDifferentialTest {
         "every night at one clock minute scores exactly 100" to (0..2).flatMap { k ->
             (0 until 1440 step 144).map { x0 -> Divergence("flat-%03d".format(k), "fl $x0") }
         }.toSet(),
+        // PORTING D-108: an unreadable (NaN or infinite) reading for today is a missing reading, where
+        // upstream reads it as an ordinary 0. The four "unreadable" day cases each hold one, so their
+        // verdict, contributions and quotient all move.
+        "an unreadable reading for today is a missing reading" to (28..31).flatMap { k ->
+            listOf("v", "c", "q").map { kind -> Divergence("assess-%03d".format(k), kind) }
+        }.toSet(),
     )
 
     /** The tokens that identify a golden line among its case's lines: the first two for indexed kinds, else the first. */
     private fun lineKind(line: String): String {
         val t = line.split(' ')
-        val indexed = t[0] in setOf("avg", "tr", "fl") || (t[0] == "cs" && t.size > 1 && t[1].all { it in '0'..'9' })
+        val indexed = t[0] in setOf("avg", "tr", "fl", "ix", "iq") || (t[0] == "cs" && t.size > 1 && t[1].all { it in '0'..'9' })
         return if (indexed) t.take(2).joinToString(" ") else t[0]
     }
 
