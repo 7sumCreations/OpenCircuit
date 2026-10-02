@@ -9,6 +9,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotSame
 import kotlin.test.assertTrue
 
@@ -134,6 +135,34 @@ class NightMetricsGuardTest {
         assertTrue(runCatching { (composite.factors as MutableMap<SleepScore.Composite.Factor, Double>).clear() }.isFailure)
 
         assertTrue(runCatching { (OSASpO2.FREQS as MutableList<Double>)[0] = 0.0 }.isFailure, "the shared frequency grid is read-only")
+    }
+
+    /** The hand-written equality of those results compares every field, as Swift's synthesized `==` does. */
+    @Test
+    fun listHoldingResultsCompareByEveryField() {
+        val t0 = java.time.Instant.ofEpochSecond(1_700_000_000)
+        val core = SleepSegment(t0, t0.plusSeconds(600), SleepStage.ASLEEP_CORE)
+        val deep = SleepSegment(t0, t0.plusSeconds(600), SleepStage.ASLEEP_DEEP)
+        val nap = NapDetection.Nap(t0, t0.plusSeconds(600), listOf(core))
+        assertEquals(nap.hashCode(), NapDetection.Nap(t0, t0.plusSeconds(600), listOf(core)).hashCode())
+        assertNotEquals(nap, NapDetection.Nap(t0, t0.plusSeconds(600), listOf(deep)), "segments")
+        assertNotEquals(nap, NapDetection.Nap(t0.plusSeconds(1), t0.plusSeconds(600), listOf(core)), "start")
+        assertNotEquals(nap, NapDetection.Nap(t0, t0.plusSeconds(601), listOf(core)), "end")
+
+        val summary = SleepDetailMetrics.MovementSummary(listOf(0, 1, 2), 1, 2, 3)
+        assertEquals(summary.hashCode(), SleepDetailMetrics.MovementSummary(listOf(0, 1, 2), 1, 2, 3).hashCode())
+        assertNotEquals(summary, SleepDetailMetrics.MovementSummary(listOf(0, 1, 1), 1, 2, 3), "levels")
+        assertNotEquals(summary, SleepDetailMetrics.MovementSummary(listOf(0, 1, 2), 9, 2, 3), "still")
+        assertNotEquals(summary, SleepDetailMetrics.MovementSummary(listOf(0, 1, 2), 1, 9, 3), "light")
+        assertNotEquals(summary, SleepDetailMetrics.MovementSummary(listOf(0, 1, 2), 1, 2, 9), "active")
+
+        val factors = mapOf(SleepScore.Composite.Factor.STAGES to 0.5)
+        val composite = SleepScore.Composite(75, SleepScore.Tier.GOOD, factors)
+        assertEquals(composite, SleepScore.Composite(75, SleepScore.Tier.GOOD, factors))
+        assertEquals(composite.hashCode(), SleepScore.Composite(75, SleepScore.Tier.GOOD, factors).hashCode())
+        assertNotEquals(composite, SleepScore.Composite(75, SleepScore.Tier.GOOD, mapOf(SleepScore.Composite.Factor.STAGES to 0.6)), "factors")
+        assertNotEquals(composite, SleepScore.Composite(76, SleepScore.Tier.GOOD, factors), "score")
+        assertNotEquals(composite, SleepScore.Composite(75, SleepScore.Tier.EXCELLENT, factors), "tier")
     }
 
     /**

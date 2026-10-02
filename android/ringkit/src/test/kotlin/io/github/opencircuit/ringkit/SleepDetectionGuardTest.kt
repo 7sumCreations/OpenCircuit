@@ -8,6 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -104,6 +105,10 @@ class SleepDetectionGuardTest {
         val events = mutableListOf(short, night, after)
         assertEquals(night, ActivityPeriod.findSleep(events))
         assertEquals(listOf(after), events, "everything up to and including the found period is removed from the caller's list")
+
+        val none = mutableListOf(short, after)
+        assertNull(ActivityPeriod.findSleep(none))
+        assertEquals(emptyList(), none, "with no qualifying sleep the caller's list is drained, as Swift's loop leaves it")
     }
 
     @Test

@@ -85,6 +85,20 @@ class NapDetectionHazardTest {
         assertEquals(before, doubled, "the caller's list is left alone")
     }
 
+    /**
+     * The sleep-vitals share is judged on the copies detection read. Two later copies of every still
+     * record on the activity layout would, counted, pull the share to 1/3 — under the 0.35 floor —
+     * and drop a nap whose kept (first) copies are all sleep-vitals.
+     */
+    @Test
+    fun laterCopiesOnAnotherLayoutDoNotDiluteTheSleepVitalsShare() {
+        val still = day().subList(8, 8 + 24)
+        val onActivityLayout = still.map { rec(it.counter, motion = 1, tag = 0x12) }
+        assertTrue(onActivityLayout.all { it.layout == BulkRecord.Layout.ACTIVITY })
+        assertTrue(still.all { it.layout == BulkRecord.Layout.SLEEP_VITALS })
+        assertEquals(listOf(referenceNap), naps(day() + onActivityLayout + onActivityLayout))
+    }
+
     @Test
     fun mainNightOverlapBoundaries() {
         val start = t(1_781_547_780)
