@@ -1,8 +1,9 @@
 package io.github.opencircuit.ringkit
 
 // Local health-alert policy — the PURE decision layer shared by the high-HR / low-SpO₂ /
-// elevated-HR-while-inactive alerts and the skin-temperature / fever notifications. Port of upstream
-// ios/OpenCircuitKit/Sources/OpenCircuitKit/HealthAlerts.swift (@ b1c2fdd), `:1-528`, plus the alert
+// elevated-HR-while-inactive alerts, the skin-temperature / fever notifications and the morning
+// overnight-signals notification. Port of upstream
+// ios/OpenCircuitKit/Sources/OpenCircuitKit/HealthAlerts.swift (@ b1c2fdd), whole, plus the alert
 // look-back from upstream's app (`HealthNotificationCenter.swift:207`, `:229-231`). `StepWindow`
 // (`:182-189`), which the daily energy estimate also takes, keeps its place at the top.
 //
@@ -465,6 +466,184 @@ object TempFeverNotifications {
             val last = lastNotifiedNight[n]
             last == null || night > last
         }
+}
+
+// MARK: - the morning overnight-signals notification
+
+/**
+ * The once-a-morning overnight-signals notification: a frozen [HeadacheSignals] verdict → at most one
+ * notification candidate a day, and its copy.
+ *
+ * The copy is a MEASUREMENT, never a forecast: it reports which overnight signals drifted furthest from
+ * the user's usual range, never a probability, a percentage or the word "headache". It carries no
+ * quick-reply actions (buttons shown only on flagged mornings would collect labels conditioned on the
+ * flag itself), and it fires at most once per calendar day ([freshForDay]), never on the 2 h backoff.
+ */
+object HeadacheSignsNotifications {
+
+    /**
+     * Membership, as its own set rather than a case added to [TempFeverNotifications.NOTIFICATION_SET]:
+     * that set drives the per-NIGHT ledger and the disclaimer branch, and widening it by accident would
+     * put this notification on the wrong ledger convention. Read-only.
+     */
+    val NOTIFICATION_SET: Set<HealthNotification> = Collections.unmodifiableSet(linkedSetOf(HealthNotification.HEADACHE_SIGNS))
+
+    /** The notification category identifier, one constant for the registration and the posting site. It carries no actions. */
+    const val CATEGORY_IDENTIFIER: String = "headache.signs"
+
+    // Delivery window
+
+    /**
+     * The hard never-fire window, in minutes since local midnight: delivery only from [EARLIEST_MINUTES]
+     * (inclusive) to [LATEST_MINUTES] (exclusive), whatever the user's quiet-hours setting — a summary of
+     * a night that is already over has no business waking anyone. A verdict computed before the window
+     * waits: the day ledger is still fresh, so the next pass inside the window delivers it. 🔴 PROVISIONAL.
+     */
+    const val EARLIEST_MINUTES: Int = 7 * 60
+    const val LATEST_MINUTES: Int = 21 * 60
+
+    /**
+     * Whether [date]'s wall-clock time of day in [zone] (hour and minute; seconds ignored) is inside the
+     * delivery window. An instant `java.time` cannot place in [zone] (the first and last year of
+     * `Instant`'s range) is outside it: nothing is raised on a clock that cannot be read.
+     */
+    fun withinDeliveryWindow(date: Instant, zone: ZoneId): Boolean {
+        val m = zonedOrNull { date.atZone(zone).let { it.hour * 60 + it.minute } } ?: return false
+        return m >= EARLIEST_MINUTES && m < LATEST_MINUTES
+    }
+
+    // Per-DAY ledger
+
+    /**
+     * The timezone-stable `yyyymmdd` key of [day]'s calendar date in [zone] — the ONE implementation,
+     * [TempFeverNotifications.dayKey] (null for an instant `java.time` cannot place in [zone]).
+     */
+    fun dayKey(day: Instant, zone: ZoneId): Long? = TempFeverNotifications.dayKey(day, zone)
+
+    /**
+     * Per-DAY de-dupe: the verdict describes ONE night, so once a day has been notified it must not
+     * re-fire on any later sync that day (the shared 2 h backoff alone would re-raise it all day). The
+     * per-night rule, [TempFeverNotifications.freshForNight], under its own name: candidates whose [day]
+     * key is strictly newer than the one already notified pass; order and duplicates kept.
+     */
+    fun freshForDay(candidates: List<HealthNotification>, day: Long, lastNotifiedDay: Map<HealthNotification, Long>): List<HealthNotification> =
+        TempFeverNotifications.freshForNight(candidates, night = day, lastNotifiedNight = lastNotifiedDay)
+
+    // The decision
+
+    /**
+     * Whether this morning's FROZEN verdict may be raised as a notification candidate NOW: enabled, not
+     * retired by the quality monitor, [band] flagged, not suppressed ([suppressedBy] withholds only the
+     * notification — the score is still computed and shown), [frozenDayCount] (counted over the same
+     * trailing band window) at least [HeadacheSignals.Tuning.minDaysForBanding] — the natural floor below
+     * which no band exists — and [now] inside the delivery window in [zone]; then the per-day ledger.
+     */
+    fun candidates(
+        enabled: Boolean,
+        band: HeadacheSignals.Band?,
+        suppressedBy: HeadacheSignals.Suppression?,
+        frozenDayCount: Int,
+        retired: Boolean,
+        now: Instant,
+        lastNotifiedDay: Map<HealthNotification, Long>,
+        tuning: HeadacheSignals.Tuning = HeadacheSignals.Tuning(),
+        zone: ZoneId,
+    ): List<HealthNotification> {
+        if (!enabled || retired || band != HeadacheSignals.Band.FLAGGED || suppressedBy != null) return emptyList()
+        if (frozenDayCount < tuning.minDaysForBanding || !withinDeliveryWindow(now, zone)) return emptyList()
+        val day = dayKey(now, zone) ?: return emptyList() // placeable: the window just read its wall clock
+        return freshForDay(listOf(HealthNotification.HEADACHE_SIGNS), day, lastNotifiedDay)
+    }
+
+    // Copy
+
+    /**
+     * Plain words for one feature, for the "what drifted" sentence — lower-case (the copy builder
+     * capitalises the first). They name the OBSERVABLE, never the analytic term.
+     */
+    fun plainName(feature: HeadacheSignals.Feature): String = when (feature) {
+        HeadacheSignals.Feature.SLEEP_EFFICIENCY_DROP -> "sleep efficiency"
+        HeadacheSignals.Feature.AROUSAL_LETDOWN -> "daytime heart rate"
+        HeadacheSignals.Feature.HRV_DEVIATION -> "heart rate variability"
+        HeadacheSignals.Feature.RESTING_HR_DEVIATION -> "resting heart rate"
+        HeadacheSignals.Feature.SLEEP_FRAGMENTATION -> "time awake in bed"
+        HeadacheSignals.Feature.SLEEP_DURATION_DEVIATION -> "sleep duration"
+        HeadacheSignals.Feature.SCHEDULE_SHIFT -> "bedtime"
+        HeadacheSignals.Feature.SKIN_TEMP_DEVIATION -> "skin temperature"
+        HeadacheSignals.Feature.PERIMENSTRUAL -> "cycle phase"
+    }
+
+    /**
+     * The RING-DERIVED features that drifted furthest, largest first, at most [limit] (below zero takes
+     * none). [weighted] maps a feature to its WEIGHTED contribution — the share of the index it supplied.
+     * Only shares above zero count (a NaN share never does); `perimenstrual` is never named (a calendar
+     * lookup did not "drift"). Equal shares break by declaration order, so the same morning always words
+     * itself the same way, whatever the map's order.
+     */
+    fun topSignals(weighted: Map<HeadacheSignals.Feature, Double>, limit: Int = 2): List<HeadacheSignals.Feature> =
+        weighted.entries
+            .filter { it.key.isRingDerived && it.value > 0.0 }
+            .sortedWith { a, b ->
+                when {
+                    a.value == b.value -> a.key.ordinal.compareTo(b.key.ordinal)
+                    a.value > b.value -> -1
+                    else -> 1
+                }
+            }
+            .take(maxOf(0, limit))
+            .map { it.key }
+
+    /**
+     * The one phrase that means "overnight", shared so the title can ask whether every named signal is
+     * nightly without a second copy of the string.
+     */
+    internal const val NIGHTLY_PHRASE: String = "last night"
+
+    /**
+     * The period [feature] was actually MEASURED over, as a trailing phrase: nightly for eight of the
+     * nine; `arousalLetdown` compares yesterday's WAKING heart rate with the day before's.
+     */
+    fun timeframe(feature: HeadacheSignals.Feature): String =
+        if (feature == HeadacheSignals.Feature.AROUSAL_LETDOWN) "over the past two days" else NIGHTLY_PHRASE
+
+    /** A notification's title and body (upstream's `(title, body)` tuple). */
+    data class Text(val title: String, val body: String)
+
+    /**
+     * The notification copy for the [topSignals] named (the first two; none gives the general sentence).
+     * The timeframe FOLLOWS the signals named: two over the same period share one trailing phrase, a
+     * mixed pair spells both out; the title says "recent" only when every named signal is daytime.
+     * Display copy, verbatim from upstream; nothing here reads a locale.
+     */
+    fun copy(topSignals: List<HeadacheSignals.Feature>): Text {
+        val drifted = " drifted furthest from your usual range"
+        val subject = when (topSignals.size) {
+            0 -> "Several of your overnight signals$drifted last night"
+            1 -> sentenceCased(plainName(topSignals[0])) + drifted + " " + timeframe(topSignals[0])
+            else -> {
+                val first = topSignals[0]
+                val second = topSignals[1]
+                if (timeframe(first) == timeframe(second)) {
+                    sentenceCased(plainName(first)) + " and " + plainName(second) + drifted + " " + timeframe(first)
+                } else {
+                    sentenceCased(plainName(first)) + " " + timeframe(first) + " and " + plainName(second) + " " + timeframe(second) + drifted
+                }
+            }
+        }
+        val allDaytime = topSignals.isNotEmpty() && topSignals.all { timeframe(it) != NIGHTLY_PHRASE }
+        val title = if (allDaytime) "Your recent signals stood out" else "Last night was unusual for you"
+        return Text(title, "$subject (estimate). That is what we measured — it is not a forecast.")
+    }
+
+    /**
+     * [s] with its first character upper-cased, the rest unchanged. Locale-free, as Swift's
+     * `uppercased()`: the machine's locale never changes the copy (a Turkish default would dot an `i`).
+     */
+    internal fun sentenceCased(s: String): String {
+        if (s.isEmpty()) return s
+        val n = Character.charCount(s.codePointAt(0))
+        return s.substring(0, n).uppercase() + s.substring(n)
+    }
 }
 
 // MARK: - the alert look-back (from upstream's app)
