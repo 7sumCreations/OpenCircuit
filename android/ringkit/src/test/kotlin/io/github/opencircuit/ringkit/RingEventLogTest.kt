@@ -12,11 +12,11 @@ import kotlin.test.assertTrue
  * The `0x50` event log and the ring's own activity sessions decoded from it.
  *
  * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/RingEventLogTests.swift
- * (@ b1c2fdd), 12 of 15 tests. The two frames are the ring's own bytes from upstream's
+ * (@ b1c2fdd), 15 of 15 tests. The two frames are the ring's own bytes from upstream's
  * 2026-09-27 diagnostics bundle — event markers only, no health values. Not ported here: the
  * ledger test's JSON round-trip lines `:102-103` (the stored form is decided with the storage
- * design), and the three alert-gate tests `:181`, `:200`, `:211`, which drive upstream's
- * `HealthAlertEvaluator` (`HealthAlerts.swift`, ported with the alert engines).
+ * design). The three alert-gate tests `:181`, `:200`, `:211` (with `walkHR()`, `:176-179`) arrived
+ * with the alert policy they drive (`HealthAlertEvaluator`).
  */
 class RingEventLogTest {
 
@@ -228,5 +228,55 @@ class RingEventLogTest {
         assertEquals(2, sessions.size)
         assertTrue(sessions.any { it.start == ev(0x0f, t).date && it.end == now }, "A runs open to now")
         assertTrue(sessions.any { it.start == ev(0x0f, t + 600).date && it.end == ev(0x0a, t + 1200).date })
+    }
+
+    // MARK: the alert gate (synthetic HR)
+
+    /**
+     * :176-179 — a synthetic walk: HR ≥ 100 every 150 s from 10:40 to 11:17:30 EDT — elevated from the
+     * first minute, i.e. the full 12-min recognition lag the real walk showed — no steps observed (the
+     * ring was silent), ring session 10:52:05 → 11:23:55 from [walkFrame].
+     */
+    private fun walkHR(): List<HRSample> {
+        val start = utc("2026-09-27T14:40:00Z")
+        return (0 until 16).map { HRSample(bpm = 105, start = start.plusSeconds(it * 150L)) }
+    }
+
+    // :181
+    @Test
+    fun ringActivitySessionSuppressesTheWalkAlarm() {
+        val thresholds = HealthAlertThresholds()
+        // Without the ring's verdict the gate has no evidence and the walk alarms — the bug.
+        assertEquals(
+            listOf(HealthNotification.ELEVATED_HR_INACTIVE),
+            HealthAlertEvaluator.evaluate(hr = walkHR(), spo2 = emptyList(), inactiveHR = walkHR(), thresholds = thresholds).map { it.notification },
+        )
+
+        val sessions = RingEventLog.activitySessions(assertNotNull(RingEventLog.decode(walkFrame)), now = utc("2026-09-27T15:30:00Z"))
+        val gated = HealthAlertEvaluator.nonExercising(walkHR(), activeIntervals = HealthAlertEvaluator.ringActivityIntervals(sessions))
+        // Only the 10:40:00 reading precedes `start − lead` (10:42:05); alone it is no run.
+        assertEquals(listOf(utc("2026-09-27T14:40:00Z")), gated.map { it.start })
+        assertTrue(HealthAlertEvaluator.evaluate(hr = gated, spo2 = emptyList(), inactiveHR = gated, thresholds = thresholds).isEmpty())
+    }
+
+    // :200 — the lead is load-bearing whenever HR is up ≥ 10 min before the ring's stamp (the real
+    // walk crossed 100 bpm only ~7 min before it, so it would NOT have alarmed on its head alone).
+    @Test
+    fun withoutTheLeadTheUnrecognisedHeadStillAlarms() {
+        val sessions = RingEventLog.activitySessions(assertNotNull(RingEventLog.decode(walkFrame)), now = utc("2026-09-27T15:30:00Z"))
+        val gated = HealthAlertEvaluator.nonExercising(walkHR(), activeIntervals = HealthAlertEvaluator.ringActivityIntervals(sessions, lead = 0.0))
+        assertEquals(105, HealthAlertEvaluator.elevatedHRInactive(gated, thresholdBpm = 100, minDuration = 10 * 60.0)?.bpm)
+    }
+
+    // :211 — safety: a resting run OUTSIDE any ring session (beyond the lead and the recovery pad)
+    // still fires — the ring's verdict only removes readings it covers.
+    @Test
+    fun restingRunOutsideTheSessionStillAlerts() {
+        val sessions = RingEventLog.activitySessions(assertNotNull(RingEventLog.decode(walkFrame)), now = utc("2026-09-27T20:00:00Z"))
+        val restStart = utc("2026-09-27T16:30:00Z") // 12:30 EDT, an hour after the session
+        val rest = (0 until 6).map { HRSample(bpm = 110, start = restStart.plusSeconds(it * 150L)) }
+        val gated = HealthAlertEvaluator.nonExercising(walkHR() + rest, activeIntervals = HealthAlertEvaluator.ringActivityIntervals(sessions))
+        assertEquals(rest, gated.drop(1), "the whole resting run survives the gate")
+        assertNotNull(HealthAlertEvaluator.elevatedHRInactive(gated, thresholdBpm = 100, minDuration = 10 * 60.0))
     }
 }
