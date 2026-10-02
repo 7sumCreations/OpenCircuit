@@ -74,16 +74,18 @@ object ActivityScore {
     /**
      * The result plus each present factor's 0…1 goal attainment (capped at 1; for a breakdown view). A
      * value, as upstream's struct is: [factors] is copied in and read-only out, and iterates in
-     * [Factor] declaration order.
+     * [Factor] declaration order. Compares as Swift's synthesized `Equatable`: the factor doubles by
+     * IEEE `==`.
      */
     class Result(val score: Int, val tier: Tier, factors: Map<Factor, Double>) {
         val factors: Map<Factor, Double> =
             Collections.unmodifiableMap(EnumMap<Factor, Double>(Factor::class.java).apply { putAll(factors) })
 
         override fun equals(other: Any?): Boolean =
-            other is Result && score == other.score && tier == other.tier && factors == other.factors
+            other is Result && score == other.score && tier == other.tier && factors.keys == other.factors.keys &&
+                factors.all { (factor, value) -> value == other.factors.getValue(factor) }
 
-        override fun hashCode(): Int = listOf(score, tier, factors).hashCode()
+        override fun hashCode(): Int = listOf(score, tier, factors.map { (factor, value) -> factor to ieeeHash(value) }).hashCode()
 
         override fun toString(): String = "Result(score=$score, tier=$tier, factors=$factors)"
 
