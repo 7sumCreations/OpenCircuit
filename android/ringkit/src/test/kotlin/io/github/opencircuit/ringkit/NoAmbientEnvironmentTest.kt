@@ -28,7 +28,7 @@ class NoAmbientEnvironmentTest {
         "RestingHR.kt", "ExerciseMinutes.kt", "HealthAlerts.kt", "ActiveEnergyLedger.kt", "ActiveEnergyWindow.kt",
         "RobustBaseline.kt", "VitalsBaseline.kt", "SkinTempBaseline.kt", "WellnessBalance.kt", "ActivityScore.kt",
         "GoalDefaults.kt", "GoalHistory.kt", "UnitPreferences.kt", "BatteryTTE.kt",
-        "SwiftNumerics.kt", "EpochArchiveDiagnostics.kt",
+        "SwiftNumerics.kt", "EpochArchiveDiagnostics.kt", "DateInterval.kt",
     )
 
     private val system = "System" + "."

@@ -276,7 +276,10 @@ object VitalsBaseline {
         for (input in inputs) {
             val c = classify(input.today, input.prior, input.vital, config)
             if (c.severity != Severity.NORMAL) {
-                signals += Signal(input.vital, isTemperature = false, severity = c.severity, delta = c.delta, direction = c.direction, baselineMean = c.baseline?.mean)
+                signals += Signal(
+                    input.vital, isTemperature = false, severity = c.severity, delta = c.delta, direction = c.direction,
+                    baselineMean = c.baseline?.mean,
+                )
             }
         }
 
@@ -284,7 +287,8 @@ object VitalsBaseline {
         if (offset != null) {
             val sev = tempSeverity(offset, config)
             if (sev != null && sev != Severity.NORMAL) {
-                signals += Signal(null, isTemperature = true, severity = sev, delta = offset, direction = if (offset >= 0) Direction.RISE else Direction.DROP, baselineMean = null)
+                val direction = if (offset >= 0) Direction.RISE else Direction.DROP
+                signals += Signal(null, isTemperature = true, severity = sev, delta = offset, direction = direction, baselineMean = null)
             }
         }
 

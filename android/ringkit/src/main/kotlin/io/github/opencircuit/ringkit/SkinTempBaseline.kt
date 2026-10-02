@@ -80,7 +80,7 @@ object SkinTempBaseline {
     /**
      * The coverage threshold itself, kept as its own name because the tests assert against it directly
      * and because the value and the DECISION to ship it are separate facts ([MIN_NIGHTLY_COVERAGE] is
-     * this value; declared first because a Kotlin constant must be initialised before another reads it).
+     * this value).
      */
     const val CANDIDATE_NIGHTLY_COVERAGE: Double = 0.6
 
