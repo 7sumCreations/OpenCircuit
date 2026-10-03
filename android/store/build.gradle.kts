@@ -64,6 +64,10 @@ tasks.register("test") {
 }
 
 tasks.named<Test>("jvmTest") {
+    // `--rerun` reaches only the tasks named on the command line: `./gradlew test --rerun` re-runs
+    // the lifecycle `test` above but would replay an up-to-date `jvmTest` and run no store test at
+    // all, with no summary line. So this task is never up to date; the store suite takes seconds.
+    outputs.upToDateWhen { false }
     systemProperty("opencircuit.androidRoot", rootProject.projectDir.absolutePath)
     systemProperty("opencircuit.storeDir", projectDir.absolutePath)
     useJUnitPlatform()
