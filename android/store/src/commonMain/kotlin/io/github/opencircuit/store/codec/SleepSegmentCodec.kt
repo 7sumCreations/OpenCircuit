@@ -4,6 +4,7 @@ import io.github.opencircuit.ringkit.SleepProvenance
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SleepStage
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -22,7 +23,12 @@ import kotlinx.serialization.json.JsonPrimitive
  */
 object SleepSegmentCodec {
 
-    fun encode(segments: List<SleepSegment>): String = JsonArray(
+    fun encode(segments: List<SleepSegment>): String = toJson(segments).toString()
+
+    fun decode(text: String): Decoded<List<SleepSegment>> = readStored(text, ::fromJson)
+
+    /** [segments] as the JSON array [encode] writes, for a stored form that nests a segment list. */
+    internal fun toJson(segments: List<SleepSegment>): JsonArray = JsonArray(
         segments.map { s ->
             jsonObjectOf(
                 "start" to s.start.json(),
@@ -31,9 +37,10 @@ object SleepSegmentCodec {
                 "provenance" to if (s.provenance == SleepProvenance.MEASURED) null else JsonPrimitive(s.provenance.rawValue),
             )
         },
-    ).toString()
+    )
 
-    fun decode(text: String): Decoded<List<SleepSegment>> = readStored(text) { root ->
+    /** A nested segment list read by [decode]'s rules; only valid inside a [readStored] block. */
+    internal fun fromJson(root: JsonElement): List<SleepSegment> =
         root.array().map { e ->
             val o = e.obj()
             SleepSegment(
@@ -43,7 +50,6 @@ object SleepSegmentCodec {
                 provenance = provenance(o),
             )
         }
-    }
 
     private fun provenance(o: JsonObject): SleepProvenance {
         // Missing and null are both "no label" (Swift checks decodeNil before reading the value).

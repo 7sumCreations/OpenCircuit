@@ -225,4 +225,10 @@ sealed class SleepStoreException(message: String) : Exception(message) {
      * changed nothing.
      */
     class NightKeyMigrationUnsafe : SleepStoreException("two stored nights belong to the same wake day; nothing was moved")
+
+    /**
+     * The queue of edited nights waiting for their Health write is stored in a form this build
+     * cannot read; it is kept as stored, never written over.
+     */
+    class UnreadablePendingReconcile : SleepStoreException("the queue of sleep edits waiting for Health cannot be read; it was left as stored")
 }
