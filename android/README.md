@@ -29,13 +29,20 @@ commit it tracks, and how to check for and adopt newer upstream work, are record
 
 ## Building and testing
 
-Requires JDK 17. From this folder (`android/`):
+Requires JDK 17 and the Android SDK (compileSdk 36). Tell Gradle where the SDK is, either
+with the `ANDROID_HOME` environment variable or with a `local.properties` file in this folder
+holding one line, `sdk.dir=<path to your Android SDK>`. That file is machine-specific and
+ignored by git; never commit it. From this folder (`android/`):
 
 ```sh
-./gradlew --no-daemon test --rerun      # run the JVM test suite
+./gradlew --no-daemon test --rerun      # run the JVM test suite (one summary line per module)
 ./gradlew --no-daemon build -x test     # compile every module
 scripts/upstream-diff.sh                # list upstream changes since the pinned commit
 ```
+
+The `:store` module (the on-device database) is Kotlin Multiplatform: its tests run on the JVM
+as `:store:jvmTest` (`--tests` filters go on that task), and its on-device smoke test runs on an
+emulator as `:store:connectedAndroidDeviceTest`.
 
 ## Privacy
 

@@ -1,0 +1,5 @@
+# SHA-256 of every released schema file, in `shasum -a 256 -c` format (run it from this folder).
+# A released schema file never changes: a change to the stored data is a new version with its own
+# file, migration and migration test. SchemaHistoryGuardTest fails when a pinned file differs.
+# pre-release: re-pin allowed until the first GitHub Release
+9077b18578bc3bbe98afaf62ee8c53c0069a615142a2569b61766467e1622d0b  io.github.opencircuit.store.StoreDatabase/1.json

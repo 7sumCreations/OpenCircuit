@@ -17,5 +17,8 @@ dependencyResolutionManagement {
 rootProject.name = "OpenCircuitAndroid"
 
 // :ringkit — pure Kotlin/JVM port of ios/OpenCircuitKit (no Android imports).
-// :ble, :store, :health and :app are added as their phases start.
+// :store — the on-device Room database (Kotlin Multiplatform: JVM for tests, Android for the app);
+//          depends on :ringkit, never the reverse.
+// :ble, :health and :app are added as their phases start.
 include(":ringkit")
+include(":store")
