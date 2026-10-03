@@ -63,6 +63,26 @@ class FoundationTextHazardTest {
     }
 
     @Test
+    fun `a tie between two shortest decimals goes to the even last digit as Swift's description does`() {
+        // Measured (Swift 6.3.2, String(Double)): 2^49 + k/4 has an ulp of 1/8, so at .25 and .75 two
+        // 16-digit decimals both read back and sit at the same distance; Swift prints the one whose last
+        // digit is even. Found by the export's 10 000-double sweep (the samples CSV's fraction branch).
+        val measured = listOf(
+            562949953421312.25 to "562949953421312.2",
+            562949953421312.75 to "562949953421312.8",
+            562949953421313.25 to "562949953421313.2",
+            562949953421313.75 to "562949953421313.8",
+            -568607489321053.75 to "-568607489321053.8",
+            600000000000000.25 to "600000000000000.2",
+            600000000000000.75 to "600000000000000.8",
+            700000000000001.25 to "700000000000001.2",
+            700000000000001.75 to "700000000000001.8",
+            562949953421312.5 to "562949953421312.5",
+        )
+        for ((v, text) in measured) assertEquals(text, FoundationText.swiftDescription(v), "swiftDescription(${v.toRawBits()})")
+    }
+
+    @Test
     fun `percent-zero-f rounds the binary value half to even through the one fixed-decimal helper`() {
         val measured = listOf(2.5 to "2", 3.5 to "4", -0.0 to "-0", 0.5 to "0", 1e20 to "100000000000000000000", 72.0 to "72", -3.0 to "-3")
         for ((v, text) in measured) assertEquals(text, swiftFixed(v, 0), "%.0f of $v")

@@ -57,7 +57,11 @@ internal object FoundationText {
 
     private const val TWO_TO_53 = 9007199254740992.0
 
-    /** The shortest decimal (trailing zeros stripped) that parses back to [x] (> 0, finite); closest on a tie of length. */
+    /**
+     * The shortest decimal (trailing zeros stripped) that parses back to [x] (> 0, finite); the closest
+     * on a tie of length, and when both are equally close the one with the even last digit (measured:
+     * Swift prints 2^49 + 0.25 as `…312.2` and 2^49 + 0.75 as `…312.8`).
+     */
     private fun shortestRoundTrip(x: Double): BigDecimal {
         val exact = BigDecimal(x)
         for (p in 1..17) {
@@ -67,7 +71,11 @@ internal object FoundationText {
             val downOk = down.signum() != 0 && down.toPlainString().toDouble() == x
             val upOk = up.toPlainString().toDouble() == x
             val pick = when {
-                downOk && upOk -> if (exact.subtract(down) <= up.subtract(exact)) down else up
+                downOk && upOk -> when (exact.subtract(down).compareTo(up.subtract(exact))) {
+                    -1 -> down
+                    1 -> up
+                    else -> mc(RoundingMode.HALF_EVEN)
+                }
                 downOk -> down
                 upOk -> up
                 else -> null
