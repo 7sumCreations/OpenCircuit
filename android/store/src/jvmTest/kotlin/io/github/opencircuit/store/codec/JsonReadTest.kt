@@ -105,6 +105,29 @@ class JsonReadTest {
         assertUnreadable(u32("""{"n":-1}"""), """{"n":-1}""")
     }
 
+    /**
+     * Kotlin-only (I7, unbounded work): a number literal is turned into a `BigDecimal` / double from
+     * its whole text, which costs more than linear time in its length. A literal longer than any
+     * number the store writes is unreadable before that work. The longest the store can need: the
+     * smallest double written out in plain decimal, `-0.` + 323 zeros + `5` (327 characters).
+     */
+    @Test
+    fun aNumberLiteralLongerThanAnyStoredNumberIsUnreadableWithoutParsingIt() {
+        val plainSmallest = "-0." + "0".repeat(323) + "5"
+        assertEquals(327, plainSmallest.length)
+        assertEquals(-4.9e-324, valueOf(doubleField("""{"n":$plainSmallest}""")))
+
+        val run = "1".repeat(1_000_000)
+        val started = System.nanoTime()
+        for (raw in listOf("""{"n":$run}""", """{"n":-$run}""", """{"n":0.$run}""", """{"n":1e$run}""")) {
+            assertIs<Decoded.Unreadable>(longField(raw), "1 MB literal as an integer")
+            assertIs<Decoded.Unreadable>(intField(raw), "1 MB literal as an Int")
+            assertIs<Decoded.Unreadable>(doubleField(raw), "1 MB literal as a double")
+        }
+        val millis = (System.nanoTime() - started) / 1_000_000
+        assertTrue(millis < 2_000, "twelve 1 MB literals took $millis ms; each must be refused in linear time")
+    }
+
     @Test
     fun onlyAFiniteDoubleIsRead() {
         assertEquals(1e300, valueOf(doubleField("""{"n":1e300}""")))

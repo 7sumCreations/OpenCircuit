@@ -187,11 +187,18 @@ internal fun jsonObjectOf(vararg entries: Pair<String, JsonElement?>): JsonObjec
 /**
  * RFC 8259 JSON to the library's element tree, with a duplicate key keeping its first value.
  * Numbers stay as their literal text, so each reader above applies its own rule to it. Lone
- * surrogates, control characters in strings, a byte-order mark, trailing text and nesting deeper
- * than [MAX_DEPTH] are unreadable.
+ * surrogates, control characters in strings, a byte-order mark, trailing text, nesting deeper
+ * than [MAX_DEPTH] and a number literal longer than [MAX_NUMBER_LENGTH] are unreadable.
  */
 internal object StrictJson {
     const val MAX_DEPTH = 512
+
+    /**
+     * The longest number literal read. The longest any stored number can need is 327 characters:
+     * the smallest double written out in plain decimal (`-0.` + 323 zeros + `5`); a 64-bit integer
+     * is at most 20 and a double in exponent form at most 24. The rest is margin.
+     */
+    const val MAX_NUMBER_LENGTH = 400
 
     fun parse(text: String): JsonElement {
         val p = Parser(text)
@@ -362,6 +369,9 @@ internal object StrictJson {
                 if (pos >= s.length || s[pos] !in '0'..'9') unreadable("bad exponent at $start")
                 digits()
             }
+            // Each reader parses the whole literal (BigDecimal, toDouble), in more than linear time;
+            // a literal longer than any number the store writes is refused before that work.
+            if (pos - start > MAX_NUMBER_LENGTH) unreadable("number literal longer than $MAX_NUMBER_LENGTH characters at $start")
             return JsonUnquotedLiteral(s.substring(start, pos))
         }
 
