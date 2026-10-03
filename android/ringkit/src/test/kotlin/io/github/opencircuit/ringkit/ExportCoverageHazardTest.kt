@@ -114,6 +114,18 @@ class ExportCoverageHazardTest {
     }
 
     @Test
+    fun aTrailingSilenceExactlyAtTheMinimumIsNotAGap() {
+        // Upstream `if to.timeIntervalSince(cursor) > minGap` — strictly longer, for the trailing hole
+        // as for the interior ones. Whole seconds, so the Date-double difference is exact.
+        val atMinimum = ExportCoverage.assess(five, t0, at(900))
+        assertEquals(emptyList(), gaps(atMinimum), "600 → 900 is exactly two epochs: jitter, not a hole")
+        assertEquals(0.0, atMinimum.longestGapSeconds)
+        val oneSecondMore = ExportCoverage.assess(five, t0, at(901))
+        assertEquals(listOf(600L to 901L), gaps(oneSecondMore))
+        assertEquals(301.0, oneSecondMore.longestGapSeconds)
+    }
+
+    @Test
     fun anExpectedCountBeyondSixtyFourBitsSaturatesInsteadOfTrapping() {
         // Upstream TRAPS here ("Double value cannot be converted to Int … greater than Int.max",
         // measured for a 1e-300 s cadence over an hour and a 1 ms cadence over 2e16 s).
