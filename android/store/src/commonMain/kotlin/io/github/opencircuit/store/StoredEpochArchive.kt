@@ -36,6 +36,10 @@ class StoredEpochArchive(records: List<BulkRecord>, val marks: EpochArchiveMarks
  * - [unmovedDrains]: completed drains that left [headAt] unmoved (`sleep.unmovedCompletedDrains`).
  * - [hrvPooling]: the last DECIDED HRV-pooling verdict (`sleep.hrvPoolingVerdict`); null before the
  *   first decision. `NO_EVIDENCE` is the absence of a decision and is never stored, as upstream.
+ *
+ * Only marks that read back as themselves can be built: each date must be stored as more than
+ * 0 ms after the epoch and within 64-bit milliseconds (a stored time of 0 or less reads as no date,
+ * upstream's `t > 0`), and [unmovedDrains] must be 0 or more.
  */
 data class EpochArchiveMarks(
     val lastDrainAt: Instant? = null,
@@ -45,7 +49,18 @@ data class EpochArchiveMarks(
 ) {
     init {
         require(hrvPooling != BulkSleep.HRVPooling.NO_EVIDENCE) { "NO_EVIDENCE is not a decided verdict and is never stored" }
+        require(lastDrainAt == null || lastDrainAt.storesAfterEpoch()) { "lastDrainAt $lastDrainAt is not stored after the epoch" }
+        require(headAt == null || headAt.storesAfterEpoch()) { "headAt $headAt is not stored after the epoch" }
+        require(unmovedDrains >= 0) { "unmovedDrains $unmovedDrains is below 0" }
     }
+
+    /** Whether this time is stored as a positive 64-bit millisecond count (the stored form's one cut). */
+    private fun Instant.storesAfterEpoch(): Boolean =
+        try {
+            toEpochMilli() > 0
+        } catch (e: ArithmeticException) {
+            false
+        }
 
     companion object {
         val NONE = EpochArchiveMarks()

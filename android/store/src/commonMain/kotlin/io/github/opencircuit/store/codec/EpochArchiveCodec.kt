@@ -18,8 +18,8 @@ import java.time.Instant
  * value. `records` is those bytes as lowercase hex with no separators, read back with
  * `EpochArchive.decode` (a trailing partial record is dropped, as upstream); hex in any other form
  * makes the archive unreadable. A drain fact that cannot be read reads as upstream's default for
- * a missing key — no date (as for a stored time of 0 or less), 0 drains, no verdict — and never
- * costs the archive, which the ring cannot send again.
+ * a missing key — no date (as for a stored time of 0 or less), 0 drains (as for a negative
+ * count), no verdict — and never costs the archive, which the ring cannot send again.
  */
 object EpochArchiveCodec {
 
@@ -42,7 +42,8 @@ object EpochArchiveCodec {
             EpochArchiveMarks(
                 lastDrainAt = o.lenientDate("lastDrainAt"),
                 headAt = o.lenientDate("headAt"),
-                unmovedDrains = orDefault(0) { o.optional("unmovedDrains")?.int() ?: 0 },
+                // A negative count is not a count (EpochArchiveMarks refuses it): the default.
+                unmovedDrains = orDefault(0) { o.optional("unmovedDrains")?.int()?.takeIf { it >= 0 } ?: 0 },
                 hrvPooling = orDefault(null) { o.optional("hrvPooling")?.string()?.let(::verdictOf) },
             ),
         )

@@ -8,6 +8,7 @@ import io.github.opencircuit.store.hex
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /**
  * The stored form of one ring's epoch archive and its drain facts.
@@ -108,5 +109,43 @@ class EpochArchiveCodecTest {
 
         // Missing facts are the defaults too.
         assertEquals(StoredEpochArchive(records, EpochArchiveMarks.NONE), readable(EpochArchiveCodec.decode("""{"records":"$recordsHex"}""")))
+
+        // A negative drain count is not a count: the default, and the archive is kept.
+        val negative = """{"records":"$recordsHex","unmovedDrains":-1}"""
+        assertEquals(StoredEpochArchive(records, EpochArchiveMarks.NONE), readable(EpochArchiveCodec.decode(negative)))
+    }
+
+    /**
+     * Kotlin-only (the I-30 / PL-2026-10-01-o class): marks that would not read back as themselves
+     * are refused when built. A time stored as 0 ms or less reads as no date (upstream's `t > 0`),
+     * a time past 64-bit milliseconds cannot be written, and a drain count below 0 is not a count.
+     */
+    @Test
+    fun marksThatWouldNotReadBackAsThemselvesAreRefusedWhenBuilt() {
+        val unstorable = listOf(
+            Instant.EPOCH,
+            Instant.ofEpochMilli(-1),
+            Instant.ofEpochSecond(0, 999_999), // cut to 0 ms when stored
+            Instant.ofEpochSecond(-1_000_000_000_000L),
+            Instant.MAX,
+        )
+        for (t in unstorable) {
+            assertFailsWith<IllegalArgumentException>("lastDrainAt $t") { EpochArchiveMarks(lastDrainAt = t) }
+            assertFailsWith<IllegalArgumentException>("headAt $t") { EpochArchiveMarks(headAt = t) }
+        }
+        assertFailsWith<IllegalArgumentException> { EpochArchiveMarks(unmovedDrains = -1) }
+        assertFailsWith<IllegalArgumentException> { EpochArchiveMarks(unmovedDrains = Int.MIN_VALUE) }
+    }
+
+    /** Every boundary value the marks accept round-trips through the stored form unchanged. */
+    @Test
+    fun marksAtEveryAcceptedBoundaryRoundTrip() {
+        val times = listOf(null, Instant.ofEpochMilli(1), Instant.ofEpochSecond(0, 1_000_000), Instant.ofEpochMilli(Long.MAX_VALUE))
+        val counts = listOf(0, 1, Int.MAX_VALUE)
+        val verdicts = listOf(null, BulkSleep.HRVPooling.AGREE, BulkSleep.HRVPooling.DISAGREE)
+        for (t in times) for (n in counts) for (v in verdicts) {
+            val archive = StoredEpochArchive(records, EpochArchiveMarks(lastDrainAt = t, headAt = t, unmovedDrains = n, hrvPooling = v))
+            assertEquals(archive, readable(EpochArchiveCodec.decode(EpochArchiveCodec.encode(archive))))
+        }
     }
 }
