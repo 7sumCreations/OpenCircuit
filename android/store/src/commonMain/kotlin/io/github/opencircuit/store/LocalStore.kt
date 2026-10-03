@@ -573,8 +573,11 @@ class LocalStore internal constructor(
             val end = s.end.toStoredMillis()
             return if (start == s.start && end == s.end) s else s.copy(start = start, end = end)
         }
-
-        /** The first instant of [t]'s local day in [zone] (Foundation's `startOfDay(for:)`). */
-        private fun startOfDay(t: Instant, zone: ZoneId): Instant = t.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
     }
 }
+
+/**
+ * The first instant of [t]'s local day in [zone] (Foundation's `startOfDay(for:)`): on a day whose
+ * midnight the zone skips, the first instant that exists. Shared by [LocalStore] and [SleepStore].
+ */
+internal fun startOfDay(t: Instant, zone: ZoneId): Instant = t.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
