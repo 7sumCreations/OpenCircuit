@@ -17,8 +17,10 @@ import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -218,6 +220,38 @@ class BlobStoreTest {
             // A readable state stored under another day's key is not that day's state.
             db.plant("hk.activeEnergy/2026-10-04", assertNotNull(EnergyLedgerDayCodec.encode(day)))
             assertIs<Decoded.Unreadable>(blobs.loadEnergyLedgerDay(date.plusDays(1)))
+        }
+    }
+
+    /**
+     * Kotlin-only: the ledger's rules live in its codec, not its constructor, so the save is the
+     * gate. Every day the save accepts reads back under its own date — offset and region zones,
+     * negative totals (kept, as upstream), -0.0, the extreme finite doubles, no buckets — and a day
+     * whose instant cannot be stored at all fails the save loudly without writing anything.
+     */
+    @Test
+    fun everyEnergyLedgerDayTheSaveAcceptsReadsBackUnderItsOwnDate() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val blobs = BlobStore(db)
+            val zones = listOf(
+                ZoneOffset.UTC, ZoneOffset.ofHoursMinutes(-9, -30), ZoneId.of("UTC"), ZoneId.of("GMT+01:00"),
+                ZoneId.of("Pacific/Kiritimati"), ZoneId.of("America/St_Johns"),
+            )
+            for (zone in zones) {
+                val midnight = LocalDate.of(2026, 10, 3).atStartOfDay(zone).toInstant()
+                val day = EnergyLedgerDay(
+                    midnight, zone, midnight.plusSeconds(3_600), listOf(0.0, Double.MIN_VALUE, Double.MAX_VALUE),
+                    -4.0, -0.0, Double.MAX_VALUE, midnight, midnight, -Double.MAX_VALUE,
+                )
+                for (d in listOf(day, day.copy(bucketKcal = emptyList(), anchorEnd = null, bucketSeedDay = null, workoutCreditedDay = null))) {
+                    assertTrue(blobs.saveEnergyLedgerDay(d, now), "$zone")
+                    assertEquals(Decoded.Readable(d), blobs.loadEnergyLedgerDay(d.localDate), "$zone")
+                }
+            }
+
+            val unstorable = EnergyLedgerDay(Instant.MAX, ZoneOffset.UTC, null, emptyList(), 0.0, 0.0, 0.0, null, null, 0.0)
+            assertFails { blobs.saveEnergyLedgerDay(unstorable, now) }
+            assertEquals(emptyList(), db.queryRaw("SELECT `key` FROM store_kv WHERE `key` LIKE 'hk.activeEnergy/+%'"))
         }
     }
 }
