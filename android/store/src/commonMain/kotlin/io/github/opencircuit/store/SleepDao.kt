@@ -98,6 +98,10 @@ internal interface SleepDao {
     @Query("DELETE FROM stored_cursor WHERE kind_raw = :kindRaw")
     suspend fun deleteCursorAt(kindRaw: String): Int
 
+    /** How many headache risk rows name the night [nightKey]. */
+    @Query("SELECT COUNT(*) FROM stored_headache_risk WHERE night_key = :nightKey")
+    suspend fun riskRowsForNight(nightKey: Instant): Int
+
     /** Points every headache risk row naming the night [from] at [to]; returns how many. */
     @Query("UPDATE stored_headache_risk SET night_key = :to WHERE night_key = :from")
     suspend fun renameHeadacheNightKey(from: Instant, to: Instant): Int

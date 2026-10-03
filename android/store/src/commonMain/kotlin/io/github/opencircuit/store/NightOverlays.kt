@@ -22,8 +22,8 @@ import java.time.Instant
 // - The onset is whole epoch milliseconds in text (upstream: a property-list date); anything else
 //   reads as absent, as upstream's `as? Date`.
 // - Every write joins the caller's transaction, so a value commits or rolls back with its row.
-// The renames a re-keyed night needs, and the stack's `pop`, which nothing calls upstream, are not
-// here.
+// The renames a night moved to another key needs live in NightRekey; the stack's `pop`, which
+// nothing calls upstream, is not ported.
 
 /** A stored night's edit values, read and written inside the caller's transaction. */
 internal class NightOverlays(private val kv: KvDao) {
@@ -68,6 +68,13 @@ internal class NightOverlays(private val kv: KvDao) {
         const val MAX_PRIOR_DEPTH = 20
 
         /** `<prefix>.<night in whole epoch seconds>.0` — [night] is a stored row's key. */
-        fun key(prefix: String, night: Instant): String = "$prefix.${night.epochSecond}.0"
+        fun key(prefix: String, night: Instant): String = "$prefix.${dayText(night)}"
+
+        /**
+         * A stored row's key as upstream writes it into every per-night key: its seconds since 1970
+         * printed as a Swift `Double` (`1749938400.0`), which Kotlin's `Double.toString` would print as
+         * `1.7499384E9`.
+         */
+        fun dayText(night: Instant): String = "${night.epochSecond}.0"
     }
 }
