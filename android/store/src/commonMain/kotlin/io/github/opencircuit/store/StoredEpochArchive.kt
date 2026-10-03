@@ -3,13 +3,26 @@ package io.github.opencircuit.store
 import io.github.opencircuit.ringkit.BulkRecord
 import io.github.opencircuit.ringkit.BulkSleep
 import java.time.Instant
+import java.util.Collections
 
 /**
  * One ring's stored epoch archive: the raw `0x4c` records kept for re-staging a night, and the
  * facts about its drains (upstream `EpochArchiveStore`, ios/OpenCircuit/Store/EpochArchiveStore.swift
- * @ b1c2fdd, which keeps each in its own `UserDefaults` key).
+ * @ b1c2fdd, which keeps each in its own `UserDefaults` key). [records] is copied in, so a later
+ * change to the caller's list changes nothing here; two archives compare by content.
  */
-data class StoredEpochArchive(val records: List<BulkRecord>, val marks: EpochArchiveMarks) {
+class StoredEpochArchive(records: List<BulkRecord>, val marks: EpochArchiveMarks) {
+    val records: List<BulkRecord> = Collections.unmodifiableList(ArrayList(records))
+
+    fun copy(records: List<BulkRecord> = this.records, marks: EpochArchiveMarks = this.marks): StoredEpochArchive =
+        StoredEpochArchive(records, marks)
+
+    override fun equals(other: Any?): Boolean = other is StoredEpochArchive && records == other.records && marks == other.marks
+
+    override fun hashCode(): Int = 31 * records.hashCode() + marks.hashCode()
+
+    override fun toString(): String = "StoredEpochArchive(records=$records, marks=$marks)"
+
     companion object {
         val EMPTY = StoredEpochArchive(emptyList(), EpochArchiveMarks.NONE)
     }

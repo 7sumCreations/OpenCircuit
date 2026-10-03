@@ -11,4 +11,7 @@ internal interface KvDao {
 
     @Query("SELECT * FROM store_kv WHERE `key` = :key")
     suspend fun get(key: String): StoreKvEntity?
+
+    @Query("DELETE FROM store_kv WHERE `key` = :key")
+    suspend fun delete(key: String)
 }

@@ -121,6 +121,17 @@ class EnergyLedgerDayCodecTest {
     }
 
     @Test
+    fun theWatermarksAreCopiedInSoALaterChangeToTheCallersListChangesNothing() {
+        val marks = mutableListOf(1.0, 2.0)
+        val held = day.copy(bucketKcal = marks)
+        val before = EnergyLedgerDayCodec.encode(held)
+        marks[0] = -5.0
+        marks += 9.0
+        assertEquals(listOf(1.0, 2.0), held.bucketKcal)
+        assertEquals(before, EnergyLedgerDayCodec.encode(held))
+    }
+
+    @Test
     fun aValueTheStoredFormCouldNotReadBackIsNotEncoded() {
         assertNull(EnergyLedgerDayCodec.encode(day.copy(bucketKcal = listOf(1.0, -0.5))))
         assertNull(EnergyLedgerDayCodec.encode(day.copy(bucketKcal = listOf(Double.NaN))))

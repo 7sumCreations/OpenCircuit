@@ -60,6 +60,15 @@ class EpochArchiveCodecTest {
     }
 
     @Test
+    fun theRecordsAreCopiedInSoALaterChangeToTheCallersListChangesNothing() {
+        val list = records.toMutableList()
+        val held = StoredEpochArchive(list, marks)
+        list.clear()
+        assertEquals(records, held.records)
+        assertEquals(records, held.copy(marks = EpochArchiveMarks.NONE).records)
+    }
+
+    @Test
     fun aTrailingPartialRecordIsDroppedAsUpstreamDecodes() {
         val read = readable(EpochArchiveCodec.decode("""{"records":"${recordsHex}0102030405","unmovedDrains":0}"""))
         assertEquals(records, read.records)
