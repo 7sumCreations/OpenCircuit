@@ -126,7 +126,7 @@ class ExportDifferentialTest {
             compare(c.id, "samples.csv", csv, ExportEngine.samplesCSV(c.rows).toByteArray(Charsets.UTF_8), divergences, report)
             if (c.json) {
                 val json = checkNotNull(resource("${c.id}.json")) { "missing golden ${c.id}.json" }
-                compare(c.id, "json", json, ExportEngine.toJSON(samples = c.rows, zone = c.zone, now = c.now)?.toByteArray(Charsets.UTF_8), divergences, report)
+                compare(c.id, "json", json, ExportEngine.toJSON(samples = c.rows, sleep = emptyList(), daily = emptyList(), zone = c.zone, now = c.now)?.toByteArray(Charsets.UTF_8), divergences, report)
             }
         }
         return report
@@ -150,7 +150,7 @@ class ExportDifferentialTest {
         assertTrue(csvOnly.isNotEmpty(), "the generator wrote no non-finite case")
         for (c in csvOnly) {
             assertTrue(c.rows.any { !it.value.isFinite() }, "${c.id} is marked csvonly but every value is finite")
-            assertNull(ExportEngine.toJSON(samples = c.rows, zone = c.zone, now = c.now), c.id)
+            assertNull(ExportEngine.toJSON(samples = c.rows, sleep = emptyList(), daily = emptyList(), zone = c.zone, now = c.now), c.id)
             assertNull(resource("${c.id}.json"), "${c.id} has a JSON golden although upstream cannot write one")
         }
     }

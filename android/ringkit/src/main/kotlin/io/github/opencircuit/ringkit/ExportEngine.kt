@@ -2,14 +2,17 @@ package io.github.opencircuit.ringkit
 
 // Port of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/ExportEngine.swift (@ b1c2fdd), growing
 // in slices (see PORTING.md): pure export serialization — callers fetch from the store and pass plain
-// rows here. So far: the samples table (`SampleRow`, `samplesCSV`, the CSV field escaper and number
-// text) and `toJSON` with its samples, provenance, units and notes, plus `SleepEdgeProvenanceRow`
+// rows here. So far: schema 2 whole — the sample, sleep, daily, step, nap, daytime-temperature and
+// history-sync-evidence rows, their CSV writers (with the CSV field escaper and number text), and
+// `toJSON` with every schema-2 section plus the provenance, units and notes — the epoch-archive row
+// type, and `SleepEdgeProvenanceRow`
 // (`:354-427`), which the sleep confidence tests use. Every byte follows upstream's Foundation output
 // on valid input (FoundationText, ExportJson); the export differential compares whole files.
 //
-// No ambient environment: `toJSON` takes the zone its device-local labels are printed in and the
-// export instant (upstream reads `Calendar.current` and defaults `now` to the device clock). The v2
-// sections, `exportedAt` and the samples print UTC (`…Z`) whatever the zone, as upstream.
+// No ambient environment: every writer that prints a device-local label (`night`, `day`) takes the
+// zone to print it in, and `toJSON` the export instant (upstream reads `Calendar.current` and
+// defaults `now` to the device clock). Every other time in the schema-2 sections prints UTC (`…Z`)
+// whatever the zone, as upstream.
 
 import java.time.Instant
 import java.time.ZoneId
@@ -36,12 +39,169 @@ object ExportEngine {
         override fun toString(): String = "SampleRow(kind=$kind, start=$start, end=$end, value=$value)"
     }
 
+    /**
+     * One persisted nightly sleep summary. [night] is the night's bucket instant (local midnight in the
+     * zone it was bucketed with); minutes, scores and heart rates are Swift `Int`s (64-bit, so `Long`);
+     * [efficiency] is a fraction, [skinTempC] degrees Celsius. [movementLevels] is copied in and read
+     * only. Compares as Swift's synthesized `Equatable`: doubles by IEEE `==`.
+     */
+    class SleepRow(
+        val night: Instant,
+        val asleepMin: Long,
+        val deepMin: Long,
+        val lightMin: Long,
+        val remMin: Long,
+        val awakeMin: Long,
+        val efficiency: Double,
+        val inBedStart: Instant? = null,
+        val inBedEnd: Instant? = null,
+        val skinTempC: Double,
+        val sleepScore: Long,
+        val stressScore: Long,
+        val feelScore: Long = 0,
+        val hrDeep: Long = 0,
+        val hrLight: Long = 0,
+        val hrRem: Long = 0,
+        val hrAwake: Long = 0,
+        movementLevels: List<Long> = emptyList(),
+    ) {
+        /** A read-only copy of the list passed in (a Swift array is a value). */
+        val movementLevels: List<Long> = Collections.unmodifiableList(ArrayList(movementLevels))
+
+        private fun fields(): List<Any?> = listOf(
+            night, asleepMin, deepMin, lightMin, remMin, awakeMin, ieeeHash(efficiency), inBedStart, inBedEnd, ieeeHash(skinTempC),
+            sleepScore, stressScore, feelScore, hrDeep, hrLight, hrRem, hrAwake, movementLevels,
+        )
+
+        override fun equals(other: Any?): Boolean =
+            other is SleepRow && efficiency == other.efficiency && skinTempC == other.skinTempC && night == other.night &&
+                asleepMin == other.asleepMin && deepMin == other.deepMin && lightMin == other.lightMin && remMin == other.remMin &&
+                awakeMin == other.awakeMin && inBedStart == other.inBedStart && inBedEnd == other.inBedEnd &&
+                sleepScore == other.sleepScore && stressScore == other.stressScore && feelScore == other.feelScore &&
+                hrDeep == other.hrDeep && hrLight == other.hrLight && hrRem == other.hrRem && hrAwake == other.hrAwake &&
+                movementLevels == other.movementLevels
+
+        override fun hashCode(): Int = fields().hashCode()
+
+        override fun toString(): String =
+            "SleepRow(night=$night, asleepMin=$asleepMin, deepMin=$deepMin, lightMin=$lightMin, remMin=$remMin, awakeMin=$awakeMin, " +
+                "efficiency=$efficiency, inBedStart=$inBedStart, inBedEnd=$inBedEnd, skinTempC=$skinTempC, sleepScore=$sleepScore, " +
+                "stressScore=$stressScore, feelScore=$feelScore, hrDeep=$hrDeep, hrLight=$hrLight, hrRem=$hrRem, hrAwake=$hrAwake, " +
+                "movementLevels=$movementLevels)"
+    }
+
+    /** One day's step rollup; [day] is the day's bucket instant (local midnight). */
+    class DailyRow(val day: Instant, val steps: Long) {
+        override fun equals(other: Any?): Boolean = other is DailyRow && day == other.day && steps == other.steps
+
+        override fun hashCode(): Int = listOf(day, steps).hashCode()
+
+        override fun toString(): String = "DailyRow(day=$day, steps=$steps)"
+    }
+
+    /** One intraday step delta over [start, end]. */
+    class StepSampleRow(val start: Instant, val end: Instant, val delta: Long) {
+        override fun equals(other: Any?): Boolean =
+            other is StepSampleRow && start == other.start && end == other.end && delta == other.delta
+
+        override fun hashCode(): Int = listOf(start, end, delta).hashCode()
+
+        override fun toString(): String = "StepSampleRow(start=$start, end=$end, delta=$delta)"
+    }
+
+    /** One daytime nap. */
+    class NapRow(val start: Instant, val end: Instant, val asleepMin: Long, val isLongNap: Boolean) {
+        override fun equals(other: Any?): Boolean =
+            other is NapRow && start == other.start && end == other.end && asleepMin == other.asleepMin && isLongNap == other.isLongNap
+
+        override fun hashCode(): Int = listOf(start, end, asleepMin, isLongNap).hashCode()
+
+        override fun toString(): String = "NapRow(start=$start, end=$end, asleepMin=$asleepMin, isLongNap=$isLongNap)"
+    }
+
+    /** One daytime skin-temperature sample in degrees Celsius; [celsius] compares by IEEE `==`. */
+    class DaytimeTemperatureRow(val time: Instant, val celsius: Double) {
+        override fun equals(other: Any?): Boolean = other is DaytimeTemperatureRow && time == other.time && celsius == other.celsius
+
+        override fun hashCode(): Int = listOf(time, ieeeHash(celsius)).hashCode()
+
+        override fun toString(): String = "DaytimeTemperatureRow(time=$time, celsius=$celsius)"
+    }
+
+    /**
+     * What one history drain did, for troubleshooting. [nightRowOutcome] is which branch of the
+     * night-summary write ran ([SleepPersistOutcome.rawValue]), or null when the drain staged no
+     * night. [channels] holds independent copies of the traces passed in — a drain keeps filling its
+     * own — and every read hands out fresh copies, so the row is a value as upstream's struct is.
+     */
+    class HistorySyncEvidenceRow(
+        val capturedAt: Instant,
+        val ringID: String,
+        val trigger: String,
+        val sleepCommitted: Boolean,
+        val stagedSleepSegments: Long,
+        val mergedRecordCount: Long,
+        val historySampleCount: Long,
+        val rawRecordBlobBase64: String,
+        channels: List<HistoryChannelTrace>,
+        val nightRowOutcome: String? = null,
+    ) {
+        private val traces: List<HistoryChannelTrace> = channels.map { it.copy() }
+
+        /** Copies of the traces, read-only: changing what you are handed never changes the row. */
+        val channels: List<HistoryChannelTrace> get() = Collections.unmodifiableList(traces.map { it.copy() })
+
+        private fun fields(): List<Any?> = listOf(
+            capturedAt, ringID, trigger, sleepCommitted, stagedSleepSegments, mergedRecordCount, historySampleCount,
+            rawRecordBlobBase64, traces, nightRowOutcome,
+        )
+
+        override fun equals(other: Any?): Boolean = other is HistorySyncEvidenceRow && fields() == other.fields()
+
+        override fun hashCode(): Int = fields().hashCode()
+
+        override fun toString(): String =
+            "HistorySyncEvidenceRow(capturedAt=$capturedAt, ringID=$ringID, trigger=$trigger, sleepCommitted=$sleepCommitted, " +
+                "stagedSleepSegments=$stagedSleepSegments, mergedRecordCount=$mergedRecordCount, historySampleCount=$historySampleCount, " +
+                "channels=${traces.size}, nightRowOutcome=$nightRowOutcome)"
+    }
+
+    /**
+     * The app's own rolling epoch archive (written by a later slice of the export). [recordsBase64] is
+     * `EpochArchive.encode` output in base64; [coverage] says how the evidence blobs compare with it,
+     * held as a copy whose missing-epoch list is read-only.
+     */
+    class EpochArchiveRow(
+        val ringID: String,
+        val recordsBase64: String,
+        val recordCount: Long,
+        val firstEpoch: Instant?,
+        val lastEpoch: Instant?,
+        coverage: ArchiveEvidenceCoverage.Report,
+    ) {
+        val coverage: ArchiveEvidenceCoverage.Report =
+            coverage.copy(missingFromEvidence = Collections.unmodifiableList(ArrayList(coverage.missingFromEvidence)))
+
+        private fun fields(): List<Any?> = listOf(ringID, recordsBase64, recordCount, firstEpoch, lastEpoch, coverage)
+
+        override fun equals(other: Any?): Boolean = other is EpochArchiveRow && fields() == other.fields()
+
+        override fun hashCode(): Int = fields().hashCode()
+
+        override fun toString(): String =
+            "EpochArchiveRow(ringID=$ringID, recordCount=$recordCount, firstEpoch=$firstEpoch, lastEpoch=$lastEpoch, coverage=$coverage)"
+    }
+
     // --- CSV ---
 
     /**
      * RFC-4180 field escaper; every CSV field goes through it. Quotes a value holding a comma, a quote,
      * a line feed or carriage return (so a CRLF is caught too), or a leading or trailing space, and
      * doubles its quotes; anything else is returned as is.
+     *
+     * Every trigger is tested per character. Upstream tests line breaks on Unicode scalars but the
+     * comma, the quote and the edge spaces on Swift Characters, so one followed by a combining mark is
+     * missed there and the row's later columns shift (measured); here it is quoted (PORTING.md D-134).
      */
     internal fun csvField(value: String): String {
         val needsQuoting = value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') ||
@@ -65,44 +225,221 @@ object ExportEngine {
         return lines.joinToString("\n")
     }
 
+    /**
+     * CSV of the nightly sleep summaries, every stored column. `night` is `yyyy-MM-dd` in [zone];
+     * `efficiency` `%.4f`, `skinTempC` `%.2f`; the in-bed times ISO-8601 UTC, empty when absent;
+     * `movementLevels` joined with `|`.
+     */
+    fun sleepCSV(rows: List<SleepRow>, zone: ZoneId): String {
+        val lines = ArrayList<String>(rows.size + 1)
+        lines += "night,asleepMin,deepMin,lightMin,remMin,awakeMin,efficiency,inBedStart,inBedEnd,skinTempC,sleepScore,stressScore,feelScore,hrDeep,hrLight,hrRem,hrAwake,movementLevels"
+        for (r in rows) {
+            lines += csvLine(
+                listOf(
+                    FoundationText.dateOnly(r.night, zone),
+                    r.asleepMin.toString(), r.deepMin.toString(), r.lightMin.toString(), r.remMin.toString(), r.awakeMin.toString(),
+                    swiftFixed(r.efficiency, 4),
+                    r.inBedStart?.let(::iso8601) ?: "",
+                    r.inBedEnd?.let(::iso8601) ?: "",
+                    swiftFixed(r.skinTempC, 2),
+                    r.sleepScore.toString(), r.stressScore.toString(), r.feelScore.toString(),
+                    r.hrDeep.toString(), r.hrLight.toString(), r.hrRem.toString(), r.hrAwake.toString(),
+                    r.movementLevels.joinToString("|"),
+                ),
+            )
+        }
+        return lines.joinToString("\n")
+    }
+
+    /** CSV of the daily step rollups. Header `day,steps`; `day` is `yyyy-MM-dd` in [zone]. */
+    fun dailyCSV(rows: List<DailyRow>, zone: ZoneId): String {
+        val lines = ArrayList<String>(rows.size + 1)
+        lines += "day,steps"
+        for (r in rows) lines += csvLine(listOf(FoundationText.dateOnly(r.day, zone), r.steps.toString()))
+        return lines.joinToString("\n")
+    }
+
+    /** CSV of the intraday step deltas. Header `start,end,delta`; times ISO-8601 UTC. */
+    fun stepSamplesCSV(rows: List<StepSampleRow>): String {
+        val lines = ArrayList<String>(rows.size + 1)
+        lines += "start,end,delta"
+        for (r in rows) lines += csvLine(listOf(iso8601(r.start), iso8601(r.end), r.delta.toString()))
+        return lines.joinToString("\n")
+    }
+
+    /** CSV of the daytime naps. Header `start,end,asleepMin,isLongNap`; times ISO-8601 UTC. */
+    fun napsCSV(rows: List<NapRow>): String {
+        val lines = ArrayList<String>(rows.size + 1)
+        lines += "start,end,asleepMin,isLongNap"
+        for (r in rows) lines += csvLine(listOf(iso8601(r.start), iso8601(r.end), r.asleepMin.toString(), r.isLongNap.toString()))
+        return lines.joinToString("\n")
+    }
+
+    /** CSV of the daytime temperature samples. Header `time,celsius`; `celsius` `%.2f`. */
+    fun daytimeTemperatureCSV(rows: List<DaytimeTemperatureRow>): String {
+        val lines = ArrayList<String>(rows.size + 1)
+        lines += "time,celsius"
+        for (r in rows) lines += csvLine(listOf(iso8601(r.time), swiftFixed(r.celsius, 2)))
+        return lines.joinToString("\n")
+    }
+
+    /**
+     * CSV of the history-sync evidence. Each row's traces are flattened into one `channelSummary`
+     * column, `|`-separated: `label:outcome:4c=…:47=…:50=…:added=…`, then `:4d=…` and `:sport=…`, each
+     * only when that counter is present — a trace from before the counters existed has none, and a `0`
+     * there would claim a count that build never took. `nightRowOutcome` is the appended last column,
+     * so no earlier column index moves.
+     */
+    fun historySyncEvidenceCSV(rows: List<HistorySyncEvidenceRow>): String {
+        val lines = ArrayList<String>(rows.size + 1)
+        lines += "capturedAt,ringID,trigger,sleepCommitted,stagedSleepSegments,mergedRecordCount,historySampleCount,channelSummary,rawRecordBlobBase64,nightRowOutcome"
+        for (r in rows) {
+            val channelSummary = r.channels.joinToString("|") { c ->
+                val s = StringBuilder()
+                s.append(c.label).append(':').append(c.outcome.rawValue).append(":4c=").append(c.page4CCount).append(":47=").append(c.page47Count)
+                    .append(":50=").append(c.endMarkerCount).append(":added=").append(c.recordsAdded)
+                c.page4DCount?.let { s.append(":4d=").append(it) }
+                c.sportSampleCount?.let { s.append(":sport=").append(it) }
+                s.toString()
+            }
+            lines += csvLine(
+                listOf(
+                    iso8601(r.capturedAt), r.ringID, r.trigger, r.sleepCommitted.toString(),
+                    r.stagedSleepSegments.toString(), r.mergedRecordCount.toString(), r.historySampleCount.toString(),
+                    channelSummary, r.rawRecordBlobBase64, r.nightRowOutcome ?: "",
+                ),
+            )
+        }
+        return lines.joinToString("\n")
+    }
+
     // --- JSON ---
+
+    private fun str(s: String): ExportJson = ExportJson.JString(s)
+    private fun int(n: Long): ExportJson = ExportJson.JInt(n)
+    private fun int(n: Int): ExportJson = ExportJson.JInt(n.toLong())
+    private fun dbl(x: Double): ExportJson = ExportJson.JDouble(x)
+    private fun bool(b: Boolean): ExportJson = ExportJson.JBool(b)
+
+    /** Upstream's `jsonOrNull`: the value, or an explicit JSON null — never an omitted key. */
+    private fun jsonOrNull(s: String?): ExportJson = s?.let(::str) ?: ExportJson.JNull
+    private fun jsonOrNull(n: Int?): ExportJson = n?.let(::int) ?: ExportJson.JNull
+
+    /**
+     * The nightly-summary object, shared by the schema-2 `sleep` section and (with another timestamp
+     * policy, passed as [iso]) the schema-3 session summary, so the two can never differ in shape.
+     * `night` is `yyyy-MM-dd` in [zone].
+     */
+    private fun sleepJSON(r: SleepRow, zone: ZoneId, iso: (Instant) -> String): ExportJson = ExportJson.obj(
+        "night" to str(FoundationText.dateOnly(r.night, zone)),
+        "asleepMin" to int(r.asleepMin),
+        "deepMin" to int(r.deepMin),
+        "lightMin" to int(r.lightMin),
+        "remMin" to int(r.remMin),
+        "awakeMin" to int(r.awakeMin),
+        "efficiency" to dbl(r.efficiency),
+        "inBedStart" to jsonOrNull(r.inBedStart?.let(iso)),
+        "inBedEnd" to jsonOrNull(r.inBedEnd?.let(iso)),
+        "skinTempC" to dbl(r.skinTempC),
+        "sleepScore" to int(r.sleepScore),
+        "stressScore" to int(r.stressScore),
+        "feelScore" to int(r.feelScore),
+        "hrDeep" to int(r.hrDeep),
+        "hrLight" to int(r.hrLight),
+        "hrRem" to int(r.hrRem),
+        "hrAwake" to int(r.hrAwake),
+        "movementLevels" to ExportJson.arr(r.movementLevels.map(::int)),
+    )
+
+    private fun channelJSON(c: HistoryChannelTrace): ExportJson = ExportJson.obj(
+        "label" to str(c.label),
+        "channel" to int(c.channel),
+        "startedAt" to str(iso8601(c.startedAt)),
+        "finishedAt" to jsonOrNull(c.finishedAt?.let(::iso8601)),
+        "outcome" to str(c.outcome.rawValue),
+        "sawSyncAck" to bool(c.sawSyncAck),
+        "syncAckFlag" to jsonOrNull(c.syncAckFlag),
+        "page4CCount" to int(c.page4CCount),
+        "page47Count" to int(c.page47Count),
+        // Null, not 0, on a trace from before the counters existed: "we counted zero sport pages" and
+        // "this build never counted" are different claims.
+        "page4DCount" to jsonOrNull(c.page4DCount),
+        "sportSampleCount" to jsonOrNull(c.sportSampleCount),
+        "endMarkerCount" to int(c.endMarkerCount),
+        "recordsAtStart" to int(c.recordsAtStart),
+        "recordsAtEnd" to int(c.recordsAtEnd),
+        "recordsAdded" to int(c.recordsAdded),
+        "firstOpcode" to jsonOrNull(c.firstOpcode),
+        "lastOpcode" to jsonOrNull(c.lastOpcode),
+        "exitReason" to jsonOrNull(c.exitReason?.rawValue),
+    )
 
     /**
      * The whole export as one JSON text (`.prettyPrinted, .sortedKeys`), schema [SCHEMA_VERSION], with
-     * `exportedAt` = [now]. The v2 sections without rows here print as empty arrays, as upstream's do
-     * when it is handed none. [zone] is the zone the device-local labels are printed in.
+     * `exportedAt` = [now]. Every schema-2 section is written, as an empty array when it has no rows.
+     * Times in these sections print UTC (`…Z`); the `night` / `day` labels print `yyyy-MM-dd` in [zone],
+     * the zone the rows were bucketed with.
      *
      * Returns null if any number in the tree is NaN or infinite: upstream documents nil for a failed
      * serialization but crashes there instead (PORTING.md).
      */
     fun toJSON(
         samples: List<SampleRow>,
-        // Required now so no call site is written without it; the device-local sections that print
-        // in it (daily, sleep sessions, metadata) arrive with their rows.
-        @Suppress("UNUSED_PARAMETER") zone: ZoneId,
+        sleep: List<SleepRow>,
+        daily: List<DailyRow>,
+        stepSamples: List<StepSampleRow> = emptyList(),
+        naps: List<NapRow> = emptyList(),
+        daytimeTemperatures: List<DaytimeTemperatureRow> = emptyList(),
+        historySyncEvidence: List<HistorySyncEvidenceRow> = emptyList(),
+        zone: ZoneId,
         now: Instant,
     ): String? {
-        val root = linkedMapOf<String, ExportJson>(
-            "schemaVersion" to ExportJson.JInt(SCHEMA_VERSION.toLong()),
-            "exportedAt" to ExportJson.JString(iso8601(now)),
+        val root = linkedMapOf(
+            "schemaVersion" to int(SCHEMA_VERSION),
+            "exportedAt" to str(iso8601(now)),
             "samples" to ExportJson.arr(
                 samples.map {
+                    ExportJson.obj("kind" to str(it.kind), "start" to str(iso8601(it.start)), "end" to str(iso8601(it.end)), "value" to dbl(it.value))
+                },
+            ),
+            "sleep" to ExportJson.arr(sleep.map { sleepJSON(it, zone, ::iso8601) }),
+            "daily" to ExportJson.arr(daily.map { ExportJson.obj("day" to str(FoundationText.dateOnly(it.day, zone)), "steps" to int(it.steps)) }),
+            "stepSamples" to ExportJson.arr(
+                stepSamples.map { ExportJson.obj("start" to str(iso8601(it.start)), "end" to str(iso8601(it.end)), "delta" to int(it.delta)) },
+            ),
+            "naps" to ExportJson.arr(
+                naps.map {
                     ExportJson.obj(
-                        "kind" to ExportJson.JString(it.kind), "start" to ExportJson.JString(iso8601(it.start)),
-                        "end" to ExportJson.JString(iso8601(it.end)), "value" to ExportJson.JDouble(it.value),
+                        "start" to str(iso8601(it.start)), "end" to str(iso8601(it.end)),
+                        "asleepMin" to int(it.asleepMin), "isLongNap" to bool(it.isLongNap),
+                    )
+                },
+            ),
+            "daytimeTemperatures" to ExportJson.arr(
+                daytimeTemperatures.map { ExportJson.obj("time" to str(iso8601(it.time)), "celsius" to dbl(it.celsius)) },
+            ),
+            "historySyncEvidence" to ExportJson.arr(
+                historySyncEvidence.map {
+                    ExportJson.obj(
+                        "capturedAt" to str(iso8601(it.capturedAt)),
+                        "ringID" to str(it.ringID),
+                        "trigger" to str(it.trigger),
+                        "sleepCommitted" to bool(it.sleepCommitted),
+                        "nightRowOutcome" to jsonOrNull(it.nightRowOutcome),
+                        "stagedSleepSegments" to int(it.stagedSleepSegments),
+                        "mergedRecordCount" to int(it.mergedRecordCount),
+                        "historySampleCount" to int(it.historySampleCount),
+                        "rawRecordBlobBase64" to str(it.rawRecordBlobBase64),
+                        "channels" to ExportJson.arr(it.channels.map(::channelJSON)),
                     )
                 },
             ),
         )
-        for (section in V2_SECTIONS_WITHOUT_ROWS) root[section] = ExportJson.arr(emptyList())
         root["provenance"] = stringMap(provenance())
         root["units"] = stringMap(units)
         root["notes"] = stringMap(notes)
         return ExportJson.pretty(ExportJson.JObject(root))
     }
-
-    /** The v2 sections whose rows this port does not take yet; upstream emits each, empty without rows. */
-    private val V2_SECTIONS_WITHOUT_ROWS = listOf("sleep", "daily", "stepSamples", "naps", "daytimeTemperatures", "historySyncEvidence")
 
     private fun stringMap(map: Map<String, String>): ExportJson.JObject = ExportJson.JObject(map.mapValues { ExportJson.JString(it.value) })
 

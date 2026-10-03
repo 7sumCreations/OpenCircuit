@@ -64,7 +64,7 @@ class ExportEngineTracerTest {
     @Test
     fun `toJSON writes schema 3, the samples, every v2 section and the provenance, units and notes`() {
         val samples = listOf(row("heartRate", 72.0), row("spo2", 0.97, 1))
-        val json = assertNotNull(ExportEngine.toJSON(samples = samples, zone = ZoneId.of("Asia/Kolkata"), now = t0))
+        val json = assertNotNull(ExportEngine.toJSON(samples = samples, sleep = emptyList(), daily = emptyList(), zone = ZoneId.of("Asia/Kolkata"), now = t0))
         val root = ExportJsonReader.root(json)
         assertEquals(
             setOf(
@@ -117,10 +117,10 @@ class ExportEngineTracerTest {
     fun `a non-finite sample value makes toJSON return null while the CSV still writes`() {
         for (bad in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
             val rows = listOf(row("heartRate", 60.0), row("temperature", bad, 1))
-            assertNull(ExportEngine.toJSON(samples = rows, zone = ZoneId.of("UTC"), now = t0), "toJSON with $bad")
+            assertNull(ExportEngine.toJSON(samples = rows, sleep = emptyList(), daily = emptyList(), zone = ZoneId.of("UTC"), now = t0), "toJSON with $bad")
             assertTrue(ExportEngine.samplesCSV(rows).lines().last().endsWith(if (bad.isNaN()) ",nan" else if (bad > 0) ",inf" else ",-inf"))
         }
-        assertNotNull(ExportEngine.toJSON(samples = listOf(row("heartRate", 60.0)), zone = ZoneId.of("UTC"), now = t0))
+        assertNotNull(ExportEngine.toJSON(samples = listOf(row("heartRate", 60.0)), sleep = emptyList(), daily = emptyList(), zone = ZoneId.of("UTC"), now = t0))
     }
 
     @Test
