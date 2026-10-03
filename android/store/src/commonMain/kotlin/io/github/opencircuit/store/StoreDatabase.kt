@@ -39,6 +39,8 @@ abstract class StoreDatabase : RoomDatabase() {
     internal abstract fun kvDao(): KvDao
 
     internal abstract fun userEntryDao(): UserEntryDao
+
+    internal abstract fun sleepDao(): SleepDao
 }
 
 /** Room generates the `actual` for each target. */

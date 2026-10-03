@@ -72,9 +72,9 @@ internal data class StoredSleepSummaryEntity(
     @ColumnInfo(name = "sleep_basis", defaultValue = "''") val sleepBasis: String = "",
 )
 
-/** One nap, keyed by [start]. Columns only for now. */
+/** One nap, keyed by [start]. [SleepStore] writes it and reads it back as a [StoredNapRecord]. */
 @Entity(tableName = "stored_nap", indices = [Index(value = ["start"], unique = true)])
-@Suppress("ArrayInDataClass") // never compared: the nap write flow will map rows to values.
+@Suppress("ArrayInDataClass") // never compared: rows leave the store as StoredNapRecord values.
 internal data class StoredNapEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     @ColumnInfo(defaultValue = DISTANT_PAST_MS) val start: Instant = SleepEdit.DISTANT_PAST,
