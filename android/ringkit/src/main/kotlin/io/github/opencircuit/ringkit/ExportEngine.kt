@@ -6,13 +6,15 @@ package io.github.opencircuit.ringkit
 // history-sync-evidence rows, their CSV writers (with the CSV field escaper and number text), the
 // device-local `sessionID` / `dayStamp`, and `toJSON` with every schema-2 section plus the
 // provenance, units and notes — the epoch-archive row type, and `SleepEdgeProvenanceRow`
-// (`:354-427`), which the sleep confidence tests use. Every byte follows upstream's Foundation output
-// on valid input (FoundationText, ExportJson); the export differential compares whole files.
+// (`:354-427`), which the sleep confidence tests use; and the schema-3 core — the metadata block, the
+// OSA and sleep-session rows, the metadata / sessions / hypnogram CSVs and the `meta` and
+// `sleepSessions` JSON sections. Every byte follows upstream's Foundation output on valid input
+// (FoundationText, ExportJson); the export differential compares whole files.
 //
-// No ambient environment: every writer that prints a device-local label (`night`, `day`) takes the
-// zone to print it in, and `toJSON` the export instant (upstream reads `Calendar.current` and
-// defaults `now` to the device clock). Every other time in the schema-2 sections prints UTC (`…Z`)
-// whatever the zone, as upstream.
+// No ambient environment: every writer that prints a device-local label (`night`, `day`) or a
+// schema-3 offset takes the zone to print it in, and `toJSON` the export instant (upstream reads
+// `Calendar.current` and defaults `now` to the device clock). Every time in the schema-2 sections
+// prints UTC (`…Z`) whatever the zone, as upstream; the schema-3 sections print the zone's offset.
 
 import java.time.Instant
 import java.time.ZoneId
@@ -192,6 +194,167 @@ object ExportEngine {
             "EpochArchiveRow(ringID=$ringID, recordCount=$recordCount, firstEpoch=$firstEpoch, lastEpoch=$lastEpoch, coverage=$coverage)"
     }
 
+    // --- schema-3 rows ---
+
+    /**
+     * The fixed text carried in `meta.timestampPolicy`, verbatim from upstream, so a consumer never has
+     * to guess which of the two time policies a key follows.
+     */
+    const val TIMESTAMP_POLICY_DESCRIPTION: String =
+        "Timestamps in the schema-2 sections (samples, sleep, daily, stepSamples, naps, " +
+            "daytimeTemperatures, historySyncEvidence) are ISO-8601 in UTC and end in 'Z'. " +
+            "Timestamps in the schema-3 sections (meta, sleepSessions and its hypnogram/coverage) " +
+            "are ISO-8601 with the exporting device's UTC offset. Date-only labels (night, day) are " +
+            "yyyy-MM-dd in the device's local calendar in BOTH, which is the calendar the night/day " +
+            "buckets were formed with."
+
+    /**
+     * Device, app and ring context for the export file. Every text field is a plain string, so an
+     * unknown value is "" rather than a made-up placeholder.
+     *
+     * PRIVACY: [ringIdentifier] is a per-install identifier for the ring, never its MAC — this is a file
+     * people hand to third parties. There is deliberately no device-name field. [ringModel] is a model
+     * family; the caller strips the advertised name's MAC-derived suffix before it gets here. The ring
+     * fields describe the LAST connected ring, which need not have produced every night in the file
+     * (the file's own `ringIdentity` note says so).
+     *
+     * [timeZoneIdentifier] and [timeZoneOffsetSeconds] are the zone this block DECLARES; upstream
+     * defaults both to the device's live zone, which is ambient here, so they are required. Use [of]
+     * to derive both from the zone the file is printed in, so the declared zone and the printed one
+     * cannot differ. [schemaVersion] and [timeZoneOffsetSeconds] are Swift `Int`s (64-bit).
+     */
+    data class ExportMetadata(
+        val schemaVersion: Long = SCHEMA_VERSION.toLong(),
+        val exportedAt: Instant,
+        val rangeStart: Instant,
+        val rangeEnd: Instant,
+        val appVersion: String = "",
+        val appBuild: String = "",
+        val deviceModel: String = "",
+        val osVersion: String = "",
+        val ringModel: String = "",
+        val ringFirmware: String = "",
+        val ringGeneration: String = "",
+        val ringIdentifier: String = "",
+        val timeZoneIdentifier: String,
+        val timeZoneOffsetSeconds: Long,
+        val timestampPolicy: String = TIMESTAMP_POLICY_DESCRIPTION,
+    ) {
+        companion object {
+            /**
+             * The metadata for a file printed in [zone]: [timeZoneIdentifier] is the zone's id and
+             * [timeZoneOffsetSeconds] the offset `meta.exportedAt` is printed with — taken at the
+             * millisecond the timestamp prints, so even half a millisecond before a DST change (which
+             * prints as the change) the declared offset is the printed one.
+             */
+            fun of(
+                zone: ZoneId,
+                exportedAt: Instant,
+                rangeStart: Instant,
+                rangeEnd: Instant,
+                appVersion: String = "",
+                appBuild: String = "",
+                deviceModel: String = "",
+                osVersion: String = "",
+                ringModel: String = "",
+                ringFirmware: String = "",
+                ringGeneration: String = "",
+                ringIdentifier: String = "",
+                schemaVersion: Long = SCHEMA_VERSION.toLong(),
+                timestampPolicy: String = TIMESTAMP_POLICY_DESCRIPTION,
+            ): ExportMetadata = ExportMetadata(
+                schemaVersion = schemaVersion,
+                exportedAt = exportedAt,
+                rangeStart = rangeStart,
+                rangeEnd = rangeEnd,
+                appVersion = appVersion,
+                appBuild = appBuild,
+                deviceModel = deviceModel,
+                osVersion = osVersion,
+                ringModel = ringModel,
+                ringFirmware = ringFirmware,
+                ringGeneration = ringGeneration,
+                ringIdentifier = ringIdentifier,
+                timeZoneIdentifier = zone.id,
+                timeZoneOffsetSeconds = FoundationText.printedOffsetSeconds(exportedAt, zone).toLong(),
+                timestampPolicy = timestampPolicy,
+            )
+        }
+    }
+
+    /**
+     * A night's OSA SpO₂ assessment. [avgSpO2] is the validated metric; the event metrics are
+     * experimental estimates. [validWindows] `<= 0` means nothing was drained: the row is not
+     * exported at all, because zeros would read as measured values. Compares as Swift's synthesized
+     * `Equatable`: doubles by IEEE `==`.
+     */
+    class OSARow(val avgSpO2: Double, val minSpO2: Double, val timeBelow90Sec: Double, val odi: Double, val validWindows: Long) {
+        override fun equals(other: Any?): Boolean =
+            other is OSARow && avgSpO2 == other.avgSpO2 && minSpO2 == other.minSpO2 && timeBelow90Sec == other.timeBelow90Sec &&
+                odi == other.odi && validWindows == other.validWindows
+
+        override fun hashCode(): Int = listOf(ieeeHash(avgSpO2), ieeeHash(minSpO2), ieeeHash(timeBelow90Sec), ieeeHash(odi), validWindows).hashCode()
+
+        override fun toString(): String =
+            "OSARow(avgSpO2=$avgSpO2, minSpO2=$minSpO2, timeBelow90Sec=$timeBelow90Sec, odi=$odi, validWindows=$validWindows)"
+    }
+
+    /**
+     * One sleep SESSION: the night's bed and sleep boundaries, its hypnogram, the derived summary and,
+     * when there are any, the OSA assessment, the coverage measurements and the edge verdicts.
+     *
+     * ABSENCE IS NOT ZERO. An empty [hypnogram] means NO TIMELINE WAS RECORDED (a night staged before
+     * the hypnogram was stored), not a night with no stages; a null [osa], [coverage],
+     * [referenceCoverage] or [edgeProvenance] means there is no such measurement — each is written as an
+     * empty field or an omitted key, never as 0.
+     *
+     * [hypnogram] is taken in the shape `SleepStaging` produces, INCLUDING the overlapping in-bed
+     * envelope(s); the writers drop them, so what reaches the file is a partition of the night. It is
+     * copied in and read-only out. The `recorded*` instants are what the detector produced before a
+     * manual correction, present only on an edited night. [referenceCoverage] is null only when
+     * [coverage] is (there is nothing to compare against); [edgeProvenance] is null when the night has
+     * no clock times to measure against.
+     */
+    class SleepSessionRow(
+        val sessionID: String,
+        val night: Instant,
+        val inBedStart: Instant? = null,
+        val inBedEnd: Instant? = null,
+        val sleepOnset: Instant? = null,
+        val sleepWake: Instant? = null,
+        val isManuallyEdited: Boolean = false,
+        val recordedInBedStart: Instant? = null,
+        val recordedInBedEnd: Instant? = null,
+        val recordedOnset: Instant? = null,
+        val recordedWake: Instant? = null,
+        hypnogram: List<SleepSegment> = emptyList(),
+        val summary: SleepRow,
+        val osa: OSARow? = null,
+        val coverage: ExportCoverage.Assessment? = null,
+        val referenceCoverage: ExportReferenceCoverage.Outcome? = null,
+        val edgeProvenance: SleepEdgeProvenanceRow? = null,
+    ) {
+        /** A read-only copy of the list passed in (a Swift array is a value). */
+        val hypnogram: List<SleepSegment> = Collections.unmodifiableList(ArrayList(hypnogram))
+
+        private fun fields(): List<Any?> = listOf(
+            sessionID, night, inBedStart, inBedEnd, sleepOnset, sleepWake, isManuallyEdited,
+            recordedInBedStart, recordedInBedEnd, recordedOnset, recordedWake, hypnogram, summary, osa, coverage,
+            referenceCoverage, edgeProvenance,
+        )
+
+        override fun equals(other: Any?): Boolean = other is SleepSessionRow && fields() == other.fields()
+
+        override fun hashCode(): Int = fields().hashCode()
+
+        override fun toString(): String =
+            "SleepSessionRow(sessionID=$sessionID, night=$night, inBedStart=$inBedStart, inBedEnd=$inBedEnd, sleepOnset=$sleepOnset, " +
+                "sleepWake=$sleepWake, isManuallyEdited=$isManuallyEdited, recordedInBedStart=$recordedInBedStart, " +
+                "recordedInBedEnd=$recordedInBedEnd, recordedOnset=$recordedOnset, recordedWake=$recordedWake, " +
+                "hypnogram=${hypnogram.size} segments, summary=$summary, osa=$osa, coverage=$coverage, " +
+                "referenceCoverage=$referenceCoverage, edgeProvenance=$edgeProvenance)"
+    }
+
     // --- device-local labels ---
 
     /**
@@ -328,6 +491,174 @@ object ExportEngine {
         return lines.joinToString("\n")
     }
 
+    // --- schema-3 CSV ---
+
+    /**
+     * ISO 8601 with [zone]'s offset (`2026-08-03T23:14:00.000+02:00`, `Z` at a zero offset) — the
+     * schema-3 sections' timestamp policy, where the schema-2 sections print UTC.
+     */
+    internal fun offsetISO8601(date: Instant, zone: ZoneId): String = FoundationText.iso8601(date, zone)
+
+    /**
+     * The metadata block as ordered (key, value) pairs: ONE list feeding both the JSON `meta` object
+     * and [metadataCSV], so the two views can never name or order their fields differently. The three
+     * times print with [zone]'s offset.
+     */
+    private fun metadataFields(m: ExportMetadata, zone: ZoneId): List<Pair<String, ExportJson>> = listOf(
+        "schemaVersion" to int(m.schemaVersion),
+        "exportedAt" to str(offsetISO8601(m.exportedAt, zone)),
+        "rangeStart" to str(offsetISO8601(m.rangeStart, zone)),
+        "rangeEnd" to str(offsetISO8601(m.rangeEnd, zone)),
+        "appVersion" to str(m.appVersion),
+        "appBuild" to str(m.appBuild),
+        "deviceModel" to str(m.deviceModel),
+        "osVersion" to str(m.osVersion),
+        "ringModel" to str(m.ringModel),
+        "ringFirmware" to str(m.ringFirmware),
+        "ringGeneration" to str(m.ringGeneration),
+        "ringIdentifier" to str(m.ringIdentifier),
+        "timeZoneIdentifier" to str(m.timeZoneIdentifier),
+        "timeZoneOffsetSeconds" to int(m.timeZoneOffsetSeconds),
+        "timestampPolicy" to str(m.timestampPolicy),
+    )
+
+    /**
+     * CSV of the metadata block. Header `field,value`; one row per `meta` field, in the same order and
+     * under the same names as the JSON. Text values as given, integers in decimal (Swift's `"\(value)"`).
+     */
+    fun metadataCSV(meta: ExportMetadata, zone: ZoneId): String {
+        val lines = ArrayList<String>(16)
+        lines += "field,value"
+        for ((key, value) in metadataFields(meta, zone)) {
+            val text = when (value) {
+                is ExportJson.JString -> value.value
+                is ExportJson.JInt -> value.value.toString()
+                else -> error("metadata field $key is neither text nor an integer")
+            }
+            lines += csvLine(listOf(key, text))
+        }
+        return lines.joinToString("\n")
+    }
+
+    /**
+     * The OSA row to write, or null. `validWindows <= 0` means nothing was drained, so every other
+     * field is a default rather than a reading — a row of zeros would look exactly like a measured
+     * perfect night. Enforced here, not trusted to each caller.
+     */
+    private fun emittableOSA(row: SleepSessionRow): OSARow? = row.osa?.takeIf { it.validWindows > 0 }
+
+    /**
+     * The hypnogram segments to write: the stages, with every in-bed envelope removed (a stitched night
+     * has one per fragment), so the written timeline is a PARTITION of the night and `durationSec` can be
+     * summed. The in-bed window is already on the row as `inBedStart` / `inBedEnd`. Filtered here so the
+     * CSV, the JSON and the `hypnogramSegments` count can never disagree.
+     */
+    private fun emittableHypnogram(row: SleepSessionRow): List<SleepSegment> = row.hypnogram.filter { it.stage != SleepStage.IN_BED }
+
+    /**
+     * `hypnogramSegments`: EMPTY when no timeline was recorded, a real count otherwise — including `0`
+     * for a recorded night that holds only its envelope. Absence and zero are different facts.
+     */
+    private fun hypnogramSegmentCount(row: SleepSessionRow): String =
+        if (row.hypnogram.isEmpty()) "" else emittableHypnogram(row).size.toString()
+
+    /** The reference-coverage measurement, or null when none was made. */
+    private fun referenceRow(row: SleepSessionRow): ExportReferenceCoverage.Row? =
+        (row.referenceCoverage as? ExportReferenceCoverage.Outcome.Measured)?.row
+
+    /**
+     * Where the reference wake came from: its raw name, `none` when there was no wake the records did
+     * not define, or empty when the night has no such verdict at all. `none` rather than blank, so a
+     * reader can tell "the check could not run" from a file written before the column existed.
+     */
+    private fun referenceSource(row: SleepSessionRow): String = when (val o = row.referenceCoverage) {
+        is ExportReferenceCoverage.Outcome.Measured -> o.row.reference.rawValue
+        is ExportReferenceCoverage.Outcome.Unavailable -> "none"
+        null -> ""
+    }
+
+    /** A segment's seconds as Swift's `duration` computes them: the difference of its two dates' doubles. */
+    private fun durationSeconds(seg: SleepSegment): Double = dateSecondsBetween(seg.start, seg.end)
+
+    /**
+     * CSV of the sleep SESSIONS — one row per night: the boundaries, the derived summary, the OSA
+     * assessment, the coverage measurement, the edge verdicts and the reference-wake measurement side by
+     * side. Times print with [zone]'s offset, `night` as `yyyy-MM-dd` in [zone].
+     *
+     * Absent OSA / coverage / hypnogram / edges serialize as EMPTY fields, never 0: 0 is a real reading.
+     * `coverageFraction` keeps its name and its index (21); the later columns were appended, so no
+     * earlier column ever moves.
+     */
+    fun sleepSessionsCSV(rows: List<SleepSessionRow>, zone: ZoneId): String {
+        fun iso(t: Instant?): String = t?.let { offsetISO8601(it, zone) } ?: ""
+        val lines = ArrayList<String>(rows.size + 1)
+        lines += "sessionID,night,inBedStart,inBedEnd,sleepOnset,sleepWake,isManuallyEdited,asleepMin,deepMin,lightMin,remMin,awakeMin,efficiency,sleepScore,stressScore,hypnogramSegments,osaAvgSpO2,osaMinSpO2,osaTimeBelow90Sec,osaODI,osaValidWindows,coverageFraction,expectedSamples,observedSamples,longestGapSeconds,bedtimeVerdict,bedtimeGapSeconds,wakeVerdict,wakeGapSeconds,confidenceReasons,durationBasis,referenceWakeSource,referenceWakeAt,coverageToReferenceWake"
+        for (r in rows) {
+            val osa = emittableOSA(r)
+            val cov = r.coverage
+            val edge = r.edgeProvenance
+            val ref = referenceRow(r)
+            lines += csvLine(
+                listOf(
+                    r.sessionID,
+                    FoundationText.dateOnly(r.night, zone),
+                    iso(r.inBedStart), iso(r.inBedEnd), iso(r.sleepOnset), iso(r.sleepWake),
+                    r.isManuallyEdited.toString(),
+                    r.summary.asleepMin.toString(), r.summary.deepMin.toString(), r.summary.lightMin.toString(),
+                    r.summary.remMin.toString(), r.summary.awakeMin.toString(),
+                    swiftFixed(r.summary.efficiency, 4),
+                    r.summary.sleepScore.toString(), r.summary.stressScore.toString(),
+                    hypnogramSegmentCount(r),
+                    osa?.let { swiftFixed(it.avgSpO2, 2) } ?: "",
+                    osa?.let { swiftFixed(it.minSpO2, 2) } ?: "",
+                    osa?.let { swiftFixed(it.timeBelow90Sec, 1) } ?: "",
+                    osa?.let { swiftFixed(it.odi, 2) } ?: "",
+                    osa?.validWindows?.toString() ?: "",
+                    cov?.let { swiftFixed(it.coverageFraction, 4) } ?: "",
+                    cov?.expectedSamples?.toString() ?: "",
+                    cov?.observedSamples?.toString() ?: "",
+                    cov?.let { swiftFixed(it.longestGapSeconds, 1) } ?: "",
+                    // A witnessed or unknown edge has NO gap: the field stays empty rather than a 0 that
+                    // would read as a measured zero-second silence.
+                    edge?.bedtimeVerdict ?: "",
+                    edge?.bedtimeGapSeconds?.let { swiftFixed(it, 1) } ?: "",
+                    edge?.wakeVerdict ?: "",
+                    edge?.wakeGapSeconds?.let { swiftFixed(it, 1) } ?: "",
+                    // Space-separated, so the field needs no quoting; empty = the classifier found nothing.
+                    edge?.reasons?.joinToString(" ") ?: "",
+                    edge?.durationBasis ?: "",
+                    referenceSource(r),
+                    ref?.let { offsetISO8601(it.referenceEnd, zone) } ?: "",
+                    ref?.let { swiftFixed(it.assessment.coverageFraction, 4) } ?: "",
+                ),
+            )
+        }
+        return lines.joinToString("\n")
+    }
+
+    /**
+     * CSV of the hypnogram: one row PER SEGMENT across all sessions, keyed back to its session. Header
+     * `sessionID,start,end,stage,durationSec,provenance`; times with [zone]'s offset. A session with no
+     * recorded timeline contributes no rows. The rows are a partition (see [emittableHypnogram]).
+     * `provenance` is always printed here (the JSON omits it for `measured`), in the JSON's vocabulary
+     * ([SleepProvenance.rawValue]), and is the last column so no earlier one moved.
+     */
+    fun hypnogramCSV(rows: List<SleepSessionRow>, zone: ZoneId): String {
+        val lines = ArrayList<String>()
+        lines += "sessionID,start,end,stage,durationSec,provenance"
+        for (r in rows) {
+            for (seg in emittableHypnogram(r)) {
+                lines += csvLine(
+                    listOf(
+                        r.sessionID, offsetISO8601(seg.start, zone), offsetISO8601(seg.end, zone), seg.stage.rawValue,
+                        plainNumber(durationSeconds(seg)), seg.provenance.rawValue,
+                    ),
+                )
+            }
+        }
+        return lines.joinToString("\n")
+    }
+
     // --- JSON ---
 
     private fun str(s: String): ExportJson = ExportJson.JString(s)
@@ -393,7 +724,9 @@ object ExportEngine {
      * The whole export as one JSON text (`.prettyPrinted, .sortedKeys`), schema [SCHEMA_VERSION], with
      * `exportedAt` = [now]. Every schema-2 section is written, as an empty array when it has no rows.
      * Times in these sections print UTC (`…Z`); the `night` / `day` labels print `yyyy-MM-dd` in [zone],
-     * the zone the rows were bucketed with.
+     * the zone the rows were bucketed with. Schema 3 adds keys only: `meta` when [metadata] is given and
+     * `sleepSessions` when [sleepSessions] is not empty, both with [zone]'s offset (and the provenance
+     * map then classifies the session sections).
      *
      * Returns null if any number in the tree is NaN or infinite: upstream documents nil for a failed
      * serialization but crashes there instead (PORTING.md).
@@ -408,6 +741,8 @@ object ExportEngine {
         historySyncEvidence: List<HistorySyncEvidenceRow> = emptyList(),
         zone: ZoneId,
         now: Instant,
+        metadata: ExportMetadata? = null,
+        sleepSessions: List<SleepSessionRow> = emptyList(),
     ): String? {
         val root = linkedMapOf(
             "schemaVersion" to int(SCHEMA_VERSION),
@@ -450,11 +785,152 @@ object ExportEngine {
                 },
             ),
         )
-        root["provenance"] = stringMap(provenance())
+        // --- schema 3: new keys only; nothing above is touched ---
+        if (metadata != null) root["meta"] = ExportJson.obj(*metadataFields(metadata, zone).toTypedArray())
+        if (sleepSessions.isNotEmpty()) root["sleepSessions"] = ExportJson.arr(sleepSessions.map { sessionJSON(it, zone) })
+        root["provenance"] = stringMap(provenance(includesSleepSessions = sleepSessions.isNotEmpty()))
         root["units"] = stringMap(units)
         root["notes"] = stringMap(notes)
         return ExportJson.pretty(ExportJson.JObject(root))
     }
+
+    /**
+     * One `sleepSessions[]` object. Every optional block follows one rule — ABSENCE IS NOT ZERO: a key
+     * with nothing behind it is omitted (or, for `referenceCoverage`, carries an explicit null reference
+     * and a reason), never zero-filled.
+     */
+    private fun sessionJSON(s: SleepSessionRow, zone: ZoneId): ExportJson {
+        fun iso(t: Instant): String = offsetISO8601(t, zone)
+        val obj = linkedMapOf(
+            "sessionID" to str(s.sessionID),
+            "night" to str(FoundationText.dateOnly(s.night, zone)),
+            "inBedStart" to jsonOrNull(s.inBedStart?.let(::iso)),
+            "inBedEnd" to jsonOrNull(s.inBedEnd?.let(::iso)),
+            "sleepOnset" to jsonOrNull(s.sleepOnset?.let(::iso)),
+            "sleepWake" to jsonOrNull(s.sleepWake?.let(::iso)),
+            "isManuallyEdited" to bool(s.isManuallyEdited),
+            "summary" to sleepJSON(s.summary, zone, ::iso),
+        )
+        // The detector's own values on an edited night (a supervised label). Omitted on an unedited
+        // night — absence means "nothing was overridden", which is not "the detector agreed".
+        if (s.isManuallyEdited) {
+            val recorded = linkedMapOf<String, ExportJson>()
+            s.recordedInBedStart?.let { recorded["inBedStart"] = str(iso(it)) }
+            s.recordedInBedEnd?.let { recorded["inBedEnd"] = str(iso(it)) }
+            s.recordedOnset?.let { recorded["sleepOnset"] = str(iso(it)) }
+            s.recordedWake?.let { recorded["sleepWake"] = str(iso(it)) }
+            if (recorded.isNotEmpty()) obj["recorded"] = ExportJson.JObject(recorded)
+        }
+        // Omitted when no timeline was recorded, `[]` when one was and holds no stage blocks.
+        if (s.hypnogram.isNotEmpty()) {
+            obj["hypnogram"] = ExportJson.arr(
+                emittableHypnogram(s).map { seg ->
+                    val row = linkedMapOf(
+                        "start" to str(iso(seg.start)),
+                        "end" to str(iso(seg.end)),
+                        "stage" to str(seg.stage.rawValue),
+                        "durationSec" to dbl(durationSeconds(seg)),
+                    )
+                    // Only when not measured, so a fully measured night's JSON is unchanged.
+                    if (seg.provenance != SleepProvenance.MEASURED) row["provenance"] = str(seg.provenance.rawValue)
+                    ExportJson.JObject(row)
+                },
+            )
+            // The night-level roll-up of the same fact, written only when the night holds asserted time.
+            // Its buckets close: asleep = measured + asserted + coverage-unknown.
+            val breakdown = SleepProvenanceBreakdown(s.hypnogram)
+            if (breakdown.hasAssertedTime) {
+                val summary = linkedMapOf(
+                    "measuredAsleepSec" to dbl(breakdown.measuredAsleep),
+                    "assertedOverMeasuredAsleepSec" to dbl(breakdown.assertedOverMeasuredAsleep),
+                    "assertedAsleepSec" to dbl(breakdown.assertedAsleep),
+                    "coverageUnknownAsleepSec" to dbl(breakdown.unknownAsleep),
+                    "measuredAwakeSec" to dbl(breakdown.measuredAwake),
+                    "assertedOverMeasuredAwakeSec" to dbl(breakdown.assertedOverMeasuredAwake),
+                    "assertedAwakeSec" to dbl(breakdown.assertedAwake),
+                    "coverageUnknownAwakeSec" to dbl(breakdown.unknownAwake),
+                    "coveredInBedSec" to dbl(breakdown.coveredInBed),
+                    "coverageUnknownInBedSec" to dbl(breakdown.unknownInBed),
+                    "coverageFraction" to dbl(breakdown.coverageFraction),
+                    "longestUnmeasuredGapSec" to dbl(breakdown.longestUnmeasuredGap),
+                    "scorable" to bool(breakdown.isScorable),
+                )
+                // OMITTED when withheld — never 0 (a real efficiency) and never null.
+                breakdown.efficiency?.let { summary["measuredEfficiency"] = dbl(it) }
+                obj["provenanceSummary"] = ExportJson.JObject(summary)
+            }
+        }
+        emittableOSA(s)?.let { osa ->
+            obj["osa"] = ExportJson.obj(
+                "avgSpO2" to dbl(osa.avgSpO2),
+                "minSpO2" to dbl(osa.minSpO2),
+                "timeBelow90Sec" to dbl(osa.timeBelow90Sec),
+                "odi" to dbl(osa.odi),
+                "validWindows" to int(osa.validWindows),
+            )
+        }
+        s.coverage?.let { cov ->
+            obj["coverage"] = ExportJson.obj(
+                "windowStart" to str(iso(cov.windowStart)),
+                "windowEnd" to str(iso(cov.windowEnd)),
+                "expectedSamples" to int(cov.expectedSamples),
+                "observedSamples" to int(cov.observedSamples),
+                "coverageFraction" to dbl(cov.coverageFraction),
+                // The same number under the name that says what it measures: coverage WITHIN the
+                // reported window. Both keys are written; the old one is already in readers' hands.
+                "coverageWithinReportedWindow" to dbl(cov.coverageFraction),
+                "longestGapSeconds" to dbl(cov.longestGapSeconds),
+                "gaps" to gapsJSON(cov.gaps, zone),
+            )
+        }
+        // Written whenever the night carries a verdict — including "there was no reference", which says so.
+        when (val ref = s.referenceCoverage) {
+            is ExportReferenceCoverage.Outcome.Measured -> {
+                val r = ref.row
+                val a = r.assessment
+                obj["referenceCoverage"] = ExportJson.obj(
+                    "reference" to str(r.reference.rawValue),
+                    "referenceEnd" to str(iso(r.referenceEnd)),
+                    // Signed: negative means the reference closed EARLIER than the reported window.
+                    "beyondReportedEndSeconds" to dbl(r.beyondReportedEndSeconds),
+                    "windowStart" to str(iso(a.windowStart)),
+                    "windowEnd" to str(iso(a.windowEnd)),
+                    "expectedSamples" to int(a.expectedSamples),
+                    "observedSamples" to int(a.observedSamples),
+                    "coverageToReference" to dbl(a.coverageFraction),
+                    "longestGapSeconds" to dbl(a.longestGapSeconds),
+                    "gaps" to gapsJSON(a.gaps, zone),
+                )
+            }
+            // An explicit null, not an omitted key: no denominator was invented.
+            is ExportReferenceCoverage.Outcome.Unavailable ->
+                obj["referenceCoverage"] = ExportJson.obj("reference" to ExportJson.JNull, "unavailableReason" to str(ref.reason))
+            null -> Unit
+        }
+        // Omitted when the night has no clock times to measure against; each gap key only when that
+        // verdict measured a silence (a 0 would turn "we don't know" into "we watched, it never stopped").
+        s.edgeProvenance?.let { edge ->
+            val block = linkedMapOf(
+                "windowStart" to str(iso(edge.windowStart)),
+                "windowEnd" to str(iso(edge.windowEnd)),
+                "bedtimeVerdict" to str(edge.bedtimeVerdict),
+                "wakeVerdict" to str(edge.wakeVerdict),
+                "reasons" to ExportJson.arr(edge.reasons.map(::str)),
+                "materialGapSeconds" to dbl(edge.materialGapSeconds),
+                "durationBasis" to str(edge.durationBasis),
+            )
+            edge.bedtimeGapSeconds?.let { block["bedtimeGapSeconds"] = dbl(it) }
+            edge.wakeGapSeconds?.let { block["wakeGapSeconds"] = dbl(it) }
+            obj["edgeProvenance"] = ExportJson.JObject(block)
+        }
+        return ExportJson.JObject(obj)
+    }
+
+    private fun gapsJSON(gaps: List<ExportCoverage.Gap>, zone: ZoneId): ExportJson = ExportJson.arr(
+        gaps.map { g ->
+            ExportJson.obj("start" to str(offsetISO8601(g.start, zone)), "end" to str(offsetISO8601(g.end, zone)), "seconds" to dbl(g.seconds))
+        },
+    )
 
     private fun stringMap(map: Map<String, String>): ExportJson.JObject = ExportJson.JObject(map.mapValues { ExportJson.JString(it.value) })
 
@@ -464,15 +940,31 @@ object ExportEngine {
      * Which sections are raw and which are computed: `measured` came off the ring, `derived` was
      * computed on the device, `diagnostic` is troubleshooting exhaust, not health data.
      */
-    private fun provenance(): Map<String, String> = linkedMapOf(
-        "samples" to "measured",
-        "stepSamples" to "measured",
-        "daytimeTemperatures" to "measured",
-        "sleep" to "derived",
-        "daily" to "derived",
-        "naps" to "derived",
-        "historySyncEvidence" to "diagnostic",
-    )
+    private fun provenance(includesSleepSessions: Boolean): Map<String, String> {
+        val map = linkedMapOf(
+            "samples" to "measured",
+            "stepSamples" to "measured",
+            "daytimeTemperatures" to "measured",
+            "sleep" to "derived",
+            "daily" to "derived",
+            "naps" to "derived",
+            "historySyncEvidence" to "diagnostic",
+        )
+        if (includesSleepSessions) {
+            map["sleepSessions"] = "derived"
+            map["sleepSessions.summary"] = "derived"
+            map["sleepSessions.osa"] = "derived"
+            // Derived, emphatically: the ring transmits no hypnogram; these stages are an on-device estimate.
+            map["sleepSessions.hypnogram"] = "derived"
+            // Measured: coverage counts rows we actually hold and estimates nothing.
+            map["sleepSessions.coverage"] = "measured"
+            // Derived: the same counting, but over a window closed on a wake the WEARER's schedule named.
+            map["sleepSessions.referenceCoverage"] = "derived"
+            // Derived: the gaps are measured, but the verdicts and reasons are a classifier's output.
+            map["sleepSessions.edgeProvenance"] = "derived"
+        }
+        return map
+    }
 
     /**
      * The unit of every numeric field that expresses a quantity (plain counts and identifiers carry

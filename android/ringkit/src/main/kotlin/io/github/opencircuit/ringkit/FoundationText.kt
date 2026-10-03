@@ -115,6 +115,9 @@ internal object FoundationText {
         return LocalDateTime.ofEpochSecond(rounded.epochSecond, rounded.nano, offset) to offset
     }
 
+    /** The offset (seconds east of UTC) [iso8601] prints for [t] in [zone] — taken at the printed, rounded millisecond. */
+    fun printedOffsetSeconds(t: Instant, zone: ZoneId): Int = local(t, zone).second.totalSeconds
+
     /**
      * `ISO8601DateFormatter` with `.withInternetDateTime, .withFractionalSeconds` in [zone]:
      * `yyyy-MM-ddTHH:mm:ss.SSS` then `Z` for a zero offset, else `±hh:mm`, with `:ss` when the offset
