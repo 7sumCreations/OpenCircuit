@@ -171,6 +171,30 @@ class SleepHypnogramStoreTest {
         }
     }
 
+    // A manual edit is authoritative over any later re-sync.
+
+    /** Upstream `testManualEditStoresTheEditedTimelineAndSurvivesAResync` (`:175`). */
+    @Test
+    fun manualEditStoresTheEditedTimelineAndSurvivesAResync() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            save(fullNight, store)
+
+            val times = SleepEdit.Times(inBedStart = at(-1.0), sleepOnset = at(-0.5), sleepWake = at(8.0))
+            val edited = SleepEdit.recompute(baseSegments = fullNight, times = times)
+            assertFalse(edited.isEmpty())
+            assertTrue(store.applySleepEdit(night, times, SleepStaging.summary(edited), edited, now = now, zone = zone))
+            assertEquals(edited, store.hypnogram(night, zone))
+            assertTimelineAgreesWithMinutes(store, "the edited night")
+
+            // A later re-sync draining a FULLER capture must still not touch an edited night —
+            // proving the guard is the edit flag, not merely merge protection.
+            save(fullerNight, store)
+            assertEquals(edited, store.hypnogram(night, zone), "a re-sync must not overwrite a manually edited night's timeline")
+            assertTimelineAgreesWithMinutes(store, "the edited night after a re-sync")
+        }
+    }
+
     // An omitted hypnogram argument must never erase a stored one: an edit with no timeline to
     // state leaves the stored timeline alone, and only an explicit empty list clears it.
 

@@ -5,6 +5,7 @@ import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.BulkRecord
 import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SleepHypnogramCodec
+import io.github.opencircuit.ringkit.SleepNightKey
 import io.github.opencircuit.ringkit.SleepPersistOutcome
 import io.github.opencircuit.ringkit.SleepProvenanceBreakdown
 import io.github.opencircuit.ringkit.SleepScore
@@ -18,16 +19,16 @@ import java.time.ZoneId
 
 // The store's sleep half: a staged night saved under its night key with upstream's merge rules,
 // and read back. Port of upstream ios/OpenCircuit/Store/LocalStore.swift (@ b1c2fdd):
-// `resolveSleepRow` (:1545-1552), `saveSleepSummary` (:1582-1802) — its insert, replace and
-// kept-fuller branches — `applyExtras` (:1855-1910), the sleep reads `latestSleepSummary`
+// `resolveSleepRow` (:1545-1552), `saveSleepSummary` (:1582-1802) — its collision guard, kept
+// edit, replace, insert and kept-fuller branches with the clamp widening — `applyExtras`
+// (:1855-1910), the sleep reads `latestSleepSummary`
 // (:2042), `recentSleepSummaries` (:2051), `sleepSummaries(from:to:)` (:2056), `sleepSummary(night:)`
 // (:2063), `hypnogram(night:)` (:2074) and `sleepSummaryOverlapping` (:2084), and the wearer's
 // edit `applySleepEdit` in both forms (:2133-2257).
 //
-// Not yet part of this file: the collision guard and the kept-manual-edit branch (:1639-1684), the
-// clamp-window widening on a kept night (:1712-1753), moving stored nights onto their wake day before
-// a save (:1589) and realigning a night resolved by its span (:1561-1573), and pruning the automatic
-// naps a saved night covers (:1801).
+// Not yet part of this file: moving stored nights onto their wake day before a save (:1589) and
+// realigning a night resolved by its span (:1561-1573), and pruning the automatic naps a saved
+// night covers (:1801).
 //
 // Differences, each deliberate (PORTING.md D-160 to D-163):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
@@ -65,15 +66,22 @@ class SleepStore internal constructor(
      *
      * The stored row is found by in-bed overlap first, then by day: a night can produce two keys as
      * it grows (an evening bout finished before midnight is keyed to that day, the completed night to
-     * the next), and the overlap keeps them one row. The stored night is replaced only when the new
-     * staging is at least as complete ([SleepSummaryMerge.shouldReplace], asleep time in whole
+     * the next), and the overlap keeps them one row.
+     *
+     * A block found by day that does not overlap the stored night (one ring epoch of slack) and does
+     * not end in the wake window, while the stored night does, is an unfinished evening bout:
+     * refused, nothing written. A night the wearer edited is kept against every staging. A kept
+     * night — edited, or fuller than the staging — still widens its clamp window outward to a
+     * staging that reaches further (the widened-recorded columns and the update time only).
+     *
+     * Otherwise the stored night is replaced only when the new staging is at least as complete ([SleepSummaryMerge.shouldReplace], asleep time in whole
      * minutes), or when both windows are the same coverage within one ring epoch — a
      * re-classification may then lower the minutes. A replacing save writes the minutes, the
      * windows (the onset and wake as given, the unknown defaults included), and [extras]: a zero
      * score or temperature keeps the stored value, a heart rate is taken for every stage present,
      * and the timeline is always the one the minutes came from, stored as the ring's own reading
      * too. It never writes the feel score, the apnea summary, the edited window or the widened
-     * clamp window.
+     * clamp window. The wake window and every day boundary are read in [zone].
      *
      * Throws, writing nothing, when a lookup or the write fails, or when a stage total does not fit
      * an `Int` of minutes.
@@ -107,6 +115,13 @@ class SleepStore internal constructor(
                 )
                 return@withWriteTransaction SleepPersistOutcome.INSERTED
             }
+            if (isUnfinishedEveningBout(existing, start, end, zone)) return@withWriteTransaction SleepPersistOutcome.REFUSED_NIGHT_KEY_COLLISION
+            val incoming = SleepEdit.RecordedWindow(start, end, onset, wake)
+            // A wearer's edit is kept against every later staging; only its clamp window widens.
+            if (existing.isManuallyEdited) {
+                widenClamp(existing, incoming, at)
+                return@withWriteTransaction SleepPersistOutcome.KEPT_MANUAL_EDIT
+            }
             val storedSpan = span(existing.inBedStart, existing.inBedEnd)
             val newSpan = span(start, end)
             val sameCoverage = storedSpan > Duration.ZERO && newSpan > Duration.ZERO &&
@@ -118,7 +133,11 @@ class SleepStore internal constructor(
                 newAsleep = Duration.ofMinutes(minutes.asleep.toLong()),
                 sameCoverage = sameCoverage,
             )
-            if (!replace) return@withWriteTransaction SleepPersistOutcome.KEPT_FULLER_STORED_NIGHT
+            if (!replace) {
+                // The minutes stay, but a staging that reaches further still widens the clamp window.
+                widenClamp(existing, incoming, at)
+                return@withWriteTransaction SleepPersistOutcome.KEPT_FULLER_STORED_NIGHT
+            }
             sleepDao.updateSummary(
                 existing.copy(efficiency = efficiency, updatedAt = at).withMinutes(minutes).withWindow(start, end, onset, wake).withExtras(staged),
             )
@@ -249,6 +268,34 @@ class SleepStore internal constructor(
     private suspend fun rowFor(night: Instant, zone: ZoneId): StoredSleepSummaryEntity? =
         sleepDao.summaryAt(startOfDay(night.toStoredMillis(), zone))
 
+    /**
+     * Upstream's night-key collision guard (:1639-1651): a block that neither overlaps [existing]
+     * (with one ring epoch of slack) nor ends in the wake window, against a stored night that does
+     * end in it, is an evening drain's unfinished bout keyed onto the night that ended this morning.
+     */
+    private fun isUnfinishedEveningBout(existing: StoredSleepSummaryEntity, start: Instant, end: Instant, zone: ZoneId): Boolean {
+        val bothWindowsKnown = existing.inBedEnd > existing.inBedStart && end > start
+        if (!bothWindowsKnown) return false
+        val overlaps = minOf(existing.inBedEnd, end).plus(ONE_EPOCH) >= maxOf(existing.inBedStart, start)
+        return !overlaps && !SleepNightKey.endsInWakeWindow(end, zone) && SleepNightKey.endsInWakeWindow(existing.inBedEnd, zone)
+    }
+
+    /**
+     * Widens [existing]'s clamp window outward by [incoming] in the widened-recorded columns, when it
+     * reaches further (`SleepEdit.widenRecorded`); writes nothing otherwise. The recorded window the
+     * save first stored is never moved.
+     */
+    private suspend fun widenClamp(existing: StoredSleepSummaryEntity, incoming: SleepEdit.RecordedWindow, at: Instant) {
+        val clamp = clampWindowOf(existing.recordedWindow(), existing.widenedWindow())
+        val w = SleepEdit.widenRecorded(stored = clamp, incoming = incoming) ?: return
+        sleepDao.updateSummary(
+            existing.copy(
+                widenedRecordedInBedStart = w.inBedStart, widenedRecordedInBedEnd = w.inBedEnd,
+                widenedRecordedOnset = w.sleepOnset, widenedRecordedWake = w.sleepWake, updatedAt = at,
+            ),
+        )
+    }
+
     /** The row this staging belongs to: by in-bed overlap first (identity), then by day (index). */
     private suspend fun resolveSleepRow(dayStart: Instant, start: Instant, end: Instant): StoredSleepSummaryEntity? {
         if (end > start) overlappingRow(start, end)?.let { return it }
@@ -321,6 +368,11 @@ class SleepStore internal constructor(
         fun span(start: Instant, end: Instant): Duration = if (end > start) Duration.between(start, end) else Duration.ZERO
 
         fun withinOneEpoch(a: Instant, b: Instant): Boolean = Duration.between(a, b).abs() <= ONE_EPOCH
+
+        fun StoredSleepSummaryEntity.recordedWindow() = SleepEdit.RecordedWindow(inBedStart, inBedEnd, sleepOnset, sleepWake)
+
+        fun StoredSleepSummaryEntity.widenedWindow() =
+            SleepEdit.RecordedWindow(widenedRecordedInBedStart, widenedRecordedInBedEnd, widenedRecordedOnset, widenedRecordedWake)
 
         /** A duration in seconds, as Swift's `TimeInterval`. */
         fun seconds(d: Duration): Double = d.seconds + d.nano / 1e9

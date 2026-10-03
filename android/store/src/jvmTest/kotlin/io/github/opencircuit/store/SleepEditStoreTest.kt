@@ -75,6 +75,42 @@ class SleepEditStoreTest {
         }
     }
 
+    /** Upstream `testResyncCannotOverwriteManualEditAndReeditKeepsOriginalBounds` (`:65`). */
+    @Test
+    fun resyncCannotOverwriteManualEditAndReeditKeepsOriginalBounds() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            seed(store)
+            val first = SleepEdit.Window(inBedStart = at(-1.0), inBedEnd = at(9.0))
+            val firstSummary = summary(Duration.ofHours(10), Duration.ZERO, Duration.ofHours(10), Duration.ZERO, Duration.ZERO)
+            assertTrue(
+                store.applySleepEdit(
+                    at(0.0), editedWindow = first, summary = firstSummary, sleepOnset = at(-1.0), sleepWake = at(9.0), now = now, zone = zone,
+                ),
+            )
+
+            // A later sync is ignored once the explicit persisted flag is set.
+            val replacement = summary(Duration.ofHours(2), Duration.ZERO, Duration.ofHours(2), Duration.ZERO, Duration.ZERO)
+            store.saveSleepSummary(replacement, night = at(0.0), inBedStart = at(3.0), inBedEnd = at(5.0), now = now, zone = zone)
+            assertEquals(at(-1.0), store.sleepSummary(at(0.0), zone)?.editedInBedStart)
+
+            val second = SleepEdit.Window(inBedStart = at(-2.0), inBedEnd = at(10.0))
+            val secondSummary = summary(Duration.ofHours(12), Duration.ZERO, Duration.ofHours(12), Duration.ZERO, Duration.ZERO)
+            assertTrue(
+                store.applySleepEdit(
+                    at(0.0), editedWindow = second, summary = secondSummary, sleepOnset = at(-2.0), sleepWake = at(10.0), now = now, zone = zone,
+                ),
+            )
+            val row = assertNotNull(store.sleepSummary(at(0.0), zone))
+            assertEquals(at(0.5), row.sleepOnset)
+            assertEquals(at(7.75), row.sleepWake)
+            assertEquals(at(0.0), row.inBedStart)
+            assertEquals(at(8.0), row.inBedEnd)
+            assertEquals(at(-2.0), row.editedInBedStart)
+            assertEquals(at(10.0), row.editedInBedEnd)
+        }
+    }
+
     /**
      * Upstream `testManualFlagIsNotInferredFromUncommittedOverlayDates` (`:96`). Upstream sets the two
      * edited dates on its fetched model object without saving; a stored night here is a value, so the
