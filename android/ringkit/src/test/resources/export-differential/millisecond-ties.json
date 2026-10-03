@@ -1,0 +1,1009 @@
+{
+  "daily" : [
+
+  ],
+  "daytimeTemperatures" : [
+
+  ],
+  "exportedAt" : "2023-11-14T22:13:20.001Z",
+  "historySyncEvidence" : [
+
+  ],
+  "naps" : [
+
+  ],
+  "notes" : {
+    "coverage" : "coverageFraction measures what THIS APP holds for the window, not what the ring recorded. A low value can mean the ring was not worn, was not drained yet, or that epochs were lost — the export cannot tell those apart. The coverage fields are left EMPTY for a night older than the app's raw-sample retention window: those epochs were deleted by local housekeeping, so a number there would report routine housekeeping as missing data. It is assessed over TWO witnesses unioned: the raw 0x4c epoch archive (~30 h, per ring) and the persisted heart-rate rows. The archive witness exists because the persisted rows are filtered by a strictly forward-only sync cursor, so a single late-stamped live sample can strand every earlier epoch delivered after it and make a fully-recorded night read as a gap — that reports our own cursor, not the ring. Neither witness can invent data: every counted instant is a record or a sample actually on disk. Nights older than the archive's retention are carried by the store witness alone, exactly as before. READ ITS NAME AS coverageWithinReportedWindow, which is emitted beside it in JSON and is the same number: the window is the night's REPORTED in-bed window (windowStart\/windowEnd say which). On a night the wearer never corrected, that window's right edge IS the last record, so no amount of missing data at the wake can lower this fraction: a night whose recording stopped four hours before the wearer got up reports 1.0000 with an empty gaps list, and that is the arithmetic working as written, not a clean night. On a night the wearer DID correct (isManuallyEdited true) the right edge is her own wake instead, so a trailing hole is inside the window and this fraction does fall — a low value there is real. referenceCoverage is the falsifiable companion for the nights nobody corrected; the old key is kept because this file's schema version is unchanged.",
+    "edgeProvenance" : "edgeProvenance says whether the record stream ran INTO the printed bedtime and CONTINUED past the printed wake — the question coverageFraction structurally cannot answer, because the detected window is defined by the records inside it (it measures 0.976-1.049 on all 21 nights of the development corpus, including two understated by 246 minutes, whose ~4 h hole starts exactly AT the in-bed end). The gaps are measured; the verdicts and reasons are a classifier's output at materialGapSeconds, a threshold the evidence does not pin down (gap sizes are bimodal with an empty interval from 33 to 242 minutes, so every cut in there scores identically). A gap BOUNDS the error in the reported duration, it does NOT estimate it. 'unknown' means there was no measurement on that side at all — which is equally consistent with the ring having stopped and with the app not having drained that far yet, so it carries no claim. Measured against the RECORDED (detector) window, which on an edited night is NOT the window inBedStart\/inBedEnd report: the edit changes what the app shows, not what was recorded. reasons[] is the classifier's own list, NOT a record of what the app displayed: no coverage caveat is shown to the wearer in this build, and any future card would apply its own render guards on top, so treat reasons[] as an upper bound on what anyone actually saw. durationBasis says which night's totals fed the durationLikelyHigh half of reasons[]: 'recorded' is the recorded night's own totals, which is the same frame of reference as the edges, and 'edited' means the night was corrected AND predates the stored recorded timeline, so only the post-edit totals were available. Before durationBasis existed the block always used the post-edit totals against a recorded-window coverage, so an edit could add or remove a caveat about a window it had never touched.",
+    "exportRange" : "meta.rangeStart and meta.rangeEnd are the window this file ACTUALLY covers, which can be narrower than the one that was requested: the app caps how much it assembles in a single pass and says so on screen. Trust these two fields over the filename or the range you asked for.",
+    "hrvSDNN" : "The hrvSDNN sample kind carries RMSSD, not SDNN. The ring reports RMSSD and HealthKit offers only an SDNN field; no fixed RMSSD→SDNN conversion exists, so the RMSSD value is stored in the SDNN field and tagged in sample metadata rather than converted (HealthKitWriter.swift:881-887, BulkSleep.swift:107).",
+    "hypnogram" : "The hypnogram rows for a session are a PARTITION of its sleep window: they never overlap, so durationSec can be summed. The surrounding time in bed is carried by inBedStart\/inBedEnd on the session row, NOT as an extra all-night segment — a night with no rows means no timeline was recorded, not a night with no stages. That distinction is explicit: hypnogramSegments is EMPTY (and the JSON hypnogram key is absent) when no timeline was recorded, and 0 only when one was recorded and contained no stage blocks.",
+    "hypnogramProvenance" : "Every hypnogram segment carries a provenance: measured = the ring recorded epochs across this span; asserted = the wearer edited their sleep window over ground holding NO ring data, so this block is their claim and not a measurement; assertedOverMeasured = the wearer's label sits on ground the ring did record, and the two disagree (the ring's own reading is kept separately); assertedCoverageUnknown = the wearer's claim over ground this app no longer retains records for, so neither reading is available. Only 'measured' is a device observation. In CSV the column is always present; in JSON the key is omitted when the value is 'measured'.",
+    "osa" : "osaAvgSpO2 is validated to ±1% against the RingConn app. osaMinSpO2, osaTimeBelow90Sec and osaODI are EXPERIMENTAL estimates — reproducing the app's numbers needs its proprietary artifact rejection and event scoring (OSASpO2.swift header, docs\/RUNBOOK_OSA_APNEA.md).",
+    "provenanceSummary" : "In provenanceSummary, 'measured' means OVER GROUND THE RING RECORDED ACROSS — not 'the stage the ring reported'. measuredAsleepSec is the efficiency numerator and therefore includes spans the wearer relabelled asleep over recorded ground; assertedOverMeasuredAsleepSec states how much of it that is and is a SUBSET of it, never a separate bucket to add in. measuredAwakeSec is the one exception: it counts only what the ring's own staging called awake, and the wearer's awake paint over recorded ground is reported separately as assertedOverMeasuredAwakeSec, because nothing derived depends on that total and a reader takes it as the ring's word. So asleep sums as measured + asserted + coverageUnknown, and awake as measured + assertedOverMeasured + asserted + coverageUnknown.",
+    "referenceCoverage" : "referenceCoverage measures the SAME records over a window whose right edge came from somewhere the recording had no vote in — today the wake time in the wearer's own manual sleep schedule (reference = manualScheduleWake). That is the only kind of denominator a trailing data hole can actually show up in. It is a REFERENCE and not a truth: a scheduled wake is when the wearer intends to get up, so a night they slept in or rose early scores low for a reason that is about the schedule, not the ring — compare beyondReportedEndSeconds (signed: negative means the reference closed EARLIER than the reported window, so coverageToReference is over a shorter span and is not comparable with coverageFraction). Nothing in the app is gated on it. It never reaches past the moment the file was written: when the schedule wake has not arrived yet the window is closed at exportedAt instead and reference says manualScheduleWakeSoFar, because measuring to a wake in the future would report the future as a hole. When the wearer has set no schedule the block is still emitted, with reference = null and an unavailableReason, because no denominator is invented in its place and a missing key would be indistinguishable from an older export. Only the right edge is moved: a schedule also names a bedtime, but a wearer who went to bed late would then be reported as a hole on a night nothing was wrong with.",
+    "ringIdentity" : "The meta.ring* fields describe the LAST RING THIS APP CONNECTED TO, which is not necessarily the ring that produced every night in this file. Rings are used one at a time and their data merges into a single shared timeline with no per-ring attribution (RingScanner.swift:72-74), so on an install that has paired more than one ring an older night may have come from a different ring than the one named here. historySyncEvidence[].ringID is the only per-capture ring attribution in this file.",
+    "skinTemperature" : "Skin temperature is LIVE-only: it is not part of the drainable 0x4c history, so a window the app did not observe cannot be back-filled. Overnight coverage is NOT predictable from the app's sleep-window quiet gate: a night recorded under that gate has carried hundreds of overnight readings, so a quiet night is not an empty one. Read the timestamps in this file rather than inferring coverage from the gate.",
+    "sleepStages" : "Sleep stages are an ON-DEVICE ESTIMATE. The ring transmits no hypnogram; stages are computed here from the same per-epoch vitals the RingConn app uses. Stage TOTALS approximate the app's, but per-epoch cycle placement is NOT validated against any reference (SleepStaging.swift header: \"APPROXIMATION, NOT GROUND TRUTH\")."
+  },
+  "provenance" : {
+    "daily" : "derived",
+    "daytimeTemperatures" : "measured",
+    "historySyncEvidence" : "diagnostic",
+    "naps" : "derived",
+    "samples" : "measured",
+    "sleep" : "derived",
+    "stepSamples" : "measured"
+  },
+  "samples" : [
+    {
+      "end" : "2023-11-14T22:13:20.002Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:13:20.001Z",
+      "value" : 60
+    },
+    {
+      "end" : "2023-11-14T22:13:21.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:13:20.002Z",
+      "value" : 61
+    },
+    {
+      "end" : "2023-11-14T22:13:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:13:21.000Z",
+      "value" : 62
+    },
+    {
+      "end" : "2023-11-14T22:13:21.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:13:20.000Z",
+      "value" : 63
+    },
+    {
+      "end" : "1969-12-31T23:59:59.998Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:13:21.000Z",
+      "value" : 64
+    },
+    {
+      "end" : "1970-01-01T00:00:00.000Z",
+      "kind" : "heartRate",
+      "start" : "1969-12-31T23:59:59.998Z",
+      "value" : 65
+    },
+    {
+      "end" : "1966-10-31T15:53:29.188Z",
+      "kind" : "heartRate",
+      "start" : "1970-01-01T00:00:00.000Z",
+      "value" : 66
+    },
+    {
+      "end" : "2025-02-05T07:53:12.745Z",
+      "kind" : "heartRate",
+      "start" : "1966-10-31T15:53:29.188Z",
+      "value" : 67
+    },
+    {
+      "end" : "2025-02-05T07:53:12.745Z",
+      "kind" : "heartRate",
+      "start" : "2025-02-05T07:53:12.745Z",
+      "value" : 68
+    },
+    {
+      "end" : "2025-02-05T07:53:12.745Z",
+      "kind" : "heartRate",
+      "start" : "2025-02-05T07:53:12.745Z",
+      "value" : 69
+    },
+    {
+      "end" : "2024-12-10T18:24:30.954Z",
+      "kind" : "heartRate",
+      "start" : "2025-02-05T07:53:12.745Z",
+      "value" : 70
+    },
+    {
+      "end" : "2024-12-10T18:24:30.954Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-10T18:24:30.954Z",
+      "value" : 71
+    },
+    {
+      "end" : "2024-12-10T18:24:30.953Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-10T18:24:30.954Z",
+      "value" : 72
+    },
+    {
+      "end" : "2024-05-19T03:13:18.288Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-10T18:24:30.953Z",
+      "value" : 73
+    },
+    {
+      "end" : "2024-05-19T03:13:18.288Z",
+      "kind" : "heartRate",
+      "start" : "2024-05-19T03:13:18.288Z",
+      "value" : 74
+    },
+    {
+      "end" : "2024-05-19T03:13:18.288Z",
+      "kind" : "heartRate",
+      "start" : "2024-05-19T03:13:18.288Z",
+      "value" : 75
+    },
+    {
+      "end" : "2024-12-29T15:59:57.226Z",
+      "kind" : "heartRate",
+      "start" : "2024-05-19T03:13:18.288Z",
+      "value" : 76
+    },
+    {
+      "end" : "2024-12-29T15:59:57.226Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-29T15:59:57.226Z",
+      "value" : 77
+    },
+    {
+      "end" : "2024-12-29T15:59:57.225Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-29T15:59:57.226Z",
+      "value" : 78
+    },
+    {
+      "end" : "2025-12-21T00:57:13.344Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-29T15:59:57.225Z",
+      "value" : 79
+    },
+    {
+      "end" : "2025-12-21T00:57:13.344Z",
+      "kind" : "heartRate",
+      "start" : "2025-12-21T00:57:13.344Z",
+      "value" : 80
+    },
+    {
+      "end" : "2025-12-21T00:57:13.344Z",
+      "kind" : "heartRate",
+      "start" : "2025-12-21T00:57:13.344Z",
+      "value" : 81
+    },
+    {
+      "end" : "2025-07-01T17:51:38.991Z",
+      "kind" : "heartRate",
+      "start" : "2025-12-21T00:57:13.344Z",
+      "value" : 82
+    },
+    {
+      "end" : "2025-07-01T17:51:38.991Z",
+      "kind" : "heartRate",
+      "start" : "2025-07-01T17:51:38.991Z",
+      "value" : 83
+    },
+    {
+      "end" : "2025-07-01T17:51:38.991Z",
+      "kind" : "heartRate",
+      "start" : "2025-07-01T17:51:38.991Z",
+      "value" : 84
+    },
+    {
+      "end" : "2025-09-28T22:15:14.135Z",
+      "kind" : "heartRate",
+      "start" : "2025-07-01T17:51:38.991Z",
+      "value" : 85
+    },
+    {
+      "end" : "2025-09-28T22:15:14.135Z",
+      "kind" : "heartRate",
+      "start" : "2025-09-28T22:15:14.135Z",
+      "value" : 86
+    },
+    {
+      "end" : "2025-09-28T22:15:14.135Z",
+      "kind" : "heartRate",
+      "start" : "2025-09-28T22:15:14.135Z",
+      "value" : 87
+    },
+    {
+      "end" : "2024-03-02T11:53:45.507Z",
+      "kind" : "heartRate",
+      "start" : "2025-09-28T22:15:14.135Z",
+      "value" : 88
+    },
+    {
+      "end" : "2024-03-02T11:53:45.507Z",
+      "kind" : "heartRate",
+      "start" : "2024-03-02T11:53:45.507Z",
+      "value" : 89
+    },
+    {
+      "end" : "2024-03-02T11:53:45.506Z",
+      "kind" : "heartRate",
+      "start" : "2024-03-02T11:53:45.507Z",
+      "value" : 90
+    },
+    {
+      "end" : "2024-12-30T12:37:19.055Z",
+      "kind" : "heartRate",
+      "start" : "2024-03-02T11:53:45.506Z",
+      "value" : 91
+    },
+    {
+      "end" : "2024-12-30T12:37:19.055Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-30T12:37:19.055Z",
+      "value" : 92
+    },
+    {
+      "end" : "2024-12-30T12:37:19.054Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-30T12:37:19.055Z",
+      "value" : 93
+    },
+    {
+      "end" : "2023-12-14T13:22:08.675Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-30T12:37:19.054Z",
+      "value" : 94
+    },
+    {
+      "end" : "2023-12-14T13:22:08.675Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-14T13:22:08.675Z",
+      "value" : 95
+    },
+    {
+      "end" : "2023-12-14T13:22:08.675Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-14T13:22:08.675Z",
+      "value" : 96
+    },
+    {
+      "end" : "2024-06-06T12:31:44.091Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-14T13:22:08.675Z",
+      "value" : 97
+    },
+    {
+      "end" : "2024-06-06T12:31:44.091Z",
+      "kind" : "heartRate",
+      "start" : "2024-06-06T12:31:44.091Z",
+      "value" : 98
+    },
+    {
+      "end" : "2024-06-06T12:31:44.091Z",
+      "kind" : "heartRate",
+      "start" : "2024-06-06T12:31:44.091Z",
+      "value" : 99
+    },
+    {
+      "end" : "2025-12-23T06:32:06.684Z",
+      "kind" : "heartRate",
+      "start" : "2024-06-06T12:31:44.091Z",
+      "value" : 100
+    },
+    {
+      "end" : "2025-12-23T06:32:06.684Z",
+      "kind" : "heartRate",
+      "start" : "2025-12-23T06:32:06.684Z",
+      "value" : 101
+    },
+    {
+      "end" : "2025-12-23T06:32:06.683Z",
+      "kind" : "heartRate",
+      "start" : "2025-12-23T06:32:06.684Z",
+      "value" : 102
+    },
+    {
+      "end" : "2025-01-21T13:30:09.304Z",
+      "kind" : "heartRate",
+      "start" : "2025-12-23T06:32:06.683Z",
+      "value" : 103
+    },
+    {
+      "end" : "2025-01-21T13:30:09.304Z",
+      "kind" : "heartRate",
+      "start" : "2025-01-21T13:30:09.304Z",
+      "value" : 104
+    },
+    {
+      "end" : "2025-01-21T13:30:09.304Z",
+      "kind" : "heartRate",
+      "start" : "2025-01-21T13:30:09.304Z",
+      "value" : 105
+    },
+    {
+      "end" : "2024-09-17T22:21:37.984Z",
+      "kind" : "heartRate",
+      "start" : "2025-01-21T13:30:09.304Z",
+      "value" : 106
+    },
+    {
+      "end" : "2024-09-17T22:21:37.984Z",
+      "kind" : "heartRate",
+      "start" : "2024-09-17T22:21:37.984Z",
+      "value" : 107
+    },
+    {
+      "end" : "2024-09-17T22:21:37.984Z",
+      "kind" : "heartRate",
+      "start" : "2024-09-17T22:21:37.984Z",
+      "value" : 108
+    },
+    {
+      "end" : "2025-07-31T09:53:33.202Z",
+      "kind" : "heartRate",
+      "start" : "2024-09-17T22:21:37.984Z",
+      "value" : 109
+    },
+    {
+      "end" : "2025-07-31T09:53:33.202Z",
+      "kind" : "heartRate",
+      "start" : "2025-07-31T09:53:33.202Z",
+      "value" : 110
+    },
+    {
+      "end" : "2025-07-31T09:53:33.202Z",
+      "kind" : "heartRate",
+      "start" : "2025-07-31T09:53:33.202Z",
+      "value" : 111
+    },
+    {
+      "end" : "2026-07-18T14:38:02.086Z",
+      "kind" : "heartRate",
+      "start" : "2025-07-31T09:53:33.202Z",
+      "value" : 112
+    },
+    {
+      "end" : "2026-07-18T14:38:02.086Z",
+      "kind" : "heartRate",
+      "start" : "2026-07-18T14:38:02.086Z",
+      "value" : 113
+    },
+    {
+      "end" : "2026-07-18T14:38:02.085Z",
+      "kind" : "heartRate",
+      "start" : "2026-07-18T14:38:02.086Z",
+      "value" : 114
+    },
+    {
+      "end" : "2026-11-25T10:05:59.583Z",
+      "kind" : "heartRate",
+      "start" : "2026-07-18T14:38:02.085Z",
+      "value" : 115
+    },
+    {
+      "end" : "2026-11-25T10:05:59.583Z",
+      "kind" : "heartRate",
+      "start" : "2026-11-25T10:05:59.583Z",
+      "value" : 116
+    },
+    {
+      "end" : "2026-11-25T10:05:59.583Z",
+      "kind" : "heartRate",
+      "start" : "2026-11-25T10:05:59.583Z",
+      "value" : 117
+    },
+    {
+      "end" : "2025-06-28T04:49:50.862Z",
+      "kind" : "heartRate",
+      "start" : "2026-11-25T10:05:59.583Z",
+      "value" : 118
+    },
+    {
+      "end" : "2025-06-28T04:49:50.862Z",
+      "kind" : "heartRate",
+      "start" : "2025-06-28T04:49:50.862Z",
+      "value" : 119
+    },
+    {
+      "end" : "2025-06-28T04:49:50.861Z",
+      "kind" : "heartRate",
+      "start" : "2025-06-28T04:49:50.862Z",
+      "value" : 120
+    },
+    {
+      "end" : "2023-12-15T01:26:54.108Z",
+      "kind" : "heartRate",
+      "start" : "2025-06-28T04:49:50.861Z",
+      "value" : 121
+    },
+    {
+      "end" : "2023-12-15T01:26:54.108Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-15T01:26:54.108Z",
+      "value" : 122
+    },
+    {
+      "end" : "2023-12-15T01:26:54.107Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-15T01:26:54.108Z",
+      "value" : 123
+    },
+    {
+      "end" : "2025-09-01T04:57:43.296Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-15T01:26:54.107Z",
+      "value" : 124
+    },
+    {
+      "end" : "2025-09-01T04:57:43.296Z",
+      "kind" : "heartRate",
+      "start" : "2025-09-01T04:57:43.296Z",
+      "value" : 125
+    },
+    {
+      "end" : "2025-09-01T04:57:43.295Z",
+      "kind" : "heartRate",
+      "start" : "2025-09-01T04:57:43.296Z",
+      "value" : 126
+    },
+    {
+      "end" : "2026-03-12T04:50:21.845Z",
+      "kind" : "heartRate",
+      "start" : "2025-09-01T04:57:43.295Z",
+      "value" : 127
+    },
+    {
+      "end" : "2026-03-12T04:50:21.845Z",
+      "kind" : "heartRate",
+      "start" : "2026-03-12T04:50:21.845Z",
+      "value" : 128
+    },
+    {
+      "end" : "2026-03-12T04:50:21.844Z",
+      "kind" : "heartRate",
+      "start" : "2026-03-12T04:50:21.845Z",
+      "value" : 129
+    },
+    {
+      "end" : "2026-02-26T01:10:32.242Z",
+      "kind" : "heartRate",
+      "start" : "2026-03-12T04:50:21.844Z",
+      "value" : 130
+    },
+    {
+      "end" : "2026-02-26T01:10:32.242Z",
+      "kind" : "heartRate",
+      "start" : "2026-02-26T01:10:32.242Z",
+      "value" : 131
+    },
+    {
+      "end" : "2026-02-26T01:10:32.242Z",
+      "kind" : "heartRate",
+      "start" : "2026-02-26T01:10:32.242Z",
+      "value" : 132
+    },
+    {
+      "end" : "2024-03-21T23:11:06.925Z",
+      "kind" : "heartRate",
+      "start" : "2026-02-26T01:10:32.242Z",
+      "value" : 133
+    },
+    {
+      "end" : "2024-03-21T23:11:06.925Z",
+      "kind" : "heartRate",
+      "start" : "2024-03-21T23:11:06.925Z",
+      "value" : 134
+    },
+    {
+      "end" : "2024-03-21T23:11:06.925Z",
+      "kind" : "heartRate",
+      "start" : "2024-03-21T23:11:06.925Z",
+      "value" : 135
+    },
+    {
+      "end" : "2026-01-05T23:38:00.311Z",
+      "kind" : "heartRate",
+      "start" : "2024-03-21T23:11:06.925Z",
+      "value" : 136
+    },
+    {
+      "end" : "2026-01-05T23:38:00.311Z",
+      "kind" : "heartRate",
+      "start" : "2026-01-05T23:38:00.311Z",
+      "value" : 137
+    },
+    {
+      "end" : "2026-01-05T23:38:00.311Z",
+      "kind" : "heartRate",
+      "start" : "2026-01-05T23:38:00.311Z",
+      "value" : 138
+    },
+    {
+      "end" : "2025-06-26T15:26:53.000Z",
+      "kind" : "heartRate",
+      "start" : "2026-01-05T23:38:00.311Z",
+      "value" : 139
+    },
+    {
+      "end" : "2025-06-26T15:26:53.000Z",
+      "kind" : "heartRate",
+      "start" : "2025-06-26T15:26:53.000Z",
+      "value" : 140
+    },
+    {
+      "end" : "2025-06-26T15:26:52.999Z",
+      "kind" : "heartRate",
+      "start" : "2025-06-26T15:26:53.000Z",
+      "value" : 141
+    },
+    {
+      "end" : "2024-12-05T04:45:06.641Z",
+      "kind" : "heartRate",
+      "start" : "2025-06-26T15:26:52.999Z",
+      "value" : 142
+    },
+    {
+      "end" : "2024-12-05T04:45:06.641Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-05T04:45:06.641Z",
+      "value" : 143
+    },
+    {
+      "end" : "2024-12-05T04:45:06.640Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-05T04:45:06.641Z",
+      "value" : 144
+    },
+    {
+      "end" : "2024-02-09T04:14:55.989Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-05T04:45:06.640Z",
+      "value" : 145
+    },
+    {
+      "end" : "2024-02-09T04:14:55.989Z",
+      "kind" : "heartRate",
+      "start" : "2024-02-09T04:14:55.989Z",
+      "value" : 146
+    },
+    {
+      "end" : "2024-02-09T04:14:55.989Z",
+      "kind" : "heartRate",
+      "start" : "2024-02-09T04:14:55.989Z",
+      "value" : 147
+    },
+    {
+      "end" : "2024-05-01T10:00:08.123Z",
+      "kind" : "heartRate",
+      "start" : "2024-02-09T04:14:55.989Z",
+      "value" : 148
+    },
+    {
+      "end" : "2024-05-01T10:00:08.123Z",
+      "kind" : "heartRate",
+      "start" : "2024-05-01T10:00:08.123Z",
+      "value" : 149
+    },
+    {
+      "end" : "2024-05-01T10:00:08.123Z",
+      "kind" : "heartRate",
+      "start" : "2024-05-01T10:00:08.123Z",
+      "value" : 150
+    },
+    {
+      "end" : "2026-06-11T07:28:46.169Z",
+      "kind" : "heartRate",
+      "start" : "2024-05-01T10:00:08.123Z",
+      "value" : 151
+    },
+    {
+      "end" : "2026-06-11T07:28:46.169Z",
+      "kind" : "heartRate",
+      "start" : "2026-06-11T07:28:46.169Z",
+      "value" : 152
+    },
+    {
+      "end" : "2026-06-11T07:28:46.169Z",
+      "kind" : "heartRate",
+      "start" : "2026-06-11T07:28:46.169Z",
+      "value" : 153
+    },
+    {
+      "end" : "2026-07-11T19:42:29.727Z",
+      "kind" : "heartRate",
+      "start" : "2026-06-11T07:28:46.169Z",
+      "value" : 154
+    },
+    {
+      "end" : "2026-07-11T19:42:29.727Z",
+      "kind" : "heartRate",
+      "start" : "2026-07-11T19:42:29.727Z",
+      "value" : 155
+    },
+    {
+      "end" : "2026-07-11T19:42:29.727Z",
+      "kind" : "heartRate",
+      "start" : "2026-07-11T19:42:29.727Z",
+      "value" : 156
+    },
+    {
+      "end" : "2024-09-16T15:10:01.985Z",
+      "kind" : "heartRate",
+      "start" : "2026-07-11T19:42:29.727Z",
+      "value" : 157
+    },
+    {
+      "end" : "2024-09-16T15:10:01.985Z",
+      "kind" : "heartRate",
+      "start" : "2024-09-16T15:10:01.985Z",
+      "value" : 158
+    },
+    {
+      "end" : "2024-09-16T15:10:01.985Z",
+      "kind" : "heartRate",
+      "start" : "2024-09-16T15:10:01.985Z",
+      "value" : 159
+    },
+    {
+      "end" : "2024-02-22T18:56:28.380Z",
+      "kind" : "heartRate",
+      "start" : "2024-09-16T15:10:01.985Z",
+      "value" : 160
+    },
+    {
+      "end" : "2024-02-22T18:56:28.381Z",
+      "kind" : "heartRate",
+      "start" : "2024-02-22T18:56:28.380Z",
+      "value" : 161
+    },
+    {
+      "end" : "2024-02-22T18:56:28.380Z",
+      "kind" : "heartRate",
+      "start" : "2024-02-22T18:56:28.381Z",
+      "value" : 162
+    },
+    {
+      "end" : "2026-08-24T01:51:08.356Z",
+      "kind" : "heartRate",
+      "start" : "2024-02-22T18:56:28.380Z",
+      "value" : 163
+    },
+    {
+      "end" : "2026-08-24T01:51:08.356Z",
+      "kind" : "heartRate",
+      "start" : "2026-08-24T01:51:08.356Z",
+      "value" : 164
+    },
+    {
+      "end" : "2026-08-24T01:51:08.355Z",
+      "kind" : "heartRate",
+      "start" : "2026-08-24T01:51:08.356Z",
+      "value" : 165
+    },
+    {
+      "end" : "2026-09-02T01:05:30.444Z",
+      "kind" : "heartRate",
+      "start" : "2026-08-24T01:51:08.355Z",
+      "value" : 166
+    },
+    {
+      "end" : "2026-09-02T01:05:30.444Z",
+      "kind" : "heartRate",
+      "start" : "2026-09-02T01:05:30.444Z",
+      "value" : 167
+    },
+    {
+      "end" : "2026-09-02T01:05:30.444Z",
+      "kind" : "heartRate",
+      "start" : "2026-09-02T01:05:30.444Z",
+      "value" : 168
+    },
+    {
+      "end" : "2026-01-20T22:42:54.218Z",
+      "kind" : "heartRate",
+      "start" : "2026-09-02T01:05:30.444Z",
+      "value" : 169
+    },
+    {
+      "end" : "2026-01-20T22:42:54.218Z",
+      "kind" : "heartRate",
+      "start" : "2026-01-20T22:42:54.218Z",
+      "value" : 170
+    },
+    {
+      "end" : "2026-01-20T22:42:54.217Z",
+      "kind" : "heartRate",
+      "start" : "2026-01-20T22:42:54.218Z",
+      "value" : 171
+    },
+    {
+      "end" : "2026-11-01T02:34:47.077Z",
+      "kind" : "heartRate",
+      "start" : "2026-01-20T22:42:54.217Z",
+      "value" : 172
+    },
+    {
+      "end" : "2026-11-01T02:34:47.078Z",
+      "kind" : "heartRate",
+      "start" : "2026-11-01T02:34:47.077Z",
+      "value" : 173
+    },
+    {
+      "end" : "2026-11-01T02:34:47.077Z",
+      "kind" : "heartRate",
+      "start" : "2026-11-01T02:34:47.078Z",
+      "value" : 174
+    },
+    {
+      "end" : "2024-12-17T22:17:21.012Z",
+      "kind" : "heartRate",
+      "start" : "2026-11-01T02:34:47.077Z",
+      "value" : 175
+    },
+    {
+      "end" : "2024-12-17T22:17:21.012Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-17T22:17:21.012Z",
+      "value" : 176
+    },
+    {
+      "end" : "2024-12-17T22:17:21.012Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-17T22:17:21.012Z",
+      "value" : 177
+    },
+    {
+      "end" : "2023-12-10T03:50:21.057Z",
+      "kind" : "heartRate",
+      "start" : "2024-12-17T22:17:21.012Z",
+      "value" : 178
+    },
+    {
+      "end" : "2023-12-10T03:50:21.057Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-10T03:50:21.057Z",
+      "value" : 179
+    },
+    {
+      "end" : "2023-12-10T03:50:21.057Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-10T03:50:21.057Z",
+      "value" : 180
+    },
+    {
+      "end" : "2025-01-09T22:04:36.535Z",
+      "kind" : "heartRate",
+      "start" : "2023-12-10T03:50:21.057Z",
+      "value" : 181
+    },
+    {
+      "end" : "2025-01-09T22:04:36.535Z",
+      "kind" : "heartRate",
+      "start" : "2025-01-09T22:04:36.535Z",
+      "value" : 182
+    },
+    {
+      "end" : "2025-01-09T22:04:36.535Z",
+      "kind" : "heartRate",
+      "start" : "2025-01-09T22:04:36.535Z",
+      "value" : 183
+    },
+    {
+      "end" : "2026-06-25T16:57:49.757Z",
+      "kind" : "heartRate",
+      "start" : "2025-01-09T22:04:36.535Z",
+      "value" : 184
+    },
+    {
+      "end" : "2026-06-25T16:57:49.757Z",
+      "kind" : "heartRate",
+      "start" : "2026-06-25T16:57:49.757Z",
+      "value" : 185
+    },
+    {
+      "end" : "2026-06-25T16:57:49.756Z",
+      "kind" : "heartRate",
+      "start" : "2026-06-25T16:57:49.757Z",
+      "value" : 186
+    },
+    {
+      "end" : "1941-05-02T06:17:21.237Z",
+      "kind" : "heartRate",
+      "start" : "2026-06-25T16:57:49.756Z",
+      "value" : 187
+    },
+    {
+      "end" : "1941-05-02T06:17:21.237Z",
+      "kind" : "heartRate",
+      "start" : "1941-05-02T06:17:21.237Z",
+      "value" : 188
+    },
+    {
+      "end" : "1944-06-27T02:41:33.109Z",
+      "kind" : "heartRate",
+      "start" : "1941-05-02T06:17:21.237Z",
+      "value" : 189
+    },
+    {
+      "end" : "1944-06-27T02:41:33.109Z",
+      "kind" : "heartRate",
+      "start" : "1944-06-27T02:41:33.109Z",
+      "value" : 190
+    },
+    {
+      "end" : "1956-01-06T00:57:29.359Z",
+      "kind" : "heartRate",
+      "start" : "1944-06-27T02:41:33.109Z",
+      "value" : 191
+    },
+    {
+      "end" : "1956-01-06T00:57:29.359Z",
+      "kind" : "heartRate",
+      "start" : "1956-01-06T00:57:29.359Z",
+      "value" : 192
+    },
+    {
+      "end" : "1942-01-06T07:55:23.059Z",
+      "kind" : "heartRate",
+      "start" : "1956-01-06T00:57:29.359Z",
+      "value" : 193
+    },
+    {
+      "end" : "1942-01-06T07:55:23.059Z",
+      "kind" : "heartRate",
+      "start" : "1942-01-06T07:55:23.059Z",
+      "value" : 194
+    },
+    {
+      "end" : "1941-01-17T21:07:30.776Z",
+      "kind" : "heartRate",
+      "start" : "1942-01-06T07:55:23.059Z",
+      "value" : 195
+    },
+    {
+      "end" : "1941-01-17T21:07:30.776Z",
+      "kind" : "heartRate",
+      "start" : "1941-01-17T21:07:30.776Z",
+      "value" : 196
+    },
+    {
+      "end" : "1943-05-26T22:00:35.816Z",
+      "kind" : "heartRate",
+      "start" : "1941-01-17T21:07:30.776Z",
+      "value" : 197
+    },
+    {
+      "end" : "1943-05-26T22:00:35.816Z",
+      "kind" : "heartRate",
+      "start" : "1943-05-26T22:00:35.816Z",
+      "value" : 198
+    },
+    {
+      "end" : "1962-06-09T06:11:57.757Z",
+      "kind" : "heartRate",
+      "start" : "1943-05-26T22:00:35.816Z",
+      "value" : 199
+    },
+    {
+      "end" : "1962-06-09T06:11:57.757Z",
+      "kind" : "heartRate",
+      "start" : "1962-06-09T06:11:57.757Z",
+      "value" : 200
+    },
+    {
+      "end" : "1943-04-08T04:17:06.649Z",
+      "kind" : "heartRate",
+      "start" : "1962-06-09T06:11:57.757Z",
+      "value" : 201
+    },
+    {
+      "end" : "1943-04-08T04:17:06.650Z",
+      "kind" : "heartRate",
+      "start" : "1943-04-08T04:17:06.649Z",
+      "value" : 202
+    },
+    {
+      "end" : "1952-07-15T01:34:04.466Z",
+      "kind" : "heartRate",
+      "start" : "1943-04-08T04:17:06.650Z",
+      "value" : 203
+    },
+    {
+      "end" : "1952-07-15T01:34:04.466Z",
+      "kind" : "heartRate",
+      "start" : "1952-07-15T01:34:04.466Z",
+      "value" : 204
+    },
+    {
+      "end" : "1963-03-12T22:19:59.958Z",
+      "kind" : "heartRate",
+      "start" : "1952-07-15T01:34:04.466Z",
+      "value" : 205
+    },
+    {
+      "end" : "1963-03-12T22:19:59.959Z",
+      "kind" : "heartRate",
+      "start" : "1963-03-12T22:19:59.958Z",
+      "value" : 206
+    },
+    {
+      "end" : "1959-04-24T12:31:05.313Z",
+      "kind" : "heartRate",
+      "start" : "1963-03-12T22:19:59.959Z",
+      "value" : 207
+    },
+    {
+      "end" : "1959-04-24T12:31:05.313Z",
+      "kind" : "heartRate",
+      "start" : "1959-04-24T12:31:05.313Z",
+      "value" : 208
+    },
+    {
+      "end" : "1952-08-15T10:25:03.757Z",
+      "kind" : "heartRate",
+      "start" : "1959-04-24T12:31:05.313Z",
+      "value" : 209
+    },
+    {
+      "end" : "1952-08-15T10:25:03.758Z",
+      "kind" : "heartRate",
+      "start" : "1952-08-15T10:25:03.757Z",
+      "value" : 210
+    },
+    {
+      "end" : "2023-11-14T22:13:20.001Z",
+      "kind" : "heartRate",
+      "start" : "1952-08-15T10:25:03.758Z",
+      "value" : 211
+    }
+  ],
+  "schemaVersion" : 3,
+  "sleep" : [
+
+  ],
+  "stepSamples" : [
+
+  ],
+  "units" : {
+    "activeEnergy" : "kcal",
+    "asleepMin" : "min",
+    "avgSpO2" : "percent",
+    "awakeMin" : "min",
+    "bedtimeGapSeconds" : "s",
+    "beyondReportedEndSeconds" : "s",
+    "celsius" : "degC",
+    "coverageFraction" : "fraction",
+    "coverageToReference" : "fraction",
+    "coverageToReferenceWake" : "fraction",
+    "coverageWithinReportedWindow" : "fraction",
+    "deepMin" : "min",
+    "delta" : "count",
+    "distance" : "m",
+    "durationSec" : "s",
+    "efficiency" : "fraction",
+    "exerciseMinutes" : "min",
+    "feelScore" : "score (unitless)",
+    "heartRate" : "count\/min",
+    "hrAwake" : "count\/min",
+    "hrDeep" : "count\/min",
+    "hrLight" : "count\/min",
+    "hrRem" : "count\/min",
+    "hrvSDNN" : "ms",
+    "lightMin" : "min",
+    "longestGapSeconds" : "s",
+    "materialGapSeconds" : "s",
+    "minSpO2" : "percent",
+    "movementLevels" : "level (ring motion index, no physical unit)",
+    "odi" : "events\/hour",
+    "osaAvgSpO2" : "percent",
+    "osaMinSpO2" : "percent",
+    "osaODI" : "events\/hour",
+    "osaTimeBelow90Sec" : "s",
+    "remMin" : "min",
+    "respiratoryRate" : "count\/min",
+    "restingHeartRate" : "count\/min",
+    "seconds" : "s",
+    "skinTempC" : "degC",
+    "sleep" : "category",
+    "sleepScore" : "score (unitless)",
+    "spo2" : "fraction",
+    "steps" : "count",
+    "stressScore" : "score (unitless)",
+    "temperature" : "degC",
+    "timeBelow90Sec" : "s",
+    "timeZoneOffsetSeconds" : "s",
+    "wakeGapSeconds" : "s"
+  }
+}
