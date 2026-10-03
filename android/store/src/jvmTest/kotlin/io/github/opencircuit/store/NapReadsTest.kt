@@ -61,6 +61,29 @@ class NapReadsTest {
         }
     }
 
+    /**
+     * A day whose midnight the zone skips ends at the next day's midnight, not a day after its own
+     * first instant: São Paulo skipped 2018-11-04 00:00 (the day began at 01:00), so a nap at 00:30 on
+     * the 5th is that day's alone. Upstream adds one calendar day to the first instant and lists it
+     * on both days (D-182).
+     */
+    @Test
+    fun aDayWhoseMidnightIsSkippedEndsAtTheNextDaysMidnight() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val saoPaulo = ZoneId.of("America/Sao_Paulo")
+            db.nap("2018-11-04T03:00:00Z", "2018-11-04T03:30:00Z") // 01:00 on the 4th, its first instant
+            db.nap("2018-11-05T01:59:00Z", "2018-11-05T02:20:00Z") // 23:59 on the 4th
+            db.nap("2018-11-05T02:30:00Z", "2018-11-05T03:00:00Z") // 00:30 on the 5th
+            val store = SleepStore(db)
+
+            val fourth = store.naps(on = at("2018-11-04T15:00:00Z"), zone = saoPaulo).map { it.start }
+            val fifth = store.naps(on = at("2018-11-05T15:00:00Z"), zone = saoPaulo).map { it.start }
+
+            assertEquals(listOf(at("2018-11-05T01:59:00Z"), at("2018-11-04T03:00:00Z")), fourth)
+            assertEquals(listOf(at("2018-11-05T02:30:00Z")), fifth)
+        }
+    }
+
     /** Upstream `naps(from:to:)`: `from <= start < to` on the detected start, earliest first. */
     @Test
     fun theNapsOfARangeAreThoseDetectedToStartInItEarliestFirst() = runBlocking<Unit> {

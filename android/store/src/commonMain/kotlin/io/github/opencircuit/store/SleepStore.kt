@@ -46,7 +46,7 @@ import kotlin.coroutines.cancellation.CancellationException
 // (:2405-2446), and the drain's `rederiveEditedNightProvenance` (:2293-2365), which queues the
 // night's Health rewrite.
 //
-// Differences, each deliberate (PORTING.md D-160 to D-176):
+// Differences, each deliberate (PORTING.md D-160 to D-176, D-182):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
 //   stored millisecond before it is compared. Upstream reads the wall clock and `Calendar.current`.
 // - Each save is one transaction: a failed save leaves the stored night exactly as it was, where
@@ -71,6 +71,8 @@ import kotlin.coroutines.cancellation.CancellationException
 // - A new or replacing night removes the automatic naps it covers in its own transaction: a failed
 //   delete fails the night, nothing written. Upstream prunes after the night's save, in a second
 //   save whose failure it swallows, leaving the night saved and the naps in place.
+// - The naps of a day whose midnight the zone skips end at the next day's midnight; upstream adds a
+//   calendar day to the day's first instant, listing a nap of the next day's first hour on both days.
 // - A nap's segments are stored as the segment codec's text in UTF-8; bytes that are not UTF-8 read
 //   as no segments (coarse), as Foundation refuses them.
 // - The move of stored nights onto their wake day is one transaction with its done-latch written in
@@ -635,10 +637,13 @@ class SleepStore internal constructor(
         }
     }
 
-    /** The naps detected to start on the day of [on] in [zone], the latest start first. */
+    /**
+     * The naps detected to start on the day of [on] in [zone], the latest start first. The day ends at
+     * the next day's first instant, also when the zone skipped this day's midnight (D-182).
+     */
     suspend fun naps(on: Instant, zone: ZoneId): List<StoredNapRecord> {
         val dayStart = startOfDay(on.toStoredMillis(), zone)
-        val dayEnd = dayStart.atZone(zone).plusDays(1).toInstant()
+        val dayEnd = startOfDay(dayStart.atZone(zone).plusDays(1).toInstant(), zone)
         return db.withReadTransaction { sleepDao.napsStartingLatestFirst(dayStart, dayEnd).map { it.toStoredNapRecord() } }
     }
 
