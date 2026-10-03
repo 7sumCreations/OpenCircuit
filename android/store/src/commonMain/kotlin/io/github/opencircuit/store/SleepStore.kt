@@ -30,13 +30,13 @@ import java.time.ZoneId
 // `applyOSASummary` (:2029-2039), and the nap reads `naps(on:)` (:2998-3005), `naps(from:to:)`
 // (:3008-3013), `autoNaps(overlapping:to:)` (:1809-1818) and `deleteNaps` (:1822-1829), and the nap
 // writes `saveNap` (:2865-2888), `addManualNap` (:2895-2915) and `editNap` (:2938-2974) with their
-// night check `overlapsStoredNight` (:2981-2995).
+// night check `overlapsStoredNight` (:2981-2995), and the automatic-nap prune a saved night runs
+// (`pruneAutoNaps`, :1837-1853, called at :1801).
 //
 // Not yet part of this file: moving stored nights onto their wake day before a save (:1589) and
-// realigning a night resolved by its span (:1561-1573), and pruning the automatic naps a saved
-// night covers (:1801).
+// realigning a night resolved by its span (:1561-1573).
 //
-// Differences, each deliberate (PORTING.md D-160 to D-166):
+// Differences, each deliberate (PORTING.md D-160 to D-169):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
 //   stored millisecond before it is compared. Upstream reads the wall clock and `Calendar.current`.
 // - Each save is one transaction: a failed save leaves the stored night exactly as it was, where
@@ -58,6 +58,11 @@ import java.time.ZoneId
 // - A nap write whose lookup or save fails throws, writing nothing. Upstream's `try?` reads a failed
 //   lookup as "no nap" — `saveNap` then inserts, `addManualNap` takes it as no duplicate, `editNap`
 //   returns false — and a failed manual add or edit save as false.
+// - A new or replacing night removes the automatic naps it covers in its own transaction: a failed
+//   delete fails the night, nothing written. Upstream prunes after the night's save, in a second
+//   save whose failure it swallows, leaving the night saved and the naps in place.
+// - A nap's segments are stored as the segment codec's text in UTF-8; bytes that are not UTF-8 read
+//   as no segments (coarse), as Foundation refuses them.
 
 /**
  * The sleep half of the on-device store, over the same [StoreDatabase] as [LocalStore]. Every write
@@ -97,6 +102,9 @@ class SleepStore internal constructor(
      * too. It never writes the feel score, the apnea summary, the edited window or the widened
      * clamp window. The wake window and every day boundary are read in [zone].
      *
+     * A new or replacing save also removes the automatic naps sharing time with `[inBedStart,
+     * inBedEnd]` — the same sleep counted twice — in the same transaction; the wearer's naps stay.
+     *
      * Throws, writing nothing, when a lookup or the write fails, or when a stage total does not fit
      * an `Int` of minutes.
      */
@@ -127,6 +135,7 @@ class SleepStore internal constructor(
                     StoredSleepSummaryEntity(night = dayStart, efficiency = efficiency, updatedAt = at)
                         .withMinutes(minutes).withWindow(start, end, onset, wake).withExtras(staged),
                 )
+                pruneAutoNaps(start, end)
                 return@withWriteTransaction SleepPersistOutcome.INSERTED
             }
             if (isUnfinishedEveningBout(existing, start, end, zone)) return@withWriteTransaction SleepPersistOutcome.REFUSED_NIGHT_KEY_COLLISION
@@ -155,6 +164,7 @@ class SleepStore internal constructor(
             sleepDao.updateSummary(
                 existing.copy(efficiency = efficiency, updatedAt = at).withMinutes(minutes).withWindow(start, end, onset, wake).withExtras(staged),
             )
+            pruneAutoNaps(start, end)
             SleepPersistOutcome.UPDATED
         }
     }
@@ -470,6 +480,16 @@ class SleepStore internal constructor(
         if (naps.isEmpty()) return 0
         val starts = naps.map { it.start }
         return db.withWriteTransaction { starts.sumOf { sleepDao.deleteNapAt(it) } }
+    }
+
+    /**
+     * Upstream `pruneAutoNaps` (:1837-1853): deletes the automatic naps sharing time with the night just
+     * written over `[start, end]` — the same sleep counted twice. Runs inside the night's transaction, so
+     * a failed delete fails the night (D-167); the wearer's naps are never touched.
+     */
+    private suspend fun pruneAutoNaps(start: Instant, end: Instant) {
+        if (end <= start) return
+        for (nap in autoNapRows(start, end)) sleepDao.deleteNapAt(nap.start)
     }
 
     /**
