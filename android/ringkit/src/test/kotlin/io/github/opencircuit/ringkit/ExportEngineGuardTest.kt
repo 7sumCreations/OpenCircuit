@@ -22,6 +22,8 @@ import kotlin.test.assertTrue
  * What Swift's types and Foundation's fixed formats guaranteed the export for free, checked on the
  * Kotlin side: no writer reads the machine's locale or time zone, and the rows are values (Swift's
  * synthesized `Equatable`, arrays copied on assignment). Kept apart from the upstream-port class.
+ * Also the coverage-honesty sources the export carries: the reference-wake raw names and reason
+ * tokens, `Outcome` / `Row` equality, and `ExportCoverageWitness.Edges` as a value.
  */
 class ExportEngineGuardTest {
 
@@ -142,6 +144,98 @@ class ExportEngineGuardTest {
         assertFailsWith<UnsupportedOperationException> { (row.coverage.missingFromEvidence as MutableList<Long>).clear() }
         assertEquals(EpochArchiveRow("ring-1", "AQID", 10, t0, t1, report.copy(missingFromEvidence = listOf(5L, 6L))), row)
         assertNotEquals(EpochArchiveRow("ring-1", "AQID", 10, t0, null, report), row)
+    }
+
+    // --- the coverage-honesty sources (reference-wake coverage, coverage witness) ---
+
+    private fun assessment(fraction: Double = 0.5) =
+        ExportCoverage.Assessment(t0, t1, expectedSamples = 24, observedSamples = 12, coverageFraction = fraction, gaps = emptyList(), longestGapSeconds = 0.0)
+
+    private fun row(beyond: Double = 0.0, reference: ExportReferenceCoverage.Reference = ExportReferenceCoverage.Reference.MANUAL_SCHEDULE_WAKE) =
+        ExportReferenceCoverage.Row(reference, t1, beyond, assessment())
+
+    @Test
+    fun referenceRawNamesAndReasonTokensArePinnedAndParsedExactly() {
+        assertEquals(
+            listOf("manualScheduleWake", "manualScheduleWakeSoFar"),
+            ExportReferenceCoverage.Reference.entries.map { it.rawValue },
+        )
+        assertEquals(ExportReferenceCoverage.Reference.MANUAL_SCHEDULE_WAKE_SO_FAR, ExportReferenceCoverage.Reference.fromRawValue("manualScheduleWakeSoFar"))
+        // Swift's `init(rawValue:)` is exact (measured: "ManualScheduleWake" → nil), whatever the machine's case rules.
+        val saved = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            for (raw in listOf("ManualScheduleWake", "MANUALSCHEDULEWAKE", " manualScheduleWake", "manualScheduleWake ", "MANUAL_SCHEDULE_WAKE", "")) {
+                assertEquals(null, ExportReferenceCoverage.Reference.fromRawValue(raw), "'$raw'")
+            }
+        } finally {
+            Locale.setDefault(saved)
+        }
+        assertEquals("noManualSleepSchedule", ExportReferenceCoverage.Outcome.NO_MANUAL_SLEEP_SCHEDULE)
+        assertEquals("referenceNotAfterBedtime", ExportReferenceCoverage.Outcome.REFERENCE_NOT_AFTER_BEDTIME)
+    }
+
+    @Test
+    fun outcomesAndRowsCompareAsSwiftsSynthesizedEquatable() {
+        val unavailable = ExportReferenceCoverage.Outcome.Unavailable(ExportReferenceCoverage.Outcome.NO_MANUAL_SLEEP_SCHEDULE)
+        assertEquals(unavailable, ExportReferenceCoverage.Outcome.Unavailable("noManualSleepSchedule"))
+        assertNotEquals<ExportReferenceCoverage.Outcome>(unavailable, ExportReferenceCoverage.Outcome.Unavailable("NoManualSleepSchedule"), "reasons compare exactly")
+        assertNotEquals<ExportReferenceCoverage.Outcome>(unavailable, ExportReferenceCoverage.Outcome.Measured(row()))
+        // Doubles by IEEE ==: -0.0 equals 0.0 (and hashes alike), NaN equals nothing, itself included.
+        assertEquals(ExportReferenceCoverage.Outcome.Measured(row(0.0)), ExportReferenceCoverage.Outcome.Measured(row(-0.0)))
+        assertEquals(row(0.0).hashCode(), row(-0.0).hashCode())
+        assertNotEquals(row(Double.NaN), row(Double.NaN))
+        assertNotEquals(row(), row(reference = ExportReferenceCoverage.Reference.MANUAL_SCHEDULE_WAKE_SO_FAR))
+        assertNotEquals(row(), ExportReferenceCoverage.Row(ExportReferenceCoverage.Reference.MANUAL_SCHEDULE_WAKE, t1, 0.0, assessment(0.25)))
+    }
+
+    @Test
+    fun edgesAreValuesHoldingTheirOwnReadOnlyRun() {
+        val run = mutableListOf(t1, t1.plusSeconds(150))
+        val edges = ExportCoverageWitness.Edges(t0, t1, t0.minusSeconds(150), t1, run, t0.minusSeconds(86_400), 3, true)
+        run += t1.plusSeconds(300)
+        assertEquals(listOf(t1, t1.plusSeconds(150)), edges.measurementsAfterEnd, "a later change to the caller's list does not reach the edges")
+        assertEquals(listOf(t1, t1.plusSeconds(150)), edges.coverage.measurementsAfterEnd)
+        @Suppress("UNCHECKED_CAST")
+        assertFailsWith<UnsupportedOperationException> { (edges.measurementsAfterEnd as MutableList<java.time.Instant>).clear() }
+
+        val same = ExportCoverageWitness.Edges(t0, t1, t0.minusSeconds(150), t1, listOf(t1, t1.plusSeconds(150)), t0.minusSeconds(86_400), 3, true)
+        assertEquals(same, edges)
+        assertEquals(same.hashCode(), edges.hashCode())
+        assertNotEquals(ExportCoverageWitness.Edges(t0, t1, t0.minusSeconds(150), t1, listOf(t1), t0.minusSeconds(86_400), 3, true), edges)
+        assertNotEquals(ExportCoverageWitness.Edges(t0, t1, t0.minusSeconds(150), t1, listOf(t1, t1.plusSeconds(150)), t0.minusSeconds(86_400), 3, false), edges)
+        assertNotEquals(ExportCoverageWitness.Edges(t0, t1, t0.minusSeconds(150), t1, listOf(t1, t1.plusSeconds(150)), t0.minusSeconds(86_400), 4, true), edges)
+        // Two probes of the same records are the same value.
+        val archive = listOf(listOf(record(t0.minusSeconds(150)), record(t1.plusSeconds(150))))
+        assertEquals(
+            ExportCoverageWitness.edges(archive, null, null, null, t0, t1),
+            ExportCoverageWitness.edges(archive.map { it.toList() }, null, null, null, t0, t1),
+        )
+    }
+
+    @Test
+    fun theWitnessDescriptionPrintsAsciiDigitsUnderEveryMachineLocale() {
+        val edges = ExportCoverageWitness.Edges(t0, t1, null, null, emptyList(), null, 1_234_567, true)
+        val saved = Locale.getDefault()
+        try {
+            for (tag in listOf("ar-EG-u-nu-arab", "hi-IN-u-nu-deva", "th-TH-u-nu-thai", "fa-IR", "tr-TR")) {
+                Locale.setDefault(Locale.forLanguageTag(tag))
+                assertEquals("store+archive(1234567,moved)", edges.witnessDescription, tag)
+            }
+        } finally {
+            Locale.setDefault(saved)
+        }
+    }
+
+    /** A worn epoch with a heart rate, on the raw path. */
+    private fun record(at: java.time.Instant): BulkRecord {
+        val counter = at.epochSecond - Command.SYNC_EPOCH
+        val raw = ByteArray(BulkRecord.LENGTH)
+        raw[0] = (counter ushr 24).toByte(); raw[1] = (counter ushr 16).toByte()
+        raw[2] = (counter ushr 8).toByte(); raw[3] = counter.toByte()
+        raw[4] = 58; raw[8] = 0x60; raw[9] = 0x0a
+        for (i in 10 until 15) raw[i] = 2
+        return BulkRecord.of(raw)!!
     }
 
     @Test
