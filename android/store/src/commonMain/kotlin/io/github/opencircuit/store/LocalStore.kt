@@ -20,7 +20,10 @@ import java.time.temporal.ChronoUnit
 // and `cumulativeState` (:3136); the other sample reads (`latestSample(kind:before:)` :813,
 // `earliestSample` :831 / :842, `recentSamples` :1184); daily steps and step samples
 // (`addDailySteps` :3058, `todaySteps` :3073, `stepSamples` :3100, `latestDaily` :3105,
-// `recentDailies` :3114, `dailies` :3119); daytime temperatures (:1073, :1079).
+// `recentDailies` :3114, `dailies` :3119); daytime temperatures (:1073, :1079); retention and
+// repairs (`sampleRetentionDays` :1051, `pruneExpiredSamples` :1058, `purgeImplausibleHeartRate`
+// :1090, `purgeImplausibleTimestamps` :1110, `repairFutureSyncCursors` :1144), with the purges'
+// one-time latches from ios/OpenCircuit/App.swift (:624, :638).
 //
 // Differences, each deliberate:
 // - `now` and `zone` are parameters. Upstream reads the wall clock and `Calendar.current`; the
@@ -31,6 +34,8 @@ import java.time.temporal.ChronoUnit
 // - A heart rate that is NaN or infinite is dropped as implausible; upstream's `Int(value)` traps.
 // - Step totals are `Long` (Swift's `Int` is 64-bit) and an overflowing total fails the write, as
 //   Swift's `+=` traps; a failed day lookup fails the write (upstream's `try?` inserts a new row).
+// - The two one-time purges keep their latch in this database and write it in the purge's own
+//   transaction; upstream sets a UserDefaults flag after the purge has saved.
 
 /**
  * The on-device store over one [StoreDatabase]. Every write is one transaction: it commits whole
@@ -208,6 +213,83 @@ class LocalStore internal constructor(
         dailyDao.insertDaytimeTemp(StoredDaytimeTempEntity(time = at, celsius = celsius))
     }
 
+    /**
+     * Deletes raw samples, step deltas and daytime readings older than [olderThanDays] calendar
+     * days before [now] in [zone] (`time < cutoff`; a row exactly at the cutoff is kept), in one
+     * transaction. Day totals and cursors are never pruned. Meant for once a launch, not per write.
+     */
+    suspend fun pruneExpiredSamples(now: Instant, zone: ZoneId, olderThanDays: Long = SAMPLE_RETENTION_DAYS) {
+        // Calendar days in the zone, as Foundation's `date(byAdding: .day, value: -days, to:)`.
+        val cutoff = now.atZone(zone).minusDays(olderThanDays).toInstant()
+        db.withWriteTransaction {
+            sampleDao.deleteSamplesBefore(cutoff)
+            dailyDao.deleteDaytimeTempsBefore(cutoff)
+            dailyDao.deleteStepSamplesBefore(cutoff)
+        }
+    }
+
+    /**
+     * Once per store: deletes heart-rate samples whose value is below 30 or above 220 bpm (stored
+     * before the decoder's band guard) and returns how many; null when it already ran. The purge
+     * and its latch commit together, so a failed purge leaves no latch and runs again next time.
+     * The stored value is compared as is (220.5 is deleted, though ingest keeps it), as upstream.
+     */
+    suspend fun purgeImplausibleHeartRateOnce(now: Instant): Int? =
+        purgeOnce(HEART_RATE_PURGE_LATCH, now) {
+            sampleDao.deleteHeartRatesOutside(
+                MetricKind.HEART_RATE.rawValue,
+                lowest = LiveHR.MIN_VALID_BPM.toDouble(),
+                highest = LiveHR.MAX_VALID_BPM.toDouble(),
+            )
+        }
+
+    /**
+     * Once per store: deletes samples of any kind whose start is outside ingest's plausible window
+     * for [now] (before the ring's counter epoch, or more than one day ahead) and returns how many;
+     * null when it already ran. Latched like [purgeImplausibleHeartRateOnce].
+     */
+    suspend fun purgeImplausibleTimestampsOnce(now: Instant): Int? =
+        purgeOnce(TIMESTAMP_PURGE_LATCH, now) {
+            sampleDao.deleteSamplesOutside(floor = SYNC_EPOCH_INSTANT, ceiling = futureCeiling(now))
+        }
+
+    /**
+     * Pulls back every cursor row stuck more than one day after [now] — the ingest cursor and the
+     * health (`hk:`) watermark alike — to the newest stored sample of its kind at or before [now],
+     * or deletes it when there is none, so the next sync takes the backlog again. Runs on every
+     * launch (not latched, as upstream); returns how many rows it changed. One transaction.
+     *
+     * Only the `hk:` prefix is stripped before the sample lookup, as upstream: any other watermark
+     * row stuck in the future finds no sample of its key and is deleted.
+     */
+    suspend fun repairFutureSyncCursors(now: Instant): Int =
+        db.withWriteTransaction {
+            val stuck = sampleDao.allCursors().filter { it.last > futureCeiling(now) }
+            for (row in stuck) {
+                val bareKind = row.kindRaw.removePrefix(HEALTH_CURSOR_PREFIX)
+                val latest = sampleDao.latestSampleAtOrBefore(bareKind, now)
+                if (latest != null) {
+                    sampleDao.upsertCursors(listOf(row.copy(last = latest.start)))
+                } else {
+                    sampleDao.deleteCursor(row.kindRaw)
+                }
+            }
+            stuck.size
+        }
+
+    /**
+     * Runs [purge] and writes its latch in one transaction, unless the latch is already set. A
+     * latch holding anything but its set value counts as unset: the purges are idempotent, so
+     * running one again costs a scan, never data.
+     */
+    private suspend fun purgeOnce(latch: String, now: Instant, purge: suspend () -> Int): Int? =
+        db.withWriteTransaction {
+            if (kvDao.get(latch)?.value == LATCH_SET) return@withWriteTransaction null
+            val purged = purge()
+            kvDao.upsert(StoreKvEntity(key = latch, value = LATCH_SET, updatedAt = now))
+            purged
+        }
+
     /** Daytime readings with `from <= time < to`, oldest first. */
     suspend fun daytimeTemperatures(from: Instant, to: Instant): List<DaytimeTemperature> =
         dailyDao.daytimeTemps(from, to).map { it.toDaytimeTemperature() }
@@ -245,31 +327,49 @@ class LocalStore internal constructor(
      * implausible (it truncates to 0 or an `Int` bound here; upstream traps).
      */
     private fun plausibility(s: QuantitySample, now: Instant): Plausibility {
-        if (s.start < SYNC_EPOCH_INSTANT || s.start > now.plusSeconds(FUTURE_TOLERANCE_SECONDS)) return Plausibility.BAD_TIMESTAMP
+        if (s.start < SYNC_EPOCH_INSTANT || s.start > futureCeiling(now)) return Plausibility.BAD_TIMESTAMP
         if (s.kind == MetricKind.HEART_RATE && s.value.toInt() !in LiveHR.VALID_BPM) return Plausibility.BAD_HEART_RATE
         return Plausibility.PLAUSIBLE
     }
 
-    private companion object {
+    companion object {
+        /** Days of raw samples, step deltas and daytime readings kept on the phone (upstream `sampleRetentionDays`). */
+        const val SAMPLE_RETENTION_DAYS = 30L
+
         /** Cursor rows of the health-store writer share the table; they are not the ingest cursor. */
-        const val HEALTH_CURSOR_PREFIX = "hk:"
+        private const val HEALTH_CURSOR_PREFIX = "hk:"
 
         /** Cursor rows of the export watermark share the table; they are not the ingest cursor. */
-        const val EXPORT_CURSOR_PREFIX = "export:"
+        private const val EXPORT_CURSOR_PREFIX = "export:"
 
         /** Clock-skew tolerance: a sample up to one day in the future is kept. */
-        const val FUTURE_TOLERANCE_SECONDS = 86_400L
+        private const val FUTURE_TOLERANCE_SECONDS = 86_400L
 
-        val SYNC_EPOCH_INSTANT: Instant = Instant.ofEpochSecond(Command.SYNC_EPOCH)
+        private val SYNC_EPOCH_INSTANT: Instant = Instant.ofEpochSecond(Command.SYNC_EPOCH)
+
+        /** One-time latch of the heart-rate purge, in `store_kv` (upstream's UserDefaults key). */
+        private const val HEART_RATE_PURGE_LATCH = "store.purgedImplausibleHR.v1"
+
+        /** One-time latch of the timestamp purge, in `store_kv` (upstream's UserDefaults key). */
+        private const val TIMESTAMP_PURGE_LATCH = "store.purgedImplausibleTimestamps.v1"
+
+        /** A latch's stored value once set (a JSON `true`, as every `store_kv` value is JSON text). */
+        private const val LATCH_SET = "true"
+
+        /**
+         * The latest plausible sample start for [now], one day ahead (clock skew): shared by the
+         * ingest check, the timestamp purge and the cursor repair.
+         */
+        private fun futureCeiling(now: Instant): Instant = now.plusSeconds(FUTURE_TOLERANCE_SECONDS)
 
         /** The sample with both times cut to the whole milliseconds the store keeps. */
-        fun toStoredPrecision(s: QuantitySample): QuantitySample {
+        private fun toStoredPrecision(s: QuantitySample): QuantitySample {
             val start = s.start.truncatedTo(ChronoUnit.MILLIS)
             val end = s.end.truncatedTo(ChronoUnit.MILLIS)
             return if (start == s.start && end == s.end) s else s.copy(start = start, end = end)
         }
 
         /** The first instant of [t]'s local day in [zone] (Foundation's `startOfDay(for:)`). */
-        fun startOfDay(t: Instant, zone: ZoneId): Instant = t.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+        private fun startOfDay(t: Instant, zone: ZoneId): Instant = t.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
     }
 }

@@ -40,8 +40,16 @@ internal interface DailyDao {
     @Query("SELECT * FROM stored_step_sample WHERE start >= :from AND start < :to ORDER BY start, id")
     suspend fun stepSamples(from: Instant, to: Instant): List<StoredStepSampleEntity>
 
+    /** Deletes every step delta with `start < cutoff` (the retention prune). */
+    @Query("DELETE FROM stored_step_sample WHERE start < :cutoff")
+    suspend fun deleteStepSamplesBefore(cutoff: Instant): Int
+
     @Insert
     suspend fun insertDaytimeTemp(reading: StoredDaytimeTempEntity)
+
+    /** Deletes every daytime reading with `time < cutoff` (the retention prune). */
+    @Query("DELETE FROM stored_daytime_temp WHERE time < :cutoff")
+    suspend fun deleteDaytimeTempsBefore(cutoff: Instant): Int
 
     /** Readings with `from <= time < to`, oldest first (upstream `daytimeTemperaturesDescriptor`). */
     @Query("SELECT * FROM stored_daytime_temp WHERE time >= :from AND time < :to ORDER BY time, id")

@@ -51,6 +51,25 @@ internal interface SampleDao {
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start >= :since AND value > 0 ORDER BY start, id")
     suspend fun recentSamples(kindRaw: String, since: Instant): List<StoredSampleEntity>
 
+    /** The newest sample of one kind at or before [notAfter] (the cursor repair's reset target). */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start <= :notAfter ORDER BY start DESC, id DESC LIMIT 1")
+    suspend fun latestSampleAtOrBefore(kindRaw: String, notAfter: Instant): StoredSampleEntity?
+
+    /** Deletes every sample with `start < cutoff` (the retention prune); returns how many. */
+    @Query("DELETE FROM stored_sample WHERE start < :cutoff")
+    suspend fun deleteSamplesBefore(cutoff: Instant): Int
+
+    /** Deletes the samples of one kind whose value is below [lowest] or above [highest]. */
+    @Query("DELETE FROM stored_sample WHERE kind_raw = :kindRaw AND (value < :lowest OR value > :highest)")
+    suspend fun deleteHeartRatesOutside(kindRaw: String, lowest: Double, highest: Double): Int
+
+    /** Deletes every sample with `start < floor` or `start > ceiling`. */
+    @Query("DELETE FROM stored_sample WHERE start < :floor OR start > :ceiling")
+    suspend fun deleteSamplesOutside(floor: Instant, ceiling: Instant): Int
+
+    @Query("DELETE FROM stored_cursor WHERE kind_raw = :kindRaw")
+    suspend fun deleteCursor(kindRaw: String)
+
     /** The newest sample of one kind with `from <= start < to` and `start < before`. */
     @Query(
         "SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start >= :from AND start < :to " +
