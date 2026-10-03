@@ -11,6 +11,7 @@ import io.github.opencircuit.ringkit.SleepNightKey
 import io.github.opencircuit.ringkit.SleepPersistOutcome
 import io.github.opencircuit.ringkit.SleepProvenanceBreakdown
 import io.github.opencircuit.ringkit.SleepScore
+import io.github.opencircuit.ringkit.SleepScoreHeal
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SleepStage
 import io.github.opencircuit.ringkit.SleepStaging
@@ -39,7 +40,8 @@ import kotlin.coroutines.cancellation.CancellationException
 // NightRekey — and `realignNightKey` (:1561-1573), which moves a night found by its span to the key
 // of the staging that replaces it.
 //
-// The launch-time repair `backfillSleepProvenance` (:1926-1952).
+// The launch-time repairs `backfillSleepProvenance` (:1926-1952) and `healWithheldSleepScores`
+// (:2405-2446).
 //
 // Differences, each deliberate (PORTING.md D-160 to D-175):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
@@ -356,6 +358,29 @@ class SleepStore internal constructor(
             changed++
         }
         changed
+    }
+
+    /**
+     * Restores the sleep score an earlier build zeroed on the wearer's own edit: every edited night
+     * with a score of 0 and a known basis gets the score its stored timeline gives
+     * ([SleepScoreHeal.healedScore]) and [now] as its update time — nothing else on the row changes. A
+     * night whose timeline has no segments, or gives no score, is left as stored. Idempotent (a healed
+     * night no longer scores 0). Returns the healed nights' keys, newest first. One transaction: throws,
+     * changing nothing, when a read or write fails.
+     */
+    suspend fun healWithheldSleepScores(now: Instant): List<Instant> {
+        val at = now.toStoredMillis()
+        return db.withWriteTransaction {
+            val healed = ArrayList<Instant>()
+            for (row in sleepDao.allSummaries()) {
+                if (!row.isManuallyEdited || row.sleepScore != 0) continue
+                if (SleepBasis.fromStored(row.sleepBasis) == SleepBasis.UNKNOWN) continue
+                val score = SleepScoreHeal.healedScore(decodedTimeline(row.hypnogramData)) ?: continue
+                sleepDao.updateSummary(row.copy(sleepScore = score, updatedAt = at))
+                healed += row.night
+            }
+            healed.sortedDescending()
+        }
     }
 
     /**
