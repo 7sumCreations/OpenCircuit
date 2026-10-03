@@ -1,0 +1,2 @@
+night,asleepMin,deepMin,lightMin,remMin,awakeMin,efficiency,inBedStart,inBedEnd,skinTempC,sleepScore,stressScore,feelScore,hrDeep,hrLight,hrRem,hrAwake,movementLevels
+2024-03-30,400,80,190,100,20,0.9375,2024-03-29T21:00:00.000Z,2024-03-30T05:30:00.250Z,36.50,60,45,0,50,58,62,70,

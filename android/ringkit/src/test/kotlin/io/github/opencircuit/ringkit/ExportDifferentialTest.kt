@@ -2,10 +2,14 @@ package io.github.opencircuit.ringkit
 
 import io.github.opencircuit.ringkit.ExportEngine.DailyRow
 import io.github.opencircuit.ringkit.ExportEngine.DaytimeTemperatureRow
+import io.github.opencircuit.ringkit.ExportEngine.ExportMetadata
 import io.github.opencircuit.ringkit.ExportEngine.HistorySyncEvidenceRow
 import io.github.opencircuit.ringkit.ExportEngine.NapRow
+import io.github.opencircuit.ringkit.ExportEngine.OSARow
 import io.github.opencircuit.ringkit.ExportEngine.SampleRow
+import io.github.opencircuit.ringkit.ExportEngine.SleepEdgeProvenanceRow
 import io.github.opencircuit.ringkit.ExportEngine.SleepRow
+import io.github.opencircuit.ringkit.ExportEngine.SleepSessionRow
 import io.github.opencircuit.ringkit.ExportEngine.StepSampleRow
 import org.junit.jupiter.api.Timeout
 import java.io.File
@@ -27,8 +31,15 @@ import kotlin.test.assertTrue
  * across every exponent and the format boundaries, non-finite values, every schema-2 row kind in
  * Amsterdam, Kolkata and St John's across their DST changes (with the fixed-decimal edges, every
  * channel outcome and each sport counter absent on its own), hostile text and 64-bit extremes in
- * every evidence column, and a comma, quote or edge space carrying a combining mark — and wrote each
- * output verbatim to `src/test/resources/export-differential/`. This test rebuilds the same rows,
+ * every evidence column, and a comma, quote or edge space carrying a combining mark; and the schema-3
+ * core — metadata blocks (one exported half a millisecond before a DST change), sleep sessions of five
+ * kinds in Kolkata and across St John's spring change (edited and unedited, staged, envelope-only,
+ * stitched and absent hypnograms with every provenance, OSA with valid, zero and negative window counts,
+ * coverage with and without holes, reference wakes measured, "so far" and unavailable, edge rows
+ * assessed and built directly, a measured 0 s gap), every instant millisecond-stamped with varying
+ * fractions — and wrote each output verbatim to `src/test/resources/export-differential/`. For the
+ * sessions the port rebuilds the coverage, reference and edge verdicts from the same inputs with its own
+ * code, so their seconds are compared as bytes. This test rebuilds the same rows,
  * runs the Kotlin writers in the case's zone and compares BYTES. It also sorts the export's key vocabulary and seeded random
  * printable-ASCII keys with the port's comparator and compares the order `JSONSerialization` wrote.
  * The format is documented at the top of the generator's `main.swift`.
@@ -42,7 +53,63 @@ import kotlin.test.assertTrue
  */
 class ExportDifferentialTest {
 
-    private class ECase(val id: String, val zone: ZoneId, val now: Instant, val json: Boolean) {
+    /** One session's inputs; [row] rebuilds the coverage, reference-wake and edge verdicts with the port's own code. */
+    private class SessionInput(val head: List<String>, val reader: ExportDifferentialTest) {
+        var summary: SleepRow? = null
+        val segments = mutableListOf<SleepSegment>()
+        var osa: OSARow? = null
+        var coverage: Triple<Instant, Instant, List<Instant>>? = null
+        var reference: List<String>? = null
+        var edge: List<String>? = null
+
+        fun row(): SleepSessionRow = with(reader) {
+            val cov = coverage?.let { (from, to, times) -> ExportCoverage.assess(times, from, to) }
+            val ref = reference?.let { f ->
+                when (f[0]) {
+                    "rm" -> ExportReferenceCoverage.Outcome.Measured(
+                        checkNotNull(
+                            ExportReferenceCoverage.assess(
+                                coverage?.third ?: emptyList(), date(f[2]), date(f[3]), date(f[4]),
+                                checkNotNull(ExportReferenceCoverage.Reference.fromRawValue(hexString(f[1]))),
+                            ),
+                        ),
+                    )
+                    else -> ExportReferenceCoverage.Outcome.Unavailable(hexString(f[1]))
+                }
+            }
+            val edgeRow = edge?.let { f ->
+                when (f[0]) {
+                    "ea" -> {
+                        val start = date(f[3])
+                        val end = date(f[4])
+                        val assessment = SleepConfidence.assess(
+                            double(f[1]), double(f[2]),
+                            SleepConfidence.Coverage(start, end, opt(f[5], ::date), opt(f[6], ::date), f.drop(9).map(::date), opt(f[7], ::date)),
+                        )
+                        SleepEdgeProvenanceRow(start, end, assessment, hexString(f[8]))
+                    }
+                    else -> SleepEdgeProvenanceRow(
+                        windowStart = date(f[1]), windowEnd = date(f[2]), bedtimeVerdict = hexString(f[3]), bedtimeGapSeconds = opt(f[4], ::double),
+                        wakeVerdict = hexString(f[5]), wakeGapSeconds = opt(f[6], ::double), reasons = reasons(f[9]),
+                        materialGapSeconds = double(f[7]), durationBasis = hexString(f[8]),
+                    )
+                }
+            }
+            SleepSessionRow(
+                sessionID = hexString(head[1]), night = date(head[2]), inBedStart = opt(head[3], ::date), inBedEnd = opt(head[4], ::date),
+                sleepOnset = opt(head[5], ::date), sleepWake = opt(head[6], ::date), isManuallyEdited = flag(head[7]),
+                recordedInBedStart = opt(head[8], ::date), recordedInBedEnd = opt(head[9], ::date), recordedOnset = opt(head[10], ::date),
+                recordedWake = opt(head[11], ::date), hypnogram = segments, summary = checkNotNull(summary) { "session without a summary" },
+                osa = osa, coverage = cov, referenceCoverage = ref, edgeProvenance = edgeRow,
+            )
+        }
+    }
+
+    private class ECase(val id: String, val zone: ZoneId, val now: Instant, val json: Boolean, val v3: Boolean) {
+        var meta: ExportMetadata? = null
+        val sessions = mutableListOf<SessionInput>()
+        val sessionRows: List<SleepSessionRow> get() = sessions.map { it.row() }
+
         val rows = mutableListOf<SampleRow>()
         val sleep = mutableListOf<SleepRow>()
         val daily = mutableListOf<DailyRow>()
@@ -82,9 +149,20 @@ class ExportDifferentialTest {
         "labels.txt" to { c -> (c.sleep.map { ExportEngine.sessionID(it.night, c.zone) } + c.daily.map { ExportEngine.dayStamp(it.day, c.zone) }).joinToString("\n") },
     )
 
+    /** The schema-3 outputs of a "v3" case (the metadata CSV only when the case has a metadata block). */
+    private fun v3Writers(c: ECase): List<Pair<String, (ECase) -> String>> =
+        listOfNotNull(
+            c.meta?.let { meta -> "metadata.csv" to { e: ECase -> ExportEngine.metadataCSV(meta, e.zone) } },
+            "sleepSessions.csv" to { e: ECase -> ExportEngine.sleepSessionsCSV(e.sessionRows, e.zone) },
+            "hypnogram.csv" to { e: ECase -> ExportEngine.hypnogramCSV(e.sessionRows, e.zone) },
+        ).takeIf { c.v3 } ?: emptyList()
+
+    private fun outputs(c: ECase): List<Pair<String, (ECase) -> String>> = writers + v3Writers(c)
+
     private fun json(c: ECase): String? = ExportEngine.toJSON(
         samples = c.rows, sleep = c.sleep, daily = c.daily, stepSamples = c.steps, naps = c.naps,
         daytimeTemperatures = c.temperatures, historySyncEvidence = c.evidenceRows, zone = c.zone, now = c.now,
+        metadata = c.meta, sleepSessions = c.sessionRows,
     )
 
     private data class Divergence(val case: String, val output: String)
@@ -151,6 +229,23 @@ class ExportDifferentialTest {
         return if (t.length == 1) emptyList() else t.substring(1).split('|').map { it.toLong() }
     }
 
+    private fun reasons(t: String): List<String> {
+        require(t.startsWith("r")) { "bad reasons token $t" }
+        return if (t.length == 1) emptyList() else t.substring(1).split('|').map(::hexString)
+    }
+
+    /** The 18 fields of a sleep row after its line kind ("sl", or "sm" for a session's summary). */
+    private fun sleepRow(f: List<String>) = SleepRow(
+        night = date(f[1]), asleepMin = f[2].toLong(), deepMin = f[3].toLong(), lightMin = f[4].toLong(),
+        remMin = f[5].toLong(), awakeMin = f[6].toLong(), efficiency = double(f[7]), inBedStart = opt(f[8], ::date),
+        inBedEnd = opt(f[9], ::date), skinTempC = double(f[10]), sleepScore = f[11].toLong(), stressScore = f[12].toLong(),
+        feelScore = f[13].toLong(), hrDeep = f[14].toLong(), hrLight = f[15].toLong(), hrRem = f[16].toLong(),
+        hrAwake = f[17].toLong(), movementLevels = levels(f[18]),
+    )
+
+    private fun stage(raw: String): SleepStage = SleepStage.entries.singleOrNull { it.rawValue == raw } ?: error("unknown stage $raw")
+    private fun provenance(raw: String): SleepProvenance = SleepProvenance.entries.singleOrNull { it.rawValue == raw } ?: error("unknown provenance $raw")
+
     private fun exitReason(raw: String): HistoryChannelExitReason =
         HistoryChannelExitReason.entries.singleOrNull { it.rawValue == raw } ?: error("unknown exit reason $raw")
 
@@ -182,22 +277,36 @@ class ExportDifferentialTest {
         var i = 0
         while (i < all.size) {
             val head = all[i].split(' ')
-            check(head.size == 5 && head[0] == "case" && head[4] in setOf("json", "csvonly")) { "bad case header: ${all[i]}" }
-            val c = ECase(head[1], ZoneId.of(head[2]), date(head[3]), head[4] == "json")
+            check(head.size in 5..6 && head[0] == "case" && head[4] in setOf("json", "csvonly") && (head.size == 5 || head[5] == "v3")) {
+                "bad case header: ${all[i]}"
+            }
+            val c = ECase(head[1], ZoneId.of(head[2]), date(head[3]), head[4] == "json", head.size == 6)
             i++
             while (all[i] != "end") {
                 val f = all[i].split(' ')
-                val arity = mapOf("s" to 5, "sl" to 19, "dy" to 3, "st" to 4, "np" to 5, "dt" to 3, "ev" to 10, "ch" to 21)
-                check(arity[f[0]] == f.size) { "bad row line: ${all[i]}" }
+                val arity = mapOf(
+                    "s" to 5, "sl" to 19, "dy" to 3, "st" to 4, "np" to 5, "dt" to 3, "ev" to 10, "ch" to 21,
+                    "md" to 16, "ss" to 12, "sm" to 19, "sg" to 5, "os" to 6, "rm" to 5, "ru" to 2, "ed" to 10,
+                )
+                val variable = mapOf("cv" to 3, "ea" to 9) // at least this many tokens
+                check(arity[f[0]] == f.size || (variable[f[0]] ?: Int.MAX_VALUE) <= f.size) { "bad row line: ${all[i]}" }
                 when (f[0]) {
                     "s" -> c.rows += SampleRow(hexString(f[1]), date(f[2]), date(f[3]), double(f[4]))
-                    "sl" -> c.sleep += SleepRow(
-                        night = date(f[1]), asleepMin = f[2].toLong(), deepMin = f[3].toLong(), lightMin = f[4].toLong(),
-                        remMin = f[5].toLong(), awakeMin = f[6].toLong(), efficiency = double(f[7]), inBedStart = opt(f[8], ::date),
-                        inBedEnd = opt(f[9], ::date), skinTempC = double(f[10]), sleepScore = f[11].toLong(), stressScore = f[12].toLong(),
-                        feelScore = f[13].toLong(), hrDeep = f[14].toLong(), hrLight = f[15].toLong(), hrRem = f[16].toLong(),
-                        hrAwake = f[17].toLong(), movementLevels = levels(f[18]),
+                    "sl" -> c.sleep += sleepRow(f)
+                    "md" -> c.meta = ExportMetadata(
+                        schemaVersion = f[15].toLong(), exportedAt = date(f[1]), rangeStart = date(f[2]), rangeEnd = date(f[3]),
+                        appVersion = hexString(f[4]), appBuild = hexString(f[5]), deviceModel = hexString(f[6]), osVersion = hexString(f[7]),
+                        ringModel = hexString(f[8]), ringFirmware = hexString(f[9]), ringGeneration = hexString(f[10]),
+                        ringIdentifier = hexString(f[11]), timeZoneIdentifier = hexString(f[12]), timestampPolicy = hexString(f[13]),
+                        timeZoneOffsetSeconds = f[14].toLong(),
                     )
+                    "ss" -> c.sessions += SessionInput(f, this)
+                    "sm" -> c.sessions.last().summary = sleepRow(f)
+                    "sg" -> c.sessions.last().segments += SleepSegment(date(f[1]), date(f[2]), stage(hexString(f[3])), provenance(hexString(f[4])))
+                    "os" -> c.sessions.last().osa = OSARow(double(f[1]), double(f[2]), double(f[3]), double(f[4]), f[5].toLong())
+                    "cv" -> c.sessions.last().coverage = Triple(date(f[1]), date(f[2]), f.drop(3).map(::date))
+                    "rm", "ru" -> c.sessions.last().reference = f
+                    "ea", "ed" -> c.sessions.last().edge = f
                     "dy" -> c.daily += DailyRow(date(f[1]), f[2].toLong())
                     "st" -> c.steps += StepSampleRow(date(f[1]), date(f[2]), f[3].toLong())
                     "np" -> c.naps += NapRow(date(f[1]), date(f[2]), f[3].toLong(), flag(f[4]))
@@ -245,7 +354,7 @@ class ExportDifferentialTest {
     private fun runAll(divergences: Map<String, Set<Divergence>>): Report {
         val report = Report()
         for (c in inputs()) {
-            for ((output, write) in writers) {
+            for ((output, write) in outputs(c)) {
                 val golden = checkNotNull(resource("${c.id}.$output")) { "missing golden ${c.id}.$output" }
                 compare(c.id, output, golden, write(c).toByteArray(Charsets.UTF_8), divergences, report)
             }
@@ -263,13 +372,16 @@ class ExportDifferentialTest {
         val report = runAll(DELIBERATE_DIVERGENCES)
         println("export differential: ${inputs().size} cases, ${report.compared} outputs, ${report.bytes} bytes compared, ${report.mismatches.size} mismatches")
         for ((improvement, seen) in report.allowed) println("  deliberate divergence '$improvement': ${seen.joinToString()}")
-        assertTrue(report.compared >= 107, "expected at least 107 compared outputs, got ${report.compared} — FIX THE READER")
+        assertTrue(report.compared >= 155, "expected at least 155 compared outputs, got ${report.compared} — FIX THE READER")
         // The generator's own count of the rows it wrote (its stderr line): a reader that dropped a
         // line kind would compare less than it claims.
         val cases = inputs()
-        assertEquals(676, cases.sumOf { it.rows.size }, "sample rows read")
-        assertEquals(270, cases.sumOf { it.sleep.size + it.daily.size + it.steps.size + it.naps.size + it.temperatures.size + it.evidence.size }, "schema-2 rows read")
+        assertEquals(678, cases.sumOf { it.rows.size }, "sample rows read")
+        assertEquals(271, cases.sumOf { it.sleep.size + it.daily.size + it.steps.size + it.naps.size + it.temperatures.size + it.evidence.size }, "schema-2 rows read")
         assertEquals(130, cases.sumOf { c -> c.evidence.sumOf { it.second.size } }, "channel traces read")
+        assertEquals(4, cases.count { it.meta != null }, "metadata blocks read")
+        assertEquals(11, cases.sumOf { it.sessions.size }, "sessions read")
+        assertEquals(38, cases.sumOf { c -> c.sessions.sumOf { it.segments.size } }, "hypnogram segments read")
         assertTrue(report.mismatches.isEmpty(), "${report.mismatches.size} output(s) differ from upstream:\n" + report.mismatches.joinToString("\n"))
         val stale = staleEntries(report, DELIBERATE_DIVERGENCES)
         assertTrue(stale.isEmpty(), "listed deliberate divergence(s) no longer diverge — remove them:\n" + stale.joinToString("\n"))
@@ -309,7 +421,7 @@ class ExportDifferentialTest {
         val dir = File(root, "ringkit/src/test/resources/export-differential")
         val present = assertNotNull(dir.list(), "no directory $dir").toSet()
         val expected = setOf("inputs.txt", "keyorder.txt") +
-            inputs().flatMap { c -> writers.map { "${c.id}.${it.first}" } + listOfNotNull(if (c.json) "${c.id}.json" else null) }
+            inputs().flatMap { c -> outputs(c).map { "${c.id}.${it.first}" } + listOfNotNull(if (c.json) "${c.id}.json" else null) }
         assertEquals(expected, present, "stale or missing goldens — regenerate with regenerate.sh export")
     }
 
@@ -334,6 +446,28 @@ class ExportDifferentialTest {
             }
             val traces = assertNotNull(root["historySyncEvidence"]?.asObjectList(), c.id).map { it.array("channels")?.size }
             assertEquals(c.evidence.map { it.second.size }, traces, c.id)
+            assertEquals(c.meta != null, root.has("meta"), c.id)
+            assertEquals(c.sessions.map { s -> hexString(s.head[1]) }, root["sleepSessions"]?.asObjectList()?.map { it.string("sessionID") } ?: emptyList<String>(), c.id)
+        }
+    }
+
+    /**
+     * Every metadata block the generator wrote declares the zone and the offset Foundation PRINTED for
+     * its export instant (read back from upstream's own timestamp), so `ExportMetadata.of` must derive
+     * exactly those from the case's zone — including half a millisecond before a DST change.
+     */
+    @Test
+    fun `ExportMetadata of declares the zone and offset upstream printed`() {
+        val withMeta = inputs().filter { it.meta != null }
+        assertEquals(4, withMeta.size)
+        for (c in withMeta) {
+            val meta = checkNotNull(c.meta)
+            val derived = ExportMetadata.of(
+                c.zone, exportedAt = meta.exportedAt, rangeStart = meta.rangeStart, rangeEnd = meta.rangeEnd,
+                appVersion = meta.appVersion, appBuild = meta.appBuild, deviceModel = meta.deviceModel, osVersion = meta.osVersion,
+                ringModel = meta.ringModel, ringFirmware = meta.ringFirmware, ringGeneration = meta.ringGeneration, ringIdentifier = meta.ringIdentifier,
+            )
+            assertEquals(meta, derived, c.id)
         }
     }
 

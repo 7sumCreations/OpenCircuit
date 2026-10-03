@@ -12,9 +12,14 @@
 //   <case>.labels.txt              ExportEngine.sessionID(night:) of every sleep row, then
 //                                  ExportEngine.dayStamp(_:) of every daily row, one per line
 //   <case>.json                    ExportEngine.toJSON(...) of all the rows — only for cases marked "json"
+//   <case>.metadata.csv            ExportEngine.metadataCSV(meta) — schema-3 cases with a metadata block
+//   <case>.sleepSessions.csv       ExportEngine.sleepSessionsCSV(sessions) — schema-3 cases
+//   <case>.hypnogram.csv           ExportEngine.hypnogramCSV(sessions) — schema-3 cases
 //   keyorder.txt                   JSONSerialization's .sortedKeys order of the export's key vocabulary
 //                                  and of seeded random printable-ASCII keys, one key per line
-// Every case writes every CSV (a header alone when it has no rows of that kind) and its labels file.
+// Every case writes every schema-2 CSV (a header alone when it has no rows of that kind) and its
+// labels file; a schema-3 case ("v3") also writes the two session CSVs, and the metadata CSV when it
+// has a metadata block.
 //
 // `ExportDifferentialTest` (Kotlin) rebuilds the same rows from inputs.txt, runs the port's writers
 // and compares BYTES with the golden files; it sorts the same keys with the port's comparator and
@@ -26,7 +31,7 @@
 // bytes in lowercase hex (so any character survives the line format).
 //
 // inputs.txt, per case (rows of each kind in order; "-" stands for nil; integers in decimal):
-//   case <id> <time zone identifier> <now: date> <json | csvonly>
+//   case <id> <time zone identifier> <now: date> <json | csvonly> [v3]
 //   s <kind: string> <start: date> <end: date> <value: double>                       a sample row
 //   sl <night: date> <asleepMin> <deepMin> <lightMin> <remMin> <awakeMin> <efficiency: double>
 //      <inBedStart: date|-> <inBedEnd: date|-> <skinTempC: double> <sleepScore> <stressScore>
@@ -43,6 +48,27 @@
 //      <reopenRound|-> <page4CCount> <page47Count> <page4DCount|-> <sportSampleCount|->
 //      <endMarkerCount> <recordsAtStart> <recordsAtEnd> <firstOpcode|-> <lastOpcode|->
 //      <exitReason: string|->                     a channel trace of the evidence row above it
+//   md <exportedAt: date> <rangeStart: date> <rangeEnd: date> <appVersion: string> <appBuild: string>
+//      <deviceModel: string> <osVersion: string> <ringModel: string> <ringFirmware: string>
+//      <ringGeneration: string> <ringIdentifier: string> <timeZoneIdentifier: string>
+//      <timestampPolicy: string> <timeZoneOffsetSeconds> <schemaVersion>               the metadata block
+//   ss <sessionID: string> <night: date> <inBedStart|-> <inBedEnd|-> <sleepOnset|-> <sleepWake|->
+//      <isManuallyEdited: 0|1> <recordedInBedStart|-> <recordedInBedEnd|-> <recordedOnset|->
+//      <recordedWake|->                           a sleep session; the lines below it up to the next
+//                                                 "ss" or "end" are its parts:
+//   sm <the 18 fields of an "sl" line>            its summary
+//   sg <start: date> <end: date> <stage: string> <provenance: string>                 a hypnogram segment
+//   os <avgSpO2: double> <minSpO2: double> <timeBelow90Sec: double> <odi: double> <validWindows>
+//   cv <from: date> <to: date> <sample time: date>...      coverage = ExportCoverage.assess(those times)
+//   rm <reference: string> <reportedStart: date> <reportedEnd: date> <referenceEnd: date>
+//                                                 reference wake measured over the cv line's times
+//   ru <reason: string>                           reference wake unavailable
+//   ea <asleep: double> <inBed: double> <inBedStart: date> <inBedEnd: date> <lastBefore|->
+//      <firstAfter|-> <earliestRetained|-> <durationBasis: string> <measurement after: date>...
+//                                                 edge row from SleepConfidence.assess over that window
+//   ed <windowStart: date> <windowEnd: date> <bedtimeVerdict: string> <bedtimeGap: double|->
+//      <wakeVerdict: string> <wakeGap: double|-> <materialGap: double> <durationBasis: string>
+//      <reasons: r + "|"-joined strings>          an edge row built directly
 //   end
 // (each row is one line; the wrapped lines above are a single line in the file).
 // A "csvonly" case holds a value JSONSerialization cannot write (NaN or an infinity): upstream's
@@ -98,6 +124,70 @@ struct Case {
     var temperatures: [ExportEngine.DaytimeTemperatureRow] = []
     var evidence: [ExportEngine.HistorySyncEvidenceRow] = []
     let json: Bool
+    /// Schema-3 cases also write the metadata (when present), sessions and hypnogram CSVs.
+    var v3 = false
+    var meta: ExportEngine.ExportMetadata? = nil
+    var sessions: [SessionSpec] = []
+}
+
+/// How a session's reference-wake verdict is built: measured over the session's coverage sample times
+/// (`ExportReferenceCoverage.assess`), or unavailable with a reason.
+enum RefSpec {
+    case measured(ExportReferenceCoverage.Reference, reportedStart: Date, reportedEnd: Date, referenceEnd: Date)
+    case unavailable(String)
+}
+
+/// How a session's edge row is built: through `SleepConfidence.assess` (the app's path), or directly.
+enum EdgeSpec {
+    case assessed(asleep: Double, inBed: Double, start: Date, end: Date, lastBefore: Date?, firstAfter: Date?, earliest: Date?,
+                  basis: String, after: [Date])
+    case direct(ExportEngine.SleepEdgeProvenanceRow)
+}
+
+/// One sleep session, built by upstream's own constructors from these inputs; the inputs are what
+/// inputs.txt records, so the Kotlin side rebuilds the coverage, reference and edge verdicts itself.
+struct SessionSpec {
+    var id: String
+    var night: Date
+    var inBedStart: Date? = nil, inBedEnd: Date? = nil, onset: Date? = nil, wake: Date? = nil
+    var edited = false
+    var recStart: Date? = nil, recEnd: Date? = nil, recOnset: Date? = nil, recWake: Date? = nil
+    var summary: ExportEngine.SleepRow
+    var segments: [SleepSegment] = []
+    var osa: ExportEngine.OSARow? = nil
+    var coverage: (from: Date, to: Date, times: [Date])? = nil
+    var reference: RefSpec? = nil
+    var edge: EdgeSpec? = nil
+
+    func row() -> ExportEngine.SleepSessionRow {
+        let cov = coverage.map { ExportCoverage.assess(sampleTimes: $0.times, from: $0.from, to: $0.to) }
+        let ref: ExportReferenceCoverage.Outcome? = reference.map {
+            switch $0 {
+            case .measured(let r, let rs, let re, let end):
+                let row = ExportReferenceCoverage.assess(sampleTimes: coverage?.times ?? [], reportedStart: rs, reportedEnd: re,
+                                                         referenceEnd: end, reference: r)!
+                return .measured(row)
+            case .unavailable(let reason):
+                return .unavailable(reason: reason)
+            }
+        }
+        let edgeRow: ExportEngine.SleepEdgeProvenanceRow? = edge.map {
+            switch $0 {
+            case .assessed(let asleep, let inBed, let s, let e, let last, let first, let earliest, let basis, let after):
+                let a = SleepConfidence.assess(asleep: asleep, inBed: inBed, coverage: SleepConfidence.Coverage(
+                    inBedStart: s, inBedEnd: e, lastMeasurementBeforeStart: last, firstMeasurementAfterEnd: first,
+                    measurementsAfterEnd: after, earliestRetainedMeasurement: earliest))
+                return ExportEngine.SleepEdgeProvenanceRow(windowStart: s, windowEnd: e, assessment: a, durationBasis: basis)
+            case .direct(let r):
+                return r
+            }
+        }
+        return ExportEngine.SleepSessionRow(
+            sessionID: id, night: night, inBedStart: inBedStart, inBedEnd: inBedEnd, sleepOnset: onset, sleepWake: wake,
+            isManuallyEdited: edited, recordedInBedStart: recStart, recordedInBedEnd: recEnd, recordedOnset: recOnset,
+            recordedWake: recWake, hypnogram: segments, summary: summary, osa: osa, coverage: cov, referenceCoverage: ref,
+            edgeProvenance: edgeRow)
+    }
 }
 
 /// 2023-11-14T22:13:20Z, and seconds after it.
@@ -374,6 +464,160 @@ quietAfterPages.evidence = [ExportEngine.HistorySyncEvidenceRow(
     nightRowOutcome: nil)]
 cases.append(quietAfterPages)
 
+// MARK: - Schema-3 cases
+
+/// The offset `ExportEngine.offsetISO8601` prints for `t` in `zone`, read back from the text — the
+/// offset a metadata block must declare so that the declared zone is the printed one.
+func printedOffsetSeconds(_ t: Date, _ zone: TimeZone) -> Int {
+    let text = ExportEngine.offsetISO8601(t, timeZone: zone)
+    if text.hasSuffix("Z") { return 0 }
+    let suffix = text.suffix(6) // ±hh:mm (no export zone below has a seconds offset)
+    let sign = suffix.first == "-" ? -1 : 1
+    let parts = suffix.dropFirst().split(separator: ":").map { Int($0)! }
+    return sign * (parts[0] * 3600 + parts[1] * 60)
+}
+
+func metadata(_ zone: String, exportedAt: Date, rangeStart: Date, rangeEnd: Date, ringModel: String = "RingConn Gen2") -> ExportEngine.ExportMetadata {
+    let tz = TimeZone(identifier: zone)!
+    return ExportEngine.ExportMetadata(
+        exportedAt: exportedAt, rangeStart: rangeStart, rangeEnd: rangeEnd,
+        appVersion: "1.0", appBuild: "37", deviceModel: "iPhone15,2", osVersion: "18.5",
+        ringModel: ringModel, ringFirmware: "FR02.018", ringGeneration: "Gen 2",
+        ringIdentifier: "1E2E3E4E-0000-0000-0000-000000000001",
+        timeZoneIdentifier: tz.identifier, timeZoneOffsetSeconds: printedOffsetSeconds(exportedAt, tz))
+}
+
+func summary(_ night: Date, k: Int, start: Date?, end: Date?) -> ExportEngine.SleepRow {
+    ExportEngine.SleepRow(night: night, asleepMin: 400 + k, deepMin: 80 + k, lightMin: 190 - k, remMin: 100 + k, awakeMin: 20 + k,
+                          efficiency: [0.93755, 0.03125, 0.9375, 0.5, 0.96875][k % 5], inBedStart: start, inBedEnd: end,
+                          skinTempC: [36.125, 36.375, 0.0, -0.001, 34.2][k % 5], sleepScore: 60 + k, stressScore: 45 - k,
+                          feelScore: k % 4, hrDeep: 50 + k, hrLight: 58 + k, hrRem: 62 + k, hrAwake: 70 + k, movementLevels: [0, k, 2])
+}
+
+/// Millisecond-stamped epoch times from `from`, every 150 s plus `jitter` times a cycling 0…6 (so the
+/// instants carry different fractions of a second, as stored rows do — a constant offset would make every
+/// gap a whole number of seconds in both arithmetics), with the given epoch index ranges left out.
+func epochTimes(_ from: Date, count: Int, holes: [Range<Int>], jitter: Double) -> [Date] {
+    (0..<count).filter { i in !holes.contains { $0.contains(i) } }.map { from.addingTimeInterval(Double($0) * 150 + jitter * Double($0 % 7)) }
+}
+
+/// Five kinds of night around the local midnight `night` (variant `k % 5`), each starting two hours
+/// before it at a millisecond-stamped instant:
+///   0 — unedited, a staged night with its envelope; OSA measured; coverage with two holes; reference
+///       wake measured past the reported end; edges assessed with a gap on both sides.
+///   1 — edited (recorded instants present), every provenance in the hypnogram, asserted envelopes
+///       (efficiency withheld); OSA with no valid window; reference unavailable; a direct edge row
+///       with a measured 0 s bedtime gap and no wake gap, computed on the edited totals.
+///   2 — an envelope-only hypnogram; coverage without holes; reference wake "so far", before the
+///       reported end (negative); no edges.
+///   3 — no timeline, no clock times, nothing measured.
+///   4 — a stitched night (two envelopes), partly asserted with enough covered ground to publish
+///       efficiency; OSA with a negative window count; edges assessed and both witnessed.
+func session(_ night: Date, k: Int, zone: TimeZone) -> SessionSpec {
+    let label = "night-" + {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = zone
+        return f.string(from: night)
+    }()
+    let s = night.addingTimeInterval(-7_200.580)
+    let e = s.addingTimeInterval(25_200.913)
+    switch k % 5 {
+    case 0:
+        var spec = SessionSpec(id: label, night: night, inBedStart: s, inBedEnd: e, onset: s.addingTimeInterval(900.25),
+                               wake: e, summary: summary(night, k: k, start: s, end: e))
+        spec.segments = [
+            SleepSegment(start: s, end: e, stage: .inBed),
+            SleepSegment(start: s, end: s.addingTimeInterval(900.25), stage: .awake),
+            SleepSegment(start: s.addingTimeInterval(900.25), end: s.addingTimeInterval(9_000.5), stage: .asleepCore),
+            SleepSegment(start: s.addingTimeInterval(9_000.5), end: s.addingTimeInterval(12_600.125), stage: .asleepDeep),
+            SleepSegment(start: s.addingTimeInterval(12_600.125), end: s.addingTimeInterval(18_000.75), stage: .asleepREM),
+            SleepSegment(start: s.addingTimeInterval(18_000.75), end: e, stage: .asleepCore),
+        ]
+        spec.osa = ExportEngine.OSARow(avgSpO2: 95.4, minSpO2: 88.0, timeBelow90Sec: 312.5, odi: 4.25, validWindows: 96)
+        spec.coverage = (s, e, epochTimes(s, count: 168, holes: [20..<34, 130..<140], jitter: 0.337))
+        spec.reference = .measured(.manualScheduleWake, reportedStart: s, reportedEnd: e, referenceEnd: e.addingTimeInterval(3_600.457))
+        spec.edge = .assessed(asleep: 5.5 * 3600, inBed: 7 * 3600, start: s, end: e, lastBefore: s.addingTimeInterval(-1_000.457),
+                              firstAfter: e.addingTimeInterval(14_399.543), earliest: s.addingTimeInterval(-7 * 86_400), basis: "recorded",
+                              after: [e.addingTimeInterval(60.25), e.addingTimeInterval(14_399.543), e.addingTimeInterval(14_549.1)])
+        return spec
+    case 1:
+        let m = s.addingTimeInterval(7_000.333)
+        var spec = SessionSpec(id: label, night: night, inBedStart: s, inBedEnd: e, onset: s.addingTimeInterval(1_200), wake: e.addingTimeInterval(-600),
+                               edited: true, recStart: s.addingTimeInterval(600.5), recEnd: e.addingTimeInterval(-1_800.25),
+                               recOnset: nil, recWake: e.addingTimeInterval(-1_800.25), summary: summary(night, k: k, start: s, end: e))
+        spec.segments = [
+            SleepSegment(start: s, end: m, stage: .inBed),
+            SleepSegment(start: m, end: e, stage: .inBed, provenance: .asserted),
+            SleepSegment(start: s, end: s.addingTimeInterval(1_200), stage: .awake, provenance: .assertedOverMeasured),
+            SleepSegment(start: s.addingTimeInterval(1_200), end: m, stage: .asleepCore),
+            SleepSegment(start: m, end: m.addingTimeInterval(3_000.5), stage: .asleepCore, provenance: .asserted),
+            SleepSegment(start: m.addingTimeInterval(3_000.5), end: e.addingTimeInterval(-600), stage: .asleepREM, provenance: .assertedCoverageUnknown),
+            SleepSegment(start: e.addingTimeInterval(-600), end: e, stage: .awake, provenance: .asserted),
+        ]
+        spec.osa = ExportEngine.OSARow(avgSpO2: 0, minSpO2: 0, timeBelow90Sec: 0, odi: 0, validWindows: 0)
+        spec.reference = .unavailable(ExportReferenceCoverage.Outcome.noManualSleepSchedule)
+        spec.edge = .direct(ExportEngine.SleepEdgeProvenanceRow(
+            windowStart: s.addingTimeInterval(600.5), windowEnd: e.addingTimeInterval(-1_800.25), bedtimeVerdict: "resumedAfterGap",
+            bedtimeGapSeconds: 0, wakeVerdict: "unknown", wakeGapSeconds: nil, reasons: ["durationLikelyHigh", "noRecordingAfterWake"],
+            materialGapSeconds: 1_800, durationBasis: ExportEngine.SleepEdgeProvenanceRow.durationBasisEdited))
+        return spec
+    case 2:
+        var spec = SessionSpec(id: label, night: night, inBedStart: s, inBedEnd: e, onset: nil, wake: nil, summary: summary(night, k: k, start: s, end: nil))
+        spec.segments = [SleepSegment(start: s, end: e, stage: .inBed)]
+        spec.coverage = (s, e, epochTimes(s, count: 169, holes: [], jitter: 0.0005))
+        spec.reference = .measured(.manualScheduleWakeSoFar, reportedStart: s, reportedEnd: e, referenceEnd: e.addingTimeInterval(-1_200.75))
+        return spec
+    case 3:
+        return SessionSpec(id: label, night: night, summary: summary(night, k: k, start: nil, end: nil))
+    default:
+        let f2 = s.addingTimeInterval(15_000)
+        var spec = SessionSpec(id: label, night: night, inBedStart: s, inBedEnd: f2.addingTimeInterval(5_000.2), onset: s,
+                               wake: f2.addingTimeInterval(5_000.2), summary: summary(night, k: k, start: s, end: f2.addingTimeInterval(5_000.2)))
+        spec.segments = [
+            SleepSegment(start: s, end: s.addingTimeInterval(12_000), stage: .inBed),
+            SleepSegment(start: s, end: s.addingTimeInterval(11_000.4), stage: .asleepCore),
+            SleepSegment(start: s.addingTimeInterval(11_000.4), end: s.addingTimeInterval(12_000), stage: .awake),
+            SleepSegment(start: f2, end: f2.addingTimeInterval(5_000.2), stage: .inBed, provenance: .asserted),
+            SleepSegment(start: f2, end: f2.addingTimeInterval(5_000.2), stage: .asleepCore, provenance: .asserted),
+        ]
+        spec.osa = ExportEngine.OSARow(avgSpO2: 93.125, minSpO2: 0, timeBelow90Sec: 0.05, odi: 0, validWindows: -1)
+        let end = f2.addingTimeInterval(5_000.2)
+        spec.edge = .assessed(asleep: 4 * 3600, inBed: 4.5 * 3600, start: s, end: end, lastBefore: s.addingTimeInterval(-100.5),
+                              firstAfter: end.addingTimeInterval(60.125), earliest: s.addingTimeInterval(-86_400), basis: "recorded",
+                              after: (0..<20).map { end.addingTimeInterval(60.125 + Double($0) * 150) })
+        return spec
+    }
+}
+
+/// A schema-3 case: sessions on the given local nights of `zone`, variants rotating, plus a metadata block.
+func schema3Case(_ id: String, zone: String, nights: [(Int, Int, Int)], firstVariant: Int, exportedAt: Date?) -> Case {
+    let tz = TimeZone(identifier: zone)!
+    let midnights = nights.map { localMidnight(zone, $0.0, $0.1, $0.2) }
+    let now = exportedAt ?? midnights.last!.addingTimeInterval(36_000.0005)
+    var c = Case(id: id, zone: zone, now: now, rows: [], json: true)
+    c.v3 = true
+    c.meta = metadata(zone, exportedAt: now, rangeStart: midnights.first!.addingTimeInterval(-86_400.25), rangeEnd: now)
+    c.sessions = midnights.enumerated().map { i, m in session(m, k: firstVariant + i, zone: tz) }
+    return c
+}
+
+// A half-hour zone without DST, every variant once.
+cases.append(schema3Case("v3-kolkata", zone: "Asia/Kolkata",
+                         nights: [(2025, 8, 10), (2025, 8, 11), (2025, 8, 12), (2025, 8, 13), (2025, 8, 14)], firstVariant: 0, exportedAt: nil))
+// A half-hour negative zone across its spring change, every variant once more, starting elsewhere.
+cases.append(schema3Case("v3-st-johns", zone: "America/St_Johns",
+                         nights: [(2024, 3, 9), (2024, 3, 10), (2024, 3, 11), (2024, 3, 12), (2024, 3, 13)], firstVariant: 2, exportedAt: nil))
+// Exported half a millisecond before Amsterdam's spring change: the timestamp prints as the change and
+// the metadata declares the printed offset. One session (no timeline); the schema-2 rows of a day.
+var amsterdamEdge = schema3Case("v3-amsterdam-dst-edge", zone: "Europe/Amsterdam", nights: [(2024, 3, 30)], firstVariant: 3,
+                                exportedAt: Date(timeIntervalSince1970: 1_711_846_799.9995))
+amsterdamEdge.sleep = [sleepRow(night: localMidnight("Europe/Amsterdam", 2024, 3, 30), k: 0, efficiency: 0.9375, skinTempC: 36.5)]
+cases.append(amsterdamEdge)
+// Metadata with nothing else, and nothing at all: the schema-3 additions must leave every other byte alone.
+var metaOnly = Case(id: "v3-meta-only", zone: "Europe/London", now: base, rows: minuteRows([72, 0.98]), json: true)
+metaOnly.v3 = true
+metaOnly.meta = metadata("Europe/London", exportedAt: base, rangeStart: base.addingTimeInterval(-86_400), rangeEnd: base, ringModel: "")
+cases.append(metaOnly)
+
 // MARK: - Key order
 
 /// The export's JSON key vocabulary: every key the full schema can emit (161).
@@ -477,6 +721,44 @@ func writeText(_ text: String, _ file: String) {
     }
 }
 
+/// A sleep row's fields after the line kind ("sl", or "sm" for a session's summary).
+func sleepFields(_ r: ExportEngine.SleepRow) -> String {
+    let ints = [r.asleepMin, r.deepMin, r.lightMin, r.remMin, r.awakeMin].map(String.init).joined(separator: " ")
+    let scores = [r.sleepScore, r.stressScore, r.feelScore, r.hrDeep, r.hrLight, r.hrRem, r.hrAwake].map(String.init).joined(separator: " ")
+    return "\(date(r.night)) \(ints) \(d(r.efficiency)) \(opt(r.inBedStart, date)) \(opt(r.inBedEnd, date)) "
+        + "\(d(r.skinTempC)) \(scores) m\(r.movementLevels.map(String.init).joined(separator: "|"))"
+}
+
+/// A session's lines: its head, its summary, then whichever of its parts it has.
+func sessionLines(_ s: SessionSpec) -> [String] {
+    var out = ["ss \(x(s.id)) \(date(s.night)) \(opt(s.inBedStart, date)) \(opt(s.inBedEnd, date)) \(opt(s.onset, date)) "
+        + "\(opt(s.wake, date)) \(flag(s.edited)) \(opt(s.recStart, date)) \(opt(s.recEnd, date)) \(opt(s.recOnset, date)) \(opt(s.recWake, date))"]
+    out.append("sm " + sleepFields(s.summary))
+    for g in s.segments { out.append("sg \(date(g.start)) \(date(g.end)) \(x(g.stage.rawValue)) \(x(g.provenance.rawValue))") }
+    if let o = s.osa { out.append("os \(d(o.avgSpO2)) \(d(o.minSpO2)) \(d(o.timeBelow90Sec)) \(d(o.odi)) \(o.validWindows)") }
+    if let c = s.coverage { out.append((["cv", date(c.from), date(c.to)] + c.times.map(date)).joined(separator: " ")) }
+    switch s.reference {
+    case .measured(let r, let rs, let re, let end)?:
+        out.append("rm \(x(r.rawValue)) \(date(rs)) \(date(re)) \(date(end))")
+    case .unavailable(let reason)?:
+        out.append("ru \(x(reason))")
+    case nil:
+        break
+    }
+    switch s.edge {
+    case .assessed(let asleep, let inBed, let start, let end, let last, let first, let earliest, let basis, let after)?:
+        out.append((["ea", d(asleep), d(inBed), date(start), date(end), opt(last, date), opt(first, date), opt(earliest, date), x(basis)]
+            + after.map(date)).joined(separator: " "))
+    case .direct(let r)?:
+        out.append("ed \(date(r.windowStart)) \(date(r.windowEnd)) \(x(r.bedtimeVerdict)) \(opt(r.bedtimeGapSeconds, d)) "
+            + "\(x(r.wakeVerdict)) \(opt(r.wakeGapSeconds, d)) \(d(r.materialGapSeconds)) \(x(r.durationBasis)) "
+            + "r" + r.reasons.map(x).joined(separator: "|"))
+    case nil:
+        break
+    }
+    return out
+}
+
 var inputs = [
     "# ExportDifferential inputs, written by tools/sleep-differential (regenerate.sh export); do not edit.",
     "# Format: see the header of Sources/ExportDifferential/main.swift.",
@@ -485,14 +767,9 @@ for c in cases {
     let zone = TimeZone(identifier: c.zone)! // Foundation names "UTC" "GMT"; compare zones, not names
     NSTimeZone.default = zone
     precondition(ExportEngine.localTimeZone == zone, "Calendar.current did not follow NSTimeZone.default for \(c.zone)")
-    inputs.append("case \(c.id) \(c.zone) \(date(c.now)) \(c.json ? "json" : "csvonly")")
+    inputs.append("case \(c.id) \(c.zone) \(date(c.now)) \(c.json ? "json" : "csvonly")" + (c.v3 ? " v3" : ""))
     for r in c.rows { inputs.append("s \(x(r.kind)) \(date(r.start)) \(date(r.end)) \(d(r.value))") }
-    for r in c.sleep {
-        let ints = [r.asleepMin, r.deepMin, r.lightMin, r.remMin, r.awakeMin].map(String.init).joined(separator: " ")
-        let scores = [r.sleepScore, r.stressScore, r.feelScore, r.hrDeep, r.hrLight, r.hrRem, r.hrAwake].map(String.init).joined(separator: " ")
-        inputs.append("sl \(date(r.night)) \(ints) \(d(r.efficiency)) \(opt(r.inBedStart, date)) \(opt(r.inBedEnd, date)) "
-            + "\(d(r.skinTempC)) \(scores) m\(r.movementLevels.map(String.init).joined(separator: "|"))")
-    }
+    for r in c.sleep { inputs.append("sl " + sleepFields(r)) }
     for r in c.daily { inputs.append("dy \(date(r.day)) \(r.steps)") }
     for r in c.steps { inputs.append("st \(date(r.start)) \(date(r.end)) \(r.delta)") }
     for r in c.naps { inputs.append("np \(date(r.start)) \(date(r.end)) \(r.asleepMin) \(flag(r.isLongNap))") }
@@ -511,6 +788,12 @@ for c in cases {
             inputs.append("ch " + fields.joined(separator: " "))
         }
     }
+    if let m = c.meta {
+        let texts = [m.appVersion, m.appBuild, m.deviceModel, m.osVersion, m.ringModel, m.ringFirmware, m.ringGeneration,
+                     m.ringIdentifier, m.timeZoneIdentifier, m.timestampPolicy].map(x).joined(separator: " ")
+        inputs.append("md \(date(m.exportedAt)) \(date(m.rangeStart)) \(date(m.rangeEnd)) \(texts) \(m.timeZoneOffsetSeconds) \(m.schemaVersion)")
+    }
+    for s in c.sessions { inputs += sessionLines(s) }
     inputs.append("end")
     writeText(ExportEngine.samplesCSV(c.rows), "\(c.id).samples.csv")
     writeText(ExportEngine.sleepCSV(c.sleep), "\(c.id).sleep.csv")
@@ -521,9 +804,16 @@ for c in cases {
     writeText(ExportEngine.historySyncEvidenceCSV(c.evidence), "\(c.id).historySyncEvidence.csv")
     writeText((c.sleep.map { ExportEngine.sessionID(night: $0.night) } + c.daily.map { ExportEngine.dayStamp($0.day) })
         .joined(separator: "\n"), "\(c.id).labels.txt")
+    let sessionRows = c.sessions.map { $0.row() }
+    if c.v3 {
+        if let m = c.meta { writeText(ExportEngine.metadataCSV(m), "\(c.id).metadata.csv") }
+        writeText(ExportEngine.sleepSessionsCSV(sessionRows), "\(c.id).sleepSessions.csv")
+        writeText(ExportEngine.hypnogramCSV(sessionRows), "\(c.id).hypnogram.csv")
+    }
     if c.json {
         guard let json = ExportEngine.toJSON(samples: c.rows, sleep: c.sleep, daily: c.daily, stepSamples: c.steps, naps: c.naps,
-                                             daytimeTemperatures: c.temperatures, historySyncEvidence: c.evidence, now: c.now) else {
+                                             daytimeTemperatures: c.temperatures, historySyncEvidence: c.evidence, now: c.now,
+                                             metadata: c.meta, sleepSessions: sessionRows) else {
             FileHandle.standardError.write("toJSON returned nil for \(c.id)\n".data(using: .utf8)!)
             exit(1)
         }
@@ -537,16 +827,20 @@ let orderLines = ["# JSONSerialization .sortedKeys order: the vocabulary, then t
     + ["random"] + writtenKeyOrder(randomKeyList).map(x)
 writeText(orderLines.joined(separator: "\n") + "\n", "keyorder.txt")
 
-var sampleRowCount = 0, schema2RowCount = 0, traceCount = 0
+var sampleRowCount = 0, schema2RowCount = 0, traceCount = 0, sessionCount = 0, segmentCount = 0, metaCount = 0
 for c in cases {
     sampleRowCount += c.rows.count
     schema2RowCount += c.sleep.count + c.daily.count + c.steps.count
     schema2RowCount += c.naps.count + c.temperatures.count + c.evidence.count
     for r in c.evidence { traceCount += r.channels.count }
+    sessionCount += c.sessions.count
+    for s in c.sessions { segmentCount += s.segments.count }
+    if c.meta != nil { metaCount += 1 }
 }
 
 FileHandle.standardError.write(
     ("ExportDifferential: \(cases.count) cases, \(sampleRowCount) sample rows, \(schema2RowCount) schema-2 rows, "
-        + "\(traceCount) channel traces, \(vocabulary.count) vocabulary keys, \(randomKeyList.count) random keys\n")
+        + "\(traceCount) channel traces, \(metaCount) metadata blocks, \(sessionCount) sessions, \(segmentCount) hypnogram segments, "
+        + "\(vocabulary.count) vocabulary keys, \(randomKeyList.count) random keys\n")
         .data(using: .utf8)!
 )
