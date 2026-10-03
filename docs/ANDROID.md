@@ -19,7 +19,11 @@ the phone.
   so a sync that fails part-way stores nothing and is simply repeated;
 - daily step totals and their step samples, and daytime skin-temperature readings;
 - sleep summaries and naps, including the edits a person makes to a night or a nap and naps they
-  add by hand (the tables exist from version 1; a later release writes them);
+  add by hand. A night is filed under the day it ends; a later sync replaces it only with a fuller
+  staging and never overwrites a person's edit (only the edit's allowed window widens). An edit
+  writes the night, its undo history and its edited sleep onset in one transaction, so a failure
+  leaves all three as they were. A nap the ring detects never replaces one a person added or
+  edited, and the automatic naps a saved night covers are removed in the night's own transaction;
 - what a person logs: periods and headaches (an edit that only changes the notes keeps the entry's
   health-store state; a moved entry keeps its health-store sample ids), and the frozen daily
   headache-risk rows, written once per day;
@@ -31,7 +35,12 @@ the phone.
 The store deletes only raw ring data on its own: samples, step samples and daytime readings older
 than 30 days, plus a one-time clean-up of raw samples that fail the import checks (heart rates
 outside 30–220 bpm, and times before the ring's clock epoch or more than a day ahead). Nothing a
-person entered is pruned.
+person entered is pruned. At launch the store also repairs sleep history: once, it moves nights
+an older build filed under the day they started onto the day they ended — with everything kept
+under the night's key, in one transaction (two nights that would land on one day stop the move and
+change nothing); it fills in the measured-versus-estimated breakdown of unedited nights that lack
+it (a night with no timeline stays unknown); and it restores sleep scores an edit had withheld.
+Each step's outcome is reported, and a failing step does not stop the next.
 
 **No destructive fallback, ever.** The store is never deleted or recreated to get past a problem.
 If the database cannot be opened (a damaged file, a schema with no migration path, a newer schema
