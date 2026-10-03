@@ -1,0 +1,49 @@
+field,unit
+activeEnergy,kcal
+asleepMin,min
+avgSpO2,percent
+awakeMin,min
+bedtimeGapSeconds,s
+beyondReportedEndSeconds,s
+celsius,degC
+coverageFraction,fraction
+coverageToReference,fraction
+coverageToReferenceWake,fraction
+coverageWithinReportedWindow,fraction
+deepMin,min
+delta,count
+distance,m
+durationSec,s
+efficiency,fraction
+exerciseMinutes,min
+feelScore,score (unitless)
+heartRate,count/min
+hrAwake,count/min
+hrDeep,count/min
+hrLight,count/min
+hrRem,count/min
+hrvSDNN,ms
+lightMin,min
+longestGapSeconds,s
+materialGapSeconds,s
+minSpO2,percent
+movementLevels,"level (ring motion index, no physical unit)"
+odi,events/hour
+osaAvgSpO2,percent
+osaMinSpO2,percent
+osaODI,events/hour
+osaTimeBelow90Sec,s
+remMin,min
+respiratoryRate,count/min
+restingHeartRate,count/min
+seconds,s
+skinTempC,degC
+sleep,category
+sleepScore,score (unitless)
+spo2,fraction
+steps,count
+stressScore,score (unitless)
+temperature,degC
+timeBelow90Sec,s
+timeZoneOffsetSeconds,s
+wakeGapSeconds,s

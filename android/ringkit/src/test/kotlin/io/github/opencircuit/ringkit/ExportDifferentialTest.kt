@@ -37,7 +37,12 @@ import kotlin.test.assertTrue
  * stitched and absent hypnograms with every provenance, OSA with valid, zero and negative window counts,
  * coverage with and without holes, reference wakes measured, "so far" and unavailable, edge rows
  * assessed and built directly, a measured 0 s gap), every instant millisecond-stamped with varying
- * fractions — and wrote each output verbatim to `src/test/resources/export-differential/`. For the
+ * fractions; epoch archives (complete, missing epochs, empty) in Kolkata and in a case holding every
+ * section at once in America/New_York across its autumn change; the provenance CSV of every schema-3
+ * case and the units and notes CSVs — and wrote each output verbatim to
+ * `src/test/resources/export-differential/`. A separate sweep of 10 000 seeded doubles records the text
+ * `JSONSerialization` and the samples CSV wrote for each, and the port's two number paths must match it.
+ * The key-order vocabulary is checked to be exactly the set of keys the JSON goldens hold. For the
  * sessions the port rebuilds the coverage, reference and edge verdicts from the same inputs with its own
  * code, so their seconds are compared as bytes. This test rebuilds the same rows,
  * runs the Kotlin writers in the case's zone and compares BYTES. It also sorts the export's key vocabulary and seeded random
@@ -107,6 +112,7 @@ class ExportDifferentialTest {
 
     private class ECase(val id: String, val zone: ZoneId, val now: Instant, val json: Boolean, val v3: Boolean) {
         var meta: ExportMetadata? = null
+        val archives = mutableListOf<ExportEngine.EpochArchiveRow>()
         val sessions = mutableListOf<SessionInput>()
         val sessionRows: List<SleepSessionRow> get() = sessions.map { it.row() }
 
@@ -155,14 +161,21 @@ class ExportDifferentialTest {
             c.meta?.let { meta -> "metadata.csv" to { e: ECase -> ExportEngine.metadataCSV(meta, e.zone) } },
             "sleepSessions.csv" to { e: ECase -> ExportEngine.sleepSessionsCSV(e.sessionRows, e.zone) },
             "hypnogram.csv" to { e: ECase -> ExportEngine.hypnogramCSV(e.sessionRows, e.zone) },
+            "provenance.csv" to { e: ECase -> ExportEngine.provenanceCSV(includesSleepSessions = e.sessions.isNotEmpty()) },
         ).takeIf { c.v3 } ?: emptyList()
+
+    /** The outputs that take no inputs, written once. */
+    private val globalWriters: List<Pair<String, () -> String>> = listOf(
+        "units.csv" to { ExportEngine.unitsCSV() },
+        "notes.csv" to { ExportEngine.notesCSV() },
+    )
 
     private fun outputs(c: ECase): List<Pair<String, (ECase) -> String>> = writers + v3Writers(c)
 
     private fun json(c: ECase): String? = ExportEngine.toJSON(
         samples = c.rows, sleep = c.sleep, daily = c.daily, stepSamples = c.steps, naps = c.naps,
         daytimeTemperatures = c.temperatures, historySyncEvidence = c.evidenceRows, zone = c.zone, now = c.now,
-        metadata = c.meta, sleepSessions = c.sessionRows,
+        metadata = c.meta, sleepSessions = c.sessionRows, epochArchives = c.archives,
     )
 
     private data class Divergence(val case: String, val output: String)
@@ -286,7 +299,7 @@ class ExportDifferentialTest {
                 val f = all[i].split(' ')
                 val arity = mapOf(
                     "s" to 5, "sl" to 19, "dy" to 3, "st" to 4, "np" to 5, "dt" to 3, "ev" to 10, "ch" to 21,
-                    "md" to 16, "ss" to 12, "sm" to 19, "sg" to 5, "os" to 6, "rm" to 5, "ru" to 2, "ed" to 10,
+                    "md" to 16, "ss" to 12, "sm" to 19, "sg" to 5, "os" to 6, "rm" to 5, "ru" to 2, "ed" to 10, "ar" to 10,
                 )
                 val variable = mapOf("cv" to 3, "ea" to 9) // at least this many tokens
                 check(arity[f[0]] == f.size || (variable[f[0]] ?: Int.MAX_VALUE) <= f.size) { "bad row line: ${all[i]}" }
@@ -307,6 +320,14 @@ class ExportDifferentialTest {
                     "cv" -> c.sessions.last().coverage = Triple(date(f[1]), date(f[2]), f.drop(3).map(::date))
                     "rm", "ru" -> c.sessions.last().reference = f
                     "ea", "ed" -> c.sessions.last().edge = f
+                    "ar" -> c.archives += ExportEngine.EpochArchiveRow(
+                        ringID = hexString(f[1]), recordsBase64 = hexString(f[2]), recordCount = f[3].toLong(),
+                        firstEpoch = opt(f[4], ::date), lastEpoch = opt(f[5], ::date),
+                        coverage = ArchiveEvidenceCoverage.Report(
+                            archiveRecordCount = f[6].toInt(), evidenceRecordCount = f[7].toInt(),
+                            missingFromEvidence = levels(f[8]), longestMissingRunSeconds = f[9].toInt(),
+                        ),
+                    )
                     "dy" -> c.daily += DailyRow(date(f[1]), f[2].toLong())
                     "st" -> c.steps += StepSampleRow(date(f[1]), date(f[2]), f[3].toLong())
                     "np" -> c.naps += NapRow(date(f[1]), date(f[2]), f[3].toLong(), flag(f[4]))
@@ -363,6 +384,9 @@ class ExportDifferentialTest {
                 compare(c.id, "json", golden, json(c)?.toByteArray(Charsets.UTF_8), divergences, report)
             }
         }
+        for ((output, write) in globalWriters) {
+            compare("-", output, checkNotNull(resource(output)) { "missing golden $output" }, write().toByteArray(Charsets.UTF_8), divergences, report)
+        }
         return report
     }
 
@@ -372,16 +396,19 @@ class ExportDifferentialTest {
         val report = runAll(DELIBERATE_DIVERGENCES)
         println("export differential: ${inputs().size} cases, ${report.compared} outputs, ${report.bytes} bytes compared, ${report.mismatches.size} mismatches")
         for ((improvement, seen) in report.allowed) println("  deliberate divergence '$improvement': ${seen.joinToString()}")
-        assertTrue(report.compared >= 155, "expected at least 155 compared outputs, got ${report.compared} — FIX THE READER")
+        assertTrue(report.compared >= 174, "expected at least 174 compared outputs, got ${report.compared} — FIX THE READER")
         // The generator's own count of the rows it wrote (its stderr line): a reader that dropped a
         // line kind would compare less than it claims.
         val cases = inputs()
-        assertEquals(678, cases.sumOf { it.rows.size }, "sample rows read")
-        assertEquals(271, cases.sumOf { it.sleep.size + it.daily.size + it.steps.size + it.naps.size + it.temperatures.size + it.evidence.size }, "schema-2 rows read")
-        assertEquals(130, cases.sumOf { c -> c.evidence.sumOf { it.second.size } }, "channel traces read")
-        assertEquals(4, cases.count { it.meta != null }, "metadata blocks read")
-        assertEquals(11, cases.sumOf { it.sessions.size }, "sessions read")
-        assertEquals(38, cases.sumOf { c -> c.sessions.sumOf { it.segments.size } }, "hypnogram segments read")
+        assertEquals(686, cases.sumOf { it.rows.size }, "sample rows read")
+        assertEquals(319, cases.sumOf { it.sleep.size + it.daily.size + it.steps.size + it.naps.size + it.temperatures.size + it.evidence.size }, "schema-2 rows read")
+        assertEquals(146, cases.sumOf { c -> c.evidence.sumOf { it.second.size } }, "channel traces read")
+        assertEquals(5, cases.count { it.meta != null }, "metadata blocks read")
+        assertEquals(16, cases.sumOf { it.sessions.size }, "sessions read")
+        assertEquals(57, cases.sumOf { c -> c.sessions.sumOf { it.segments.size } }, "hypnogram segments read")
+        assertEquals(5, cases.sumOf { it.archives.size }, "epoch archives read")
+        // Both kinds of archive are compared: complete and missing epochs from the evidence.
+        assertTrue(cases.flatMap { it.archives }.map { it.coverage.isComplete }.toSet() == setOf(true, false), "archives complete and incomplete")
         assertTrue(report.mismatches.isEmpty(), "${report.mismatches.size} output(s) differ from upstream:\n" + report.mismatches.joinToString("\n"))
         val stale = staleEntries(report, DELIBERATE_DIVERGENCES)
         assertTrue(stale.isEmpty(), "listed deliberate divergence(s) no longer diverge — remove them:\n" + stale.joinToString("\n"))
@@ -406,7 +433,7 @@ class ExportDifferentialTest {
         assertTrue(v == 0 && r > v, "keyorder.txt sections not found")
         val vocabulary = lines.subList(v + 1, r).map(::hexString)
         val random = lines.subList(r + 1, lines.size).map(::hexString)
-        assertEquals(161, vocabulary.size)
+        assertEquals(173, vocabulary.size)
         assertEquals(2_000, random.size)
         for ((name, foundation) in listOf("vocabulary" to vocabulary, "random" to random)) {
             for (seed in 1L..3L) {
@@ -415,12 +442,60 @@ class ExportDifferentialTest {
         }
     }
 
+    /**
+     * The key-order golden covers EVERY key the export writes: the keys of every JSON golden (the
+     * generator checks the same on its side) and of the port's own output for every case are all in the
+     * vocabulary, and every vocabulary key is written somewhere — so the order check above is not a
+     * sample of the keys but all of them.
+     */
+    @Test
+    fun `the key-order vocabulary is exactly the set of keys the JSON goldens hold`() {
+        fun keys(v: ReplayJson.Value?, into: MutableSet<String>) {
+            val o = v?.asObject()
+            if (o != null) for (k in o.keys) { into += k; keys(o[k], into) } else v?.asArray()?.forEach { keys(it, into) }
+        }
+        val golden = mutableSetOf<String>()
+        val port = mutableSetOf<String>()
+        for (c in inputs().filter { it.json }) {
+            keys(ExportJsonReader.root(String(checkNotNull(resource("${c.id}.json")), Charsets.UTF_8)), golden)
+            keys(ExportJsonReader.root(checkNotNull(json(c))), port)
+        }
+        val lines = text("keyorder.txt")
+        val vocabulary = lines.subList(lines.indexOf("vocabulary") + 1, lines.indexOf("random")).map(::hexString).toSet()
+        assertEquals(vocabulary, golden, "keys written by upstream vs the key-order vocabulary")
+        assertEquals(golden, port, "keys written by the port vs upstream")
+    }
+
+    /**
+     * 10 000 seeded finite doubles through both number paths, against the text upstream's own code wrote
+     * for each: the JSON writer (`JSONSerialization`'s `%.17g`-shaped text) and the samples CSV's value
+     * column (`%.0f` for a whole value, Swift's `String(Double)` otherwise).
+     */
+    @Test
+    fun `every swept double prints upstream's JSON and CSV text`() {
+        val lines = text("number-sweep.txt").map { it.split(' ') }
+        assertEquals(10_000, lines.size)
+        val values = lines.map { double(it[0]) }
+        assertTrue(values.all { it.isFinite() })
+        val csv = ExportEngine.samplesCSV(values.map { SampleRow("x", Instant.EPOCH, Instant.EPOCH, it) }).split('\n').drop(1).map { it.substringAfterLast(',') }
+        val mismatches = mutableListOf<String>()
+        for ((k, f) in lines.withIndex()) {
+            check(f.size == 3) { "bad sweep line ${k + 2}" }
+            val pretty = checkNotNull(ExportJson.pretty(ExportJson.arr(listOf(ExportJson.JDouble(values[k])))))
+            val json = pretty.removePrefix("[\n  ").removeSuffix("\n]")
+            if (json != f[1]) mismatches += "${f[0]} json: upstream ${f[1]}, port $json"
+            if (csv[k] != f[2]) mismatches += "${f[0]} csv: upstream ${f[2]}, port ${csv[k]}"
+        }
+        println("export number sweep: ${lines.size} doubles, ${mismatches.size} mismatches")
+        assertTrue(mismatches.isEmpty(), "${mismatches.size} swept text(s) differ:\n" + mismatches.take(20).joinToString("\n"))
+    }
+
     @Test
     fun `the golden directory holds exactly the files the cases name`() {
         val root = assertNotNull(System.getProperty("opencircuit.androidRoot"), "system property opencircuit.androidRoot is not set — see ringkit/build.gradle.kts")
         val dir = File(root, "ringkit/src/test/resources/export-differential")
         val present = assertNotNull(dir.list(), "no directory $dir").toSet()
-        val expected = setOf("inputs.txt", "keyorder.txt") +
+        val expected = setOf("inputs.txt", "keyorder.txt", "number-sweep.txt") + globalWriters.map { it.first } +
             inputs().flatMap { c -> outputs(c).map { "${c.id}.${it.first}" } + listOfNotNull(if (c.json) "${c.id}.json" else null) }
         assertEquals(expected, present, "stale or missing goldens — regenerate with regenerate.sh export")
     }
@@ -459,7 +534,7 @@ class ExportDifferentialTest {
     @Test
     fun `ExportMetadata of declares the zone and offset upstream printed`() {
         val withMeta = inputs().filter { it.meta != null }
-        assertEquals(4, withMeta.size)
+        assertEquals(5, withMeta.size)
         for (c in withMeta) {
             val meta = checkNotNull(c.meta)
             val derived = ExportMetadata.of(

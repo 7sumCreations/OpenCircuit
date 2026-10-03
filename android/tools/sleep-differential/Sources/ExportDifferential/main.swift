@@ -15,11 +15,17 @@
 //   <case>.metadata.csv            ExportEngine.metadataCSV(meta) — schema-3 cases with a metadata block
 //   <case>.sleepSessions.csv       ExportEngine.sleepSessionsCSV(sessions) — schema-3 cases
 //   <case>.hypnogram.csv           ExportEngine.hypnogramCSV(sessions) — schema-3 cases
+//   <case>.provenance.csv          ExportEngine.provenanceCSV(includesSleepSessions: case has sessions) —
+//                                  schema-3 cases
+//   units.csv, notes.csv           ExportEngine.unitsCSV(), ExportEngine.notesCSV() (no inputs)
 //   keyorder.txt                   JSONSerialization's .sortedKeys order of the export's key vocabulary
-//                                  and of seeded random printable-ASCII keys, one key per line
+//                                  (every key any JSON golden emits — checked here) and of seeded random
+//                                  printable-ASCII keys, one key per line
+//   number-sweep.txt               10 000 seeded finite doubles, one per line: "d" + bits, the text
+//                                  JSONSerialization writes for it, the text samplesCSV writes for it
 // Every case writes every schema-2 CSV (a header alone when it has no rows of that kind) and its
-// labels file; a schema-3 case ("v3") also writes the two session CSVs, and the metadata CSV when it
-// has a metadata block.
+// labels file; a schema-3 case ("v3") also writes the two session CSVs and the provenance CSV, and the
+// metadata CSV when it has a metadata block.
 //
 // `ExportDifferentialTest` (Kotlin) rebuilds the same rows from inputs.txt, runs the port's writers
 // and compares BYTES with the golden files; it sorts the same keys with the port's comparator and
@@ -69,6 +75,8 @@
 //   ed <windowStart: date> <windowEnd: date> <bedtimeVerdict: string> <bedtimeGap: double|->
 //      <wakeVerdict: string> <wakeGap: double|-> <materialGap: double> <durationBasis: string>
 //      <reasons: r + "|"-joined strings>          an edge row built directly
+//   ar <ringID: string> <recordsBase64: string> <recordCount> <firstEpoch|-> <lastEpoch|-> <archiveRecordCount>
+//      <evidenceRecordCount> <missingFromEvidence: m + "|"-joined> <longestMissingRunSeconds>   an epoch archive
 //   end
 // (each row is one line; the wrapped lines above are a single line in the file).
 // A "csvonly" case holds a value JSONSerialization cannot write (NaN or an infinity): upstream's
@@ -116,7 +124,7 @@ struct Case {
     let id: String
     let zone: String
     let now: Date
-    let rows: [ExportEngine.SampleRow]
+    var rows: [ExportEngine.SampleRow]
     var sleep: [ExportEngine.SleepRow] = []
     var daily: [ExportEngine.DailyRow] = []
     var steps: [ExportEngine.StepSampleRow] = []
@@ -128,6 +136,7 @@ struct Case {
     var v3 = false
     var meta: ExportEngine.ExportMetadata? = nil
     var sessions: [SessionSpec] = []
+    var archives: [ExportEngine.EpochArchiveRow] = []
 }
 
 /// How a session's reference-wake verdict is built: measured over the session's coverage sample times
@@ -618,10 +627,57 @@ metaOnly.v3 = true
 metaOnly.meta = metadata("Europe/London", exportedAt: base, rangeStart: base.addingTimeInterval(-86_400), rangeEnd: base, ringModel: "")
 cases.append(metaOnly)
 
+/// An epoch archive of `count` epochs every 150 s from `from`, its first and last epochs stamped with
+/// different millisecond fractions (variant `k`), with the given counters missing from the evidence blobs
+/// (complete when none). The archive's counts are the port's 32-bit counts; `recordCount` is a Swift Int.
+func archive(_ ring: String, from: Date, count: Int, recordCount: Int? = nil, missing: [UInt32], run: Int, k: Int) -> ExportEngine.EpochArchiveRow {
+    let first = from.addingTimeInterval(0.137 * Double(k % 7) + 0.0005)
+    let last = from.addingTimeInterval(Double(max(count - 1, 0)) * 150 + 0.913 - 0.111 * Double(k % 5))
+    let bytes = (0..<(23 * min(count, 3))).map { UInt8(($0 * 37 + k) & 0xff) }
+    return ExportEngine.EpochArchiveRow(
+        ringID: ring, recordsBase64: Data(bytes).base64EncodedString(), recordCount: recordCount ?? count,
+        firstEpoch: count == 0 ? nil : first, lastEpoch: count == 0 ? nil : last,
+        coverage: ArchiveEvidenceCoverage.Report(archiveRecordCount: count, evidenceRecordCount: count - missing.count,
+                                                 missingFromEvidence: missing, longestMissingRunSeconds: run))
+}
+
+// Kolkata's sessions gain two rings' archives: one complete, one missing a run of 13 epochs.
+if let i = cases.firstIndex(where: { $0.id == "v3-kolkata" }) {
+    let m = localMidnight("Asia/Kolkata", 2025, 8, 14)
+    cases[i].archives = [
+        archive("ring-1", from: m.addingTimeInterval(-7_200.58), count: 720, missing: [], run: 0, k: 1),
+        archive("ring-2", from: m.addingTimeInterval(-3_600.25), count: 380, missing: Array(4_000_001...4_000_013), run: 1_950, k: 4),
+    ]
+}
+
+// Every section together, in a fourth zone (whole-hour negative offset with DST), across its autumn change:
+// samples and every schema-2 row kind, a metadata block, sessions of every variant, and three archives —
+// complete, incomplete, and empty (no epochs, Int.max records claimed, no first or last epoch).
+var everything = schema2Case("v3-everything", zone: "America/New_York",
+                             days: [(2024, 11, 2), (2024, 11, 3), (2024, 11, 4)], now: localMidnight("America/New_York", 2024, 11, 5).addingTimeInterval(37_000.4567))
+everything.v3 = true
+everything.rows = minuteRows([72, 0.98, 14.5, 36.25, 1e-7, 34.2, 0.1, 2.5], from: localMidnight("America/New_York", 2024, 11, 3).timeIntervalSince(base) + 1_800.337)
+everything.meta = metadata("America/New_York", exportedAt: everything.now, rangeStart: localMidnight("America/New_York", 2024, 11, 1).addingTimeInterval(-0.25),
+                           rangeEnd: everything.now)
+everything.sessions = [(2024, 11, 1), (2024, 11, 2), (2024, 11, 3), (2024, 11, 4), (2024, 11, 5)].enumerated().map { i, d in
+    session(localMidnight("America/New_York", d.0, d.1, d.2), k: i, zone: TimeZone(identifier: "America/New_York")!)
+}
+let nyc = localMidnight("America/New_York", 2024, 11, 4)
+everything.archives = [
+    archive("ring-a", from: nyc.addingTimeInterval(-9_000.913), count: 900, missing: [7, 8, 9, 200], run: 450, k: 2),
+    archive("ring-b", from: nyc.addingTimeInterval(-1_800.0005), count: 64, missing: [], run: 0, k: 6),
+    archive("", from: nyc, count: 0, recordCount: Int.max, missing: [], run: 0, k: 0),
+]
+cases.append(everything)
+
 // MARK: - Key order
 
-/// The export's JSON key vocabulary: every key the full schema can emit (161).
+/// The export's JSON key vocabulary: every key the full schema can emit (173 — the metadata block's
+/// twelve text and range keys were added beside the first 161). The output loop below checks that every
+/// key of every JSON golden is in it, so the key-order golden covers every key the export writes.
 let vocabulary: [String] = [
+    "appBuild", "appVersion", "deviceModel", "osVersion", "rangeEnd", "rangeStart",
+    "ringFirmware", "ringGeneration", "ringIdentifier", "ringModel", "timeZoneIdentifier", "timestampPolicy",
     "activeEnergy", "archiveRecordCount", "asleepMin", "assertedAsleepSec", "assertedAwakeSec", "assertedOverMeasuredAsleepSec",
     "assertedOverMeasuredAwakeSec", "avgSpO2", "awakeMin", "bedtimeGapSeconds", "bedtimeVerdict", "beyondReportedEndSeconds",
     "capturedAt", "celsius", "channel", "channels", "coverage", "coverageFraction",
@@ -693,7 +749,49 @@ func writtenKeyOrder(_ keys: [String]) -> [String] {
     return out
 }
 
-precondition(vocabulary.count == 161 && Set(vocabulary).count == 161)
+precondition(vocabulary.count == 173 && Set(vocabulary).count == 173)
+
+/// Every object key anywhere in a parsed JSON value.
+func allKeys(_ value: Any, into keys: inout Set<String>) {
+    if let dict = value as? [String: Any] {
+        for (k, v) in dict { keys.insert(k); allKeys(v, into: &keys) }
+    } else if let array = value as? [Any] {
+        for v in array { allKeys(v, into: &keys) }
+    }
+}
+var emittedKeys = Set<String>()
+
+/// 10 000 seeded finite doubles for the number sweep: random bit patterns (every exponent), decimal-looking
+/// values at many scales, whole values up to past 2^53, neighbours of every format boundary, and short
+/// decimal literals (the doubles a sensor or an average actually holds). Never NaN or an infinity.
+func numberSweep(_ rng: inout SplitMix64) -> [Double] {
+    var out: [Double] = []
+    while out.count < 3_000 {
+        let v = Double(bitPattern: rng.next())
+        if v.isFinite { out.append(v) }
+    }
+    for _ in 0..<2_500 {
+        let mantissa = Double(rng.int(-99_999_999, 99_999_999))
+        out.append(mantissa * pow(10, Double(rng.int(-30, 30))))
+    }
+    for _ in 0..<1_500 { out.append(Double(rng.int(-9_000_000, 9_000_000)) * pow(2, Double(rng.int(0, 60)))) }
+    for b in [1e-4, 9007199254740992.0, 1e16, 1e17, 1e21, 1e-7, 1.0, 0.5, 5e-324, 1.7976931348623157e308, 2.2250738585072014e-308, 1e-5] {
+        var u = b, w = b
+        for _ in 0..<40 { u = u.nextUp; if u.isFinite { out.append(u); out.append(-u) }; w = w.nextDown; out += [w, -w] }
+    }
+    while out.count < 10_000 {
+        let digits = rng.int(1, 17)
+        var text = String(rng.int(0, 9))
+        if rng.int(0, 1) == 1 { text += "." }
+        for _ in 1..<digits { text += String(rng.int(0, 9)) }
+        if rng.int(0, 2) == 0 { text += "e" + String(rng.int(-320, 300)) }
+        if let v = Double(text), v.isFinite { out.append(rng.int(0, 1) == 1 ? -v : v) }
+    }
+    return Array(out.prefix(10_000))
+}
+var numberRng = SplitMix64(state: 0x4558_5054_0004)
+let sweepNumbers = numberSweep(&numberRng)
+precondition(sweepNumbers.count == 10_000 && sweepNumbers.allSatisfy(\.isFinite))
 var keyRng = SplitMix64(state: 0x4558_5054_0003)
 var randomKeys = Set<String>()
 while randomKeys.count < 2_000 {
@@ -794,6 +892,11 @@ for c in cases {
         inputs.append("md \(date(m.exportedAt)) \(date(m.rangeStart)) \(date(m.rangeEnd)) \(texts) \(m.timeZoneOffsetSeconds) \(m.schemaVersion)")
     }
     for s in c.sessions { inputs += sessionLines(s) }
+    for a in c.archives {
+        inputs.append("ar \(x(a.ringID)) \(x(a.recordsBase64)) \(a.recordCount) \(opt(a.firstEpoch, date)) \(opt(a.lastEpoch, date)) "
+            + "\(a.coverage.archiveRecordCount) \(a.coverage.evidenceRecordCount) m\(a.coverage.missingFromEvidence.map(String.init).joined(separator: "|")) "
+            + "\(a.coverage.longestMissingRunSeconds)")
+    }
     inputs.append("end")
     writeText(ExportEngine.samplesCSV(c.rows), "\(c.id).samples.csv")
     writeText(ExportEngine.sleepCSV(c.sleep), "\(c.id).sleep.csv")
@@ -809,26 +912,47 @@ for c in cases {
         if let m = c.meta { writeText(ExportEngine.metadataCSV(m), "\(c.id).metadata.csv") }
         writeText(ExportEngine.sleepSessionsCSV(sessionRows), "\(c.id).sleepSessions.csv")
         writeText(ExportEngine.hypnogramCSV(sessionRows), "\(c.id).hypnogram.csv")
+        writeText(ExportEngine.provenanceCSV(includesSleepSessions: !sessionRows.isEmpty), "\(c.id).provenance.csv")
     }
     if c.json {
         guard let json = ExportEngine.toJSON(samples: c.rows, sleep: c.sleep, daily: c.daily, stepSamples: c.steps, naps: c.naps,
                                              daytimeTemperatures: c.temperatures, historySyncEvidence: c.evidence, now: c.now,
-                                             metadata: c.meta, sleepSessions: sessionRows) else {
+                                             metadata: c.meta, sleepSessions: sessionRows, epochArchives: c.archives) else {
             FileHandle.standardError.write("toJSON returned nil for \(c.id)\n".data(using: .utf8)!)
             exit(1)
         }
         writeText(json, "\(c.id).json")
+        allKeys(try! JSONSerialization.jsonObject(with: Data(json.utf8)), into: &emittedKeys)
     }
 }
 writeText(inputs.joined(separator: "\n") + "\n", "inputs.txt")
+writeText(ExportEngine.unitsCSV(), "units.csv")
+writeText(ExportEngine.notesCSV(), "notes.csv")
+// The key-order golden must hold every key the JSON goldens hold (hostile kind strings are values, never keys).
+let unlisted = emittedKeys.subtracting(vocabulary)
+precondition(unlisted.isEmpty, "keys written but missing from the vocabulary: \(unlisted.sorted())")
+
+// The number sweep: the JSON text through JSONSerialization (the writer toJSON calls), the CSV text
+// through samplesCSV's value column (its plainNumber: %.0f for whole values, String(Double) otherwise).
+let sweepCSV = ExportEngine.samplesCSV(sweepNumbers.map { ExportEngine.SampleRow(kind: "x", start: base, end: base, value: $0) })
+    .split(separator: "\n").dropFirst().map { String($0.split(separator: ",").last!) }
+precondition(sweepCSV.count == sweepNumbers.count)
+var sweepLines = ["# Number sweep: d + IEEE-754 bits, JSONSerialization's text, samplesCSV's value text; written by regenerate.sh export."]
+for (k, v) in sweepNumbers.enumerated() {
+    let text = String(data: try! JSONSerialization.data(withJSONObject: [v]), encoding: .utf8)!
+    precondition(text.hasPrefix("[") && text.hasSuffix("]"))
+    sweepLines.append("\(d(v)) \(text.dropFirst().dropLast()) \(sweepCSV[k])")
+}
+writeText(sweepLines.joined(separator: "\n") + "\n", "number-sweep.txt")
 
 let orderLines = ["# JSONSerialization .sortedKeys order: the vocabulary, then the seeded random keys; each key as x + UTF-8 hex."]
     + ["vocabulary"] + writtenKeyOrder(vocabulary).map(x)
     + ["random"] + writtenKeyOrder(randomKeyList).map(x)
 writeText(orderLines.joined(separator: "\n") + "\n", "keyorder.txt")
 
-var sampleRowCount = 0, schema2RowCount = 0, traceCount = 0, sessionCount = 0, segmentCount = 0, metaCount = 0
+var sampleRowCount = 0, schema2RowCount = 0, traceCount = 0, sessionCount = 0, segmentCount = 0, metaCount = 0, archiveCount = 0
 for c in cases {
+    archiveCount += c.archives.count
     sampleRowCount += c.rows.count
     schema2RowCount += c.sleep.count + c.daily.count + c.steps.count
     schema2RowCount += c.naps.count + c.temperatures.count + c.evidence.count
@@ -841,6 +965,7 @@ for c in cases {
 FileHandle.standardError.write(
     ("ExportDifferential: \(cases.count) cases, \(sampleRowCount) sample rows, \(schema2RowCount) schema-2 rows, "
         + "\(traceCount) channel traces, \(metaCount) metadata blocks, \(sessionCount) sessions, \(segmentCount) hypnogram segments, "
-        + "\(vocabulary.count) vocabulary keys, \(randomKeyList.count) random keys\n")
+        + "\(archiveCount) epoch archives, \(vocabulary.count) vocabulary keys (\(emittedKeys.count) emitted), "
+        + "\(randomKeyList.count) random keys, \(sweepNumbers.count) swept doubles\n")
         .data(using: .utf8)!
 )

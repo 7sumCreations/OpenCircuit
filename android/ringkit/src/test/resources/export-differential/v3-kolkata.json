@@ -5,6 +5,36 @@
   "daytimeTemperatures" : [
 
   ],
+  "epochArchive" : [
+    {
+      "evidenceBlobCoverage" : {
+        "archiveRecordCount" : 720,
+        "evidenceRecordCount" : 720,
+        "isComplete" : true,
+        "longestMissingRunSeconds" : 0,
+        "missingFromEvidenceCount" : 0
+      },
+      "firstEpoch" : "2025-08-13T16:29:59.558Z",
+      "lastEpoch" : "2025-08-14T22:27:30.222Z",
+      "recordCount" : 720,
+      "recordsBase64" : "ASZLcJW63wQpTnOYveIHLFF2m8DlCi9UeZ7D6A0yV3yhxusQNVp\/pMnuEzhdgqfM8RY7YIWqz\/QZPmOIrdL3HEFmi7DV",
+      "ringID" : "ring-1"
+    },
+    {
+      "evidenceBlobCoverage" : {
+        "archiveRecordCount" : 380,
+        "evidenceRecordCount" : 367,
+        "isComplete" : false,
+        "longestMissingRunSeconds" : 1950,
+        "missingFromEvidenceCount" : 13
+      },
+      "firstEpoch" : "2025-08-13T17:30:00.299Z",
+      "lastEpoch" : "2025-08-14T09:17:30.219Z",
+      "recordCount" : 380,
+      "recordsBase64" : "BClOc5i94gcsUXabwOUKL1R5nsPoDTJXfKHG6xA1Wn+kye4TOF2Cp8zxFjtgharP9Bk+Y4it0vccQWaLsNX6H0RpjrPY",
+      "ringID" : "ring-2"
+    }
+  ],
   "exportedAt" : "2025-08-14T04:30:00.001Z",
   "historySyncEvidence" : [
 
@@ -46,6 +76,8 @@
   "provenance" : {
     "daily" : "derived",
     "daytimeTemperatures" : "measured",
+    "epochArchive" : "measured",
+    "epochArchive.evidenceBlobCoverage" : "diagnostic",
     "historySyncEvidence" : "diagnostic",
     "naps" : "derived",
     "samples" : "measured",
