@@ -4,7 +4,9 @@ import io.github.opencircuit.ringkit.BulkSleep
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.ringkit.SleepEdit
+import io.github.opencircuit.ringkit.SleepStaging
 import kotlinx.coroutines.runBlocking
+import java.time.Duration
 import java.time.Instant
 import java.time.ZoneOffset
 import kotlin.test.Test
@@ -21,7 +23,11 @@ import kotlin.test.assertTrue
  *
  * Upstream's ingest reads the wall clock for its "no later than now + 1 day" check; here `now` is
  * a fixed instant after every record in the page. The three night tests of the same upstream file
- * (`:96`, `:114`, `:132`) exercise the sleep-summary merge and are not part of this file.
+ * (`:96`, `:114`, `:132`) exercise the sleep-summary merge through [SleepStore], in UTC.
+ *
+ * Upstream's suite crashed at the pin before any of its tests ran (its `makeStore()` let the
+ * container go out of scope; fixed upstream after the pin, harness only), so these three night
+ * vectors were never green there. Their expected values follow from the merge rule they test.
  */
 class CaptureToStoreEndToEndTest {
 
@@ -90,6 +96,70 @@ class CaptureToStoreEndToEndTest {
             val latestHR = samples.filter { it.kind == MetricKind.HEART_RATE }.maxOfOrNull { it.start }
             assertNotNull(latestHR)
             assertEquals(latestHR, cursor.last(MetricKind.HEART_RATE))
+        }
+    }
+
+    // Sleep-summary merge: a fuller night must survive a thinner re-stage.
+
+    /**
+     * Upstream's `summary(inBedMin:asleepMin:)` (`:89-94`): the asleep minutes all as light, the rest
+     * of the in-bed time awake; only the totals matter to the merge.
+     */
+    private fun summary(inBedMin: Long, asleepMin: Long) = SleepStaging.Summary(
+        inBed = Duration.ofMinutes(inBedMin), awake = Duration.ofMinutes(inBedMin - asleepMin),
+        light = Duration.ofMinutes(asleepMin), deep = Duration.ZERO, rem = Duration.ZERO,
+    )
+
+    private val sleepNight = Instant.ofEpochSecond(1_750_000_000)
+
+    /** Upstream `testFullerNightReplacesThinnerStoredNight` (`:96`). */
+    @Test
+    fun fullerNightReplacesThinnerStoredNight() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            val inBedStart = sleepNight
+            val thinEnd = sleepNight.plusSeconds(2 * 3_600) // 2 h fragment
+            val fullEnd = sleepNight.plusSeconds(8 * 3_600) // 8 h full night
+
+            // A thin fragment lands first (a background drain mid-night)...
+            store.saveSleepSummary(summary(120, 100), night = sleepNight, inBedStart = inBedStart, inBedEnd = thinEnd, now = now, zone = zone)
+            // ...then the fuller morning sync arrives and replaces it.
+            store.saveSleepSummary(summary(480, 420), night = sleepNight, inBedStart = inBedStart, inBedEnd = fullEnd, now = now, zone = zone)
+
+            assertEquals(420, store.latestSleepSummary()?.asleepMin, "the fuller night must win")
+        }
+    }
+
+    /** Upstream `testThinnerReStageDoesNotClobberFullerStoredNight` (`:114`). */
+    @Test
+    fun thinnerReStageDoesNotClobberFullerStoredNight() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            val inBedStart = sleepNight
+            val fullEnd = sleepNight.plusSeconds(8 * 3_600)
+            val thinEnd = sleepNight.plusSeconds(2 * 3_600)
+
+            // The full night is already stored (the morning sync)...
+            store.saveSleepSummary(summary(480, 420), night = sleepNight, inBedStart = inBedStart, inBedEnd = fullEnd, now = now, zone = zone)
+            // ...then a later, shorter re-stage (a stray periodic drain) must not shrink it.
+            store.saveSleepSummary(summary(120, 100), night = sleepNight, inBedStart = inBedStart, inBedEnd = thinEnd, now = now, zone = zone)
+
+            assertEquals(420, store.latestSleepSummary()?.asleepMin, "a thinner re-stage must not clobber the fuller night")
+        }
+    }
+
+    /** Upstream `testSameCoverageReclassificationCanReduceAsleep` (`:132`). */
+    @Test
+    fun sameCoverageReclassificationCanReduceAsleep() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            val end = sleepNight.plusSeconds(8 * 3_600)
+
+            store.saveSleepSummary(summary(480, 470), night = sleepNight, inBedStart = sleepNight, inBedEnd = end, now = now, zone = zone)
+            // Same archived start and end, but refined onset logic recognises 90 minutes of quiet wake.
+            store.saveSleepSummary(summary(480, 380), night = sleepNight, inBedStart = sleepNight, inBedEnd = end, now = now, zone = zone)
+
+            assertEquals(380, store.latestSleepSummary()?.asleepMin)
         }
     }
 }
