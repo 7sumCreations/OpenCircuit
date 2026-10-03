@@ -1,6 +1,7 @@
 package io.github.opencircuit.store
 
 import androidx.room3.RoomDatabase
+import androidx.room3.useWriterConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -18,10 +19,23 @@ object StoreFactory {
     /**
      * Every open uses the bundled SQLite driver, so the phone runs the same SQLite build as the
      * JVM tests, and never a destructive migration fallback.
+     *
+     * Room opens lazily, on the first query. This opens now, so a file that is not a database,
+     * a schema with no migration path or a newer schema fails HERE, in front of the caller,
+     * instead of inside the first write. On failure the handle is closed and the error rethrown;
+     * nothing is deleted.
      */
-    internal fun openWith(builder: RoomDatabase.Builder<StoreDatabase>): StoreDatabase =
-        builder
+    internal suspend fun openWith(builder: RoomDatabase.Builder<StoreDatabase>): StoreDatabase {
+        val db = builder
             .setDriver(BundledSQLiteDriver())
             .setQueryCoroutineContext(Dispatchers.IO)
             .build()
+        try {
+            db.useWriterConnection { connection -> connection.usePrepared("PRAGMA user_version") { it.step() } }
+        } catch (failure: Throwable) {
+            db.close()
+            throw failure
+        }
+        return db
+    }
 }
