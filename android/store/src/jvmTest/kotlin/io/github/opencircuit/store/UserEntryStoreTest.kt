@@ -279,6 +279,21 @@ class UserEntryStoreTest {
     }
 
     /**
+     * Kotlin-only: a NaN score would be bound as NULL (NOT NULL fails with an `SQLiteException`)
+     * and ±∞ would be frozen as a day's score for good. Either is refused before the database with
+     * an `IllegalArgumentException`, and no row is written.
+     */
+    @Test
+    fun aRiskDayWithAScoreThatIsNotFiniteIsRefusedBeforeTheDatabase() = withStore { store, _ ->
+        for (v in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+            val day = risk(day = at(0), nightKey = SleepEdit.DISTANT_PAST, index = 10.0)
+            assertFailsWith<IllegalArgumentException>("index $v") { store.insertRiskDayIfAbsent(day.copy(index = v)) }
+            assertFailsWith<IllegalArgumentException>("coverage $v") { store.insertRiskDayIfAbsent(day.copy(coverageFraction = v)) }
+        }
+        assertEquals(emptyList(), store.riskDays(from = at(-100), to = at(100)))
+    }
+
+    /**
      * Kotlin-only (I-30 / PL-2026-10-01-o): an entry the store hands out shares no list with the
      * row it was built from, and its lists cannot be changed by casting them to `MutableList`
      * (Swift's arrays copy; a Kotlin `List` from the column reader is an `ArrayList`).

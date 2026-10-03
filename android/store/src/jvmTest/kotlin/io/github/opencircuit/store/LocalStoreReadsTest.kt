@@ -5,6 +5,7 @@ import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 /**
@@ -86,6 +87,22 @@ class LocalStoreReadsTest {
                 listOf(DaytimeTemperature(at(10), 33.0), DaytimeTemperature(at(20), 33.1)),
                 store.daytimeTemperatures(from = at(10), to = at(30)),
             )
+        }
+    }
+
+    /**
+     * Kotlin-only: SQLite binds NaN as NULL (the NOT NULL column then fails with an
+     * `SQLiteException`) and stores ±∞, which is no temperature. Either is refused before the
+     * database with an `IllegalArgumentException`, and nothing is written (as I-46 for ingest).
+     */
+    @Test
+    fun aDaytimeTemperatureThatIsNotFiniteIsRefusedBeforeTheDatabase() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = LocalStore(db)
+            for (v in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+                assertFailsWith<IllegalArgumentException>("celsius $v") { store.recordDaytimeTemperature(v, at = at(10)) }
+            }
+            assertEquals(emptyList(), store.daytimeTemperatures(from = at(0), to = at(100)))
         }
     }
 

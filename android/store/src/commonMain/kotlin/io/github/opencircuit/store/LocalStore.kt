@@ -189,9 +189,14 @@ class LocalStore internal constructor(
     /**
      * Stores [row] unless its day is already scored, or its night is (a time-zone change moves the
      * day key; a night key never moves). Returns true when it was stored. A day's score is never
-     * replaced: there is no update path, by design. One transaction.
+     * replaced: there is no update path, by design. One transaction. Throws
+     * [IllegalArgumentException], writing nothing, when [HeadacheRiskDay.index] or
+     * [HeadacheRiskDay.coverageFraction] is NaN or ±∞ (SQLite would bind NaN as NULL; ±∞ would be
+     * frozen as the day's score for good).
      */
     suspend fun insertRiskDayIfAbsent(row: HeadacheRiskDay): Boolean {
+        require(row.index.isFinite()) { "risk index ${row.index} is not a finite number" }
+        require(row.coverageFraction.isFinite()) { "risk coverage ${row.coverageFraction} is not a finite number" }
         val stored = row.toEntity()
         return db.withWriteTransaction {
             if (userEntryDao.riskOn(stored.day) != null) return@withWriteTransaction false
@@ -400,8 +405,13 @@ class LocalStore internal constructor(
     /** Day totals whose day starts in `[from, to)`, oldest first. */
     suspend fun dailies(from: Instant, to: Instant): List<DailySteps> = dailyDao.dailies(from, to).map { it.toDailySteps() }
 
-    /** Keeps one daytime skin-temperature reading (a plain append: readings are timestamped). */
+    /**
+     * Keeps one daytime skin-temperature reading (a plain append: readings are timestamped).
+     * Throws [IllegalArgumentException], writing nothing, for NaN or ±∞ (SQLite would bind NaN
+     * as NULL and fail the write; ±∞ is no temperature).
+     */
     suspend fun recordDaytimeTemperature(celsius: Double, at: Instant) {
+        require(celsius.isFinite()) { "daytime temperature $celsius is not a finite number" }
         dailyDao.insertDaytimeTemp(StoredDaytimeTempEntity(time = at, celsius = celsius))
     }
 
