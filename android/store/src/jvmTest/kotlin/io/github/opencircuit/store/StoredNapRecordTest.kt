@@ -56,7 +56,7 @@ class StoredNapRecordTest {
         )
     }
 
-    /** Upstream `effectiveStart` / `effectiveEnd` (:745-746): the edit when present, else the detected window. */
+    /** Upstream `effectiveStart` / `effectiveEnd` (:742-743): the edit when present, else the detected window. */
     @Test
     fun theEffectiveWindowIsTheEditWhenThereIsOneAndTheDetectedWindowOtherwise() {
         val unedited = StoredNapEntity(start = start, end = end).toStoredNapRecord()
@@ -72,7 +72,7 @@ class StoredNapRecordTest {
     }
 
     /**
-     * Upstream `durationMin` (:747): `max(Int(seconds / 60), 0)` — whole minutes cut toward zero, never
+     * Upstream `durationMin` (:744): `max(Int(seconds / 60), 0)` — whole minutes cut toward zero, never
      * rounded, and never below zero.
      */
     @Test
@@ -92,7 +92,7 @@ class StoredNapRecordTest {
         )
     }
 
-    /** Upstream `stagedSegments` (:750): `try?` on the decode — anything unreadable is nil, i.e. coarse. */
+    /** Upstream `stagedSegments` (:748): `try?` on the decode — anything unreadable is nil, i.e. coarse. */
     @Test
     fun segmentsThatCannotBeReadAreNoSegmentsAndTheNapReadsAsCoarse() {
         val unreadable = listOf(

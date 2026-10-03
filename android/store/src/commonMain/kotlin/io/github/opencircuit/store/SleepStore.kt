@@ -3,6 +3,7 @@ package io.github.opencircuit.store
 import androidx.room3.withReadTransaction
 import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.BulkRecord
+import io.github.opencircuit.ringkit.NapDetection
 import io.github.opencircuit.ringkit.OSASpO2
 import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SleepHypnogramCodec
@@ -27,7 +28,9 @@ import java.time.ZoneId
 // (:2063), `hypnogram(night:)` (:2074) and `sleepSummaryOverlapping` (:2084), the wearer's
 // edit `applySleepEdit` in both forms (:2133-2257), `setFeelScore` (:2101-2109) and
 // `applyOSASummary` (:2029-2039), and the nap reads `naps(on:)` (:2998-3005), `naps(from:to:)`
-// (:3008-3013), `autoNaps(overlapping:to:)` (:1809-1818) and `deleteNaps` (:1822-1829).
+// (:3008-3013), `autoNaps(overlapping:to:)` (:1809-1818) and `deleteNaps` (:1822-1829), and the nap
+// writes `saveNap` (:2865-2888), `addManualNap` (:2895-2915) and `editNap` (:2938-2974) with their
+// night check `overlapsStoredNight` (:2981-2995).
 //
 // Not yet part of this file: moving stored nights onto their wake day before a save (:1589) and
 // realigning a night resolved by its span (:1561-1573), and pruning the automatic naps a saved
@@ -52,6 +55,9 @@ import java.time.ZoneId
 //   thrown, where upstream swallows it and still reports the summary applied.
 // - A failed nap delete is thrown with none deleted, and the count deleted is returned; upstream
 //   rolls back silently and records the count only in its event log.
+// - A nap write whose lookup or save fails throws, writing nothing. Upstream's `try?` reads a failed
+//   lookup as "no nap" — `saveNap` then inserts, `addManualNap` takes it as no duplicate, `editNap`
+//   returns false — and a failed manual add or edit save as false.
 
 /**
  * The sleep half of the on-device store, over the same [StoreDatabase] as [LocalStore]. Every write
@@ -310,6 +316,128 @@ class SleepStore internal constructor(
 
     // Naps. A nap is listed by the start it was detected at, whatever its edit says.
 
+    /**
+     * Stores a nap the ring detected, keyed by [start]: a nap already stored at that start is updated
+     * in place — its end, minutes, long-nap flag and [segments] (none stored as coarse) — and anything
+     * else is inserted. Nothing is written when the nap shares time with a stored night (the night's
+     * recorded window, or its edited window once edited), or when the nap stored at that start was
+     * added or edited by the wearer. An update leaves what was written to Health, the ring's kept
+     * staging and the edit as they were. Night keys within two days either side of the nap in [zone]
+     * are looked at. Throws, writing nothing, when a lookup or the write fails.
+     */
+    suspend fun saveNap(
+        start: Instant,
+        end: Instant,
+        asleepMin: Int,
+        isLongNap: Boolean,
+        segments: List<SleepSegment> = emptyList(),
+        now: Instant,
+        zone: ZoneId,
+    ) {
+        val from = start.toStoredMillis()
+        val to = end.toStoredMillis()
+        val at = now.toStoredMillis()
+        val data = segments.takeIf { it.isNotEmpty() }?.let(::napSegmentsBytes)
+        db.withWriteTransaction {
+            if (overlapsStoredNight(from, to, zone)) return@withWriteTransaction
+            val existing = sleepDao.napAt(from)
+            when {
+                existing == null -> sleepDao.insertNap(
+                    StoredNapEntity(start = from, end = to, asleepMin = asleepMin, isLongNap = isLongNap, updatedAt = at, napSegmentsData = data),
+                )
+                // A nap the wearer added or edited is theirs; a detection never replaces it.
+                existing.isManuallyEdited || existing.isManuallyAdded -> Unit
+                else -> sleepDao.updateNap(
+                    existing.copy(end = to, asleepMin = asleepMin, isLongNap = isLongNap, napSegmentsData = data, updatedAt = at),
+                )
+            }
+        }
+    }
+
+    /**
+     * Adds a nap the wearer logged, `[start, end]`, all of it asleep: its minutes rounded half away from
+     * zero, long from three hours, its segments the whole window in bed and asleep. Returns false,
+     * writing nothing, when [end] is not after [start], the nap shares time with a stored night, or a
+     * nap is already stored at [start]. Throws, writing nothing, when a lookup or the write fails.
+     */
+    suspend fun addManualNap(start: Instant, end: Instant, now: Instant, zone: ZoneId): Boolean {
+        val from = start.toStoredMillis()
+        val to = end.toStoredMillis()
+        val at = now.toStoredMillis()
+        if (to <= from) return false
+        val row = StoredNapEntity(
+            start = from, end = to, asleepMin = wholeMinutesAsleep(from, to), isLongNap = isLongNap(from, to), updatedAt = at,
+            isManuallyAdded = true, napSegmentsData = napSegmentsBytes(wholeWindowAsleep(from, to)),
+        )
+        return db.withWriteTransaction {
+            if (overlapsStoredNight(from, to, zone)) return@withWriteTransaction false
+            if (sleepDao.napAt(from) != null) return@withWriteTransaction false
+            sleepDao.insertNap(row)
+            true
+        }
+    }
+
+    /**
+     * Applies the wearer's edit of the nap detected at [originalStart]: the new window is kept beside
+     * the detected one (the start stays the nap's key, so a later detection finds the same nap), all of
+     * it asleep, the segments the whole window in bed and asleep. On the first edit the ring's staging
+     * is kept aside. When the window written to Health is no longer inside the new one, the nap is
+     * marked unwritten so Health can be corrected; a widening leaves it. Returns false, writing
+     * nothing, when [newEnd] is not after [newStart], the new window shares time with a stored night,
+     * or no nap is stored at [originalStart]. Throws, writing nothing, when a lookup or the write fails.
+     */
+    suspend fun editNap(originalStart: Instant, newStart: Instant, newEnd: Instant, now: Instant, zone: ZoneId): Boolean {
+        val key = originalStart.toStoredMillis()
+        val from = newStart.toStoredMillis()
+        val to = newEnd.toStoredMillis()
+        val at = now.toStoredMillis()
+        if (to <= from) return false
+        val coarse = napSegmentsBytes(wholeWindowAsleep(from, to))
+        return db.withWriteTransaction {
+            if (overlapsStoredNight(from, to, zone)) return@withWriteTransaction false
+            val row = sleepDao.napAt(key) ?: return@withWriteTransaction false
+            // Reversibility before the segments are replaced, and only from a nap that is still the
+            // ring's recording: an edited nap's segments are edit output, never a recording.
+            val keepRecording = row.recordedNapSegmentsData == null && !row.isManuallyEdited
+            // A window written to Health that the new one no longer covers must be rewritten there; a
+            // widening is left to the append-only write.
+            val writtenNotCovered = row.healthWritten && row.healthWrittenEnd > row.healthWrittenStart &&
+                (row.healthWrittenStart < from || row.healthWrittenEnd > to)
+            sleepDao.updateNap(
+                row.copy(
+                    recordedNapSegmentsData = if (keepRecording) row.napSegmentsData else row.recordedNapSegmentsData,
+                    editedStart = from,
+                    editedEnd = to,
+                    asleepMin = wholeMinutesAsleep(from, to),
+                    isLongNap = isLongNap(from, to),
+                    isManuallyEdited = true,
+                    napSegmentsData = coarse,
+                    healthWritten = row.healthWritten && !writtenNotCovered,
+                    updatedAt = at,
+                ),
+            )
+            true
+        }
+    }
+
+    /**
+     * Upstream `overlapsStoredNight` (:2981-2995): `[from, to]` shares time with a stored night's
+     * recorded in-bed window, or with its edited window once the wearer edited it — strictly, so a nap
+     * that only touches a night is not inside it. The nights looked at are those keyed from two
+     * calendar days before [from] to two after [to] in [zone], both ends included.
+     */
+    private suspend fun overlapsStoredNight(from: Instant, to: Instant, zone: ZoneId): Boolean {
+        if (to <= from) return false
+        val lo = from.atZone(zone).minusDays(2).toInstant()
+        val hi = to.atZone(zone).plusDays(2).toInstant()
+        return sleepDao.summariesKeyedBetween(lo, hi).any { row ->
+            val recorded = row.inBedEnd > row.inBedStart && from < row.inBedEnd && to > row.inBedStart
+            val edited = row.isManuallyEdited && row.editedInBedEnd > row.editedInBedStart &&
+                from < row.editedInBedEnd && to > row.editedInBedStart
+            recorded || edited
+        }
+    }
+
     /** The naps detected to start on the day of [on] in [zone], the latest start first. */
     suspend fun naps(on: Instant, zone: ZoneId): List<StoredNapRecord> {
         val dayStart = startOfDay(on.toStoredMillis(), zone)
@@ -345,7 +473,7 @@ class SleepStore internal constructor(
     }
 
     /**
-     * Upstream's automatic-nap filter (:1813-1817, the same in `pruneAutoNaps` :1842-1845): not added or
+     * Upstream's automatic-nap filter (:1813-1816, the same in `pruneAutoNaps` :1841-1844): not added or
      * edited by the wearer, and the span from the earlier to the later of the detected and effective
      * edges overlapping `(from, to)`.
      */
@@ -464,6 +592,20 @@ class SleepStore internal constructor(
         fun span(start: Instant, end: Instant): Duration = if (end > start) Duration.between(start, end) else Duration.ZERO
 
         fun withinOneEpoch(a: Instant, b: Instant): Boolean = Duration.between(a, b).abs() <= ONE_EPOCH
+
+        /**
+         * A wearer's nap `[from, to]` (to after from) in whole minutes, all of it asleep, rounded half
+         * away from zero as upstream's `.rounded()`; on whole milliseconds the tie is exact.
+         */
+        fun wholeMinutesAsleep(from: Instant, to: Instant): Int =
+            Math.toIntExact((Duration.between(from, to).toMillis() + 30_000) / 60_000)
+
+        /** Upstream's long-nap line: three hours or more (`NapDetection.longNapDuration`). */
+        fun isLongNap(from: Instant, to: Instant): Boolean = Duration.between(from, to) >= NapDetection.LONG_NAP_DURATION
+
+        /** A wearer's nap as segments: the whole window in bed and asleep (upstream :2908-2911, :2959-2962). */
+        fun wholeWindowAsleep(from: Instant, to: Instant): List<SleepSegment> =
+            listOf(SleepSegment(from, to, SleepStage.IN_BED), SleepSegment(from, to, SleepStage.ASLEEP_CORE))
 
         fun StoredSleepSummaryEntity.recordedWindow() = SleepEdit.RecordedWindow(inBedStart, inBedEnd, sleepOnset, sleepWake)
 

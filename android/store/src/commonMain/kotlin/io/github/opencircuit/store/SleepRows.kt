@@ -9,7 +9,7 @@ import java.util.Collections
 
 // The one builder of StoredNight and StoredNapRecord from a stored row. A nap's segment lists are
 // the segment codec's text as UTF-8 bytes; one that cannot be read is null, the nap coarse
-// (upstream `StoredNap.stagedSegments`, LocalStore.swift:749-751). A night's timeline is decoded with upstream's codec,
+// (upstream `StoredNap.stagedSegments`, LocalStore.swift:747-750). A night's timeline is decoded with upstream's codec,
 // which never throws: an unreadable blob reads as no segments, as upstream `hypnogram(night:)`
 // (ios/OpenCircuit/Store/LocalStore.swift:2074-2077 @ b1c2fdd). Each list is the value's own copy
 // and cannot be changed through a cast (Swift's arrays copy; the column reader hands back an
@@ -46,7 +46,7 @@ internal fun napSegmentsBytes(segments: List<SleepSegment>): ByteArray = SleepSe
 
 /**
  * A nap's stored segments, or null — the nap is coarse — when none are stored or they cannot be read,
- * as upstream's `try?` decode (LocalStore.swift:750). Bytes that are not UTF-8 are unreadable too.
+ * as upstream's `try?` decode (LocalStore.swift:748). Bytes that are not UTF-8 are unreadable too.
  */
 private fun decodedNapSegments(data: ByteArray?): List<SleepSegment>? {
     if (data == null) return null

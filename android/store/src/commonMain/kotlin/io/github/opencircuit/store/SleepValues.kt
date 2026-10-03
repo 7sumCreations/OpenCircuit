@@ -190,7 +190,7 @@ data class StoredNapRecord internal constructor(
     val healthWrittenStart: Instant,
     val healthWrittenEnd: Instant,
 ) {
-    // Upstream's model accessors (LocalStore.swift:745-747).
+    // Upstream's model accessors (LocalStore.swift:742-744).
 
     /** The start the nap shows: the edited one when edited, else the detected one. */
     val effectiveStart: Instant get() = editedStart ?: start
