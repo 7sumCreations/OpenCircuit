@@ -13,7 +13,14 @@ import androidx.room3.RoomDatabaseConstructor
  * means a new version, a migration and a migration test; there is no destructive fallback.
  */
 @Database(
-    entities = [StoredSampleEntity::class, StoredCursorEntity::class],
+    entities = [
+        StoredSampleEntity::class,
+        StoredCursorEntity::class,
+        StoredDailyEntity::class,
+        StoredStepSampleEntity::class,
+        StoredDaytimeTempEntity::class,
+        StoreKvEntity::class,
+    ],
     version = 1,
     exportSchema = true,
 )
@@ -21,6 +28,10 @@ import androidx.room3.RoomDatabaseConstructor
 @ConstructedBy(StoreDatabaseConstructor::class)
 abstract class StoreDatabase : RoomDatabase() {
     internal abstract fun sampleDao(): SampleDao
+
+    internal abstract fun dailyDao(): DailyDao
+
+    internal abstract fun kvDao(): KvDao
 }
 
 /** Room generates the `actual` for each target. */

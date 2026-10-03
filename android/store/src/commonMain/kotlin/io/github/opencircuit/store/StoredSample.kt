@@ -22,7 +22,8 @@ import java.time.Instant
  */
 @Entity(
     tableName = "stored_sample",
-    indices = [Index(value = ["kind_raw", "start"])],
+    // The second index serves the 30-day prune, which deletes by `start` alone.
+    indices = [Index(value = ["kind_raw", "start"]), Index(value = ["start"])],
 )
 internal data class StoredSampleEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
