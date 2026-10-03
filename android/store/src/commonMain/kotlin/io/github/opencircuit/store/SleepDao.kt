@@ -80,4 +80,25 @@ internal interface SleepDao {
     /** Naps with `from <= start < to`, the latest start first. */
     @Query("SELECT * FROM stored_nap WHERE start >= :from AND start < :to ORDER BY start DESC, id DESC")
     suspend fun napsStartingLatestFirst(from: Instant, to: Instant): List<StoredNapEntity>
+
+    // What a night's move onto another key carries with it: the watermarks keyed by the night in
+    // `stored_cursor` (keyed by `kind_raw`, so a rename is a delete and an insert) and the headache
+    // risk rows naming the night.
+
+    @Query("SELECT * FROM stored_cursor WHERE kind_raw = :kindRaw")
+    suspend fun cursorAt(kindRaw: String): StoredCursorEntity?
+
+    /** Refuses (ABORT) a key already stored: a watermark is never folded into another night's. */
+    @Insert
+    suspend fun insertCursor(row: StoredCursorEntity)
+
+    @Update
+    suspend fun updateCursor(row: StoredCursorEntity)
+
+    @Query("DELETE FROM stored_cursor WHERE kind_raw = :kindRaw")
+    suspend fun deleteCursorAt(kindRaw: String): Int
+
+    /** Points every headache risk row naming the night [from] at [to]; returns how many. */
+    @Query("UPDATE stored_headache_risk SET night_key = :to WHERE night_key = :from")
+    suspend fun renameHeadacheNightKey(from: Instant, to: Instant): Int
 }
