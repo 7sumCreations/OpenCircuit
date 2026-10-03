@@ -327,7 +327,7 @@ class SleepStore internal constructor(
     suspend fun applyOSASummary(osa: OSASpO2.NightSummary, now: Instant): Boolean {
         if (osa.validWindows <= 0) return false
         require(osa.averageSpO2.isFinite() && osa.minSpO2.isFinite() && osa.timeBelow90Seconds.isFinite() && osa.odi.isFinite()) {
-            "an apnea summary figure is not a number: $osa"
+            "an apnea summary figure is not a number"
         }
         val at = now.toStoredMillis()
         return db.withWriteTransaction {

@@ -14,7 +14,7 @@ import kotlinx.serialization.json.JsonArray
  * The dates here are whole epoch milliseconds, as in every stored form of this store (upstream:
  * seconds since 2001).
  */
-object PriorTimesCodec {
+internal object PriorTimesCodec {
 
     fun encode(stack: List<SleepEdit.Times>): String = JsonArray(
         stack.map { t ->
