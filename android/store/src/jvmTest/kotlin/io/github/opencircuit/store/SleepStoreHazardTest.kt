@@ -222,6 +222,28 @@ class SleepStoreHazardTest {
     }
 
     /**
+     * Upstream's "largest overlap wins" (:2084): the later night, met second in night order, shares
+     * more of the span than the earlier one and is the one resolved — not the first that overlaps.
+     */
+    @Test
+    fun aSpanOverlappingTwoNightsResolvesToTheOneItSharesMoreTimeWith() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            for (start in listOf(Instant.parse("2025-06-14T20:00:00Z"), Instant.parse("2025-06-15T00:00:00Z"))) {
+                val end = start.plusSeconds(2 * 3_600)
+                store.saveSleepSummary(
+                    summary(Duration.ofHours(2), Duration.ofHours(1)), night = end, inBedStart = start, inBedEnd = end, now = now, zone = utc,
+                )
+            }
+
+            // One hour of the earlier night (21:00..22:00) and both hours of the later (00:00..02:00).
+            val resolved = store.sleepSummaryOverlapping(Instant.parse("2025-06-14T21:00:00Z"), Instant.parse("2025-06-15T02:00:00Z"))
+
+            assertEquals(Instant.parse("2025-06-15T00:00:00Z"), resolved?.night)
+        }
+    }
+
+    /**
      * The merge compares asleep time as upstream does, in whole rounded minutes times 60
      * (:1704-1708), not in the summary's seconds: 419.5 minutes rounds to the stored 420, so it is a
      * tie, and the wider window wins it — where 25 170 s against 25 200 s would keep the stored night.
