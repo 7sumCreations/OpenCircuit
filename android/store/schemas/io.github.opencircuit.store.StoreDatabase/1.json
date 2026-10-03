@@ -1,0 +1,107 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "36a9893dca00b4d18557349ea274698a",
+    "entities": [
+      {
+        "tableName": "stored_sample",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `kind_raw` TEXT NOT NULL, `start` INTEGER NOT NULL, `end` INTEGER NOT NULL, `value` REAL NOT NULL, `raw_value` REAL, `is_delta` INTEGER NOT NULL, `daily_total` REAL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kindRaw",
+            "columnName": "kind_raw",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "start",
+            "columnName": "start",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "end",
+            "columnName": "end",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawValue",
+            "columnName": "raw_value",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "isDelta",
+            "columnName": "is_delta",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dailyTotal",
+            "columnName": "daily_total",
+            "affinity": "REAL"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stored_sample_kind_raw_start",
+            "unique": false,
+            "columnNames": [
+              "kind_raw",
+              "start"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_stored_sample_kind_raw_start` ON `${TABLE_NAME}` (`kind_raw`, `start`)"
+          }
+        ]
+      },
+      {
+        "tableName": "stored_cursor",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`kind_raw` TEXT NOT NULL, `last` INTEGER NOT NULL, PRIMARY KEY(`kind_raw`))",
+        "fields": [
+          {
+            "fieldPath": "kindRaw",
+            "columnName": "kind_raw",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "last",
+            "columnName": "last",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "kind_raw"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '36a9893dca00b4d18557349ea274698a')"
+    ]
+  }
+}
