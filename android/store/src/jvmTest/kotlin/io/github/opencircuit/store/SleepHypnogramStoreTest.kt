@@ -14,10 +14,11 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Port of upstream ios/OpenCircuitTests/SleepHypnogramStoreTests.swift (@ b1c2fdd), its first seven
- * tests: the stored per-night hypnogram. The invariant they pin: a night's segments and its stage
- * minutes always come from the same capture, so the timeline is written only by the branch that
- * writes the minutes and inherits that branch's merge protection.
+ * Port of upstream ios/OpenCircuitTests/SleepHypnogramStoreTests.swift (@ b1c2fdd): the stored
+ * per-night hypnogram. The invariant they pin: a night's segments and its stage minutes always come
+ * from the same capture, so the timeline is written only by the branch that writes the minutes and
+ * inherits that branch's merge protection — and a wearer's edit states its own timeline or leaves
+ * the stored one alone.
  *
  * Upstream ran in the simulator's zone; here the zone is UTC, in which no fixture window crosses
  * its key day. Each save names a fixed `now` where upstream stamps the wall clock.
@@ -167,6 +168,87 @@ class SleepHypnogramStoreTest {
             save(shortSlice, store) // rejected again
             assertTimelineAgreesWithMinutes(store, "after a second rejected fragment")
             assertEquals(fullerNight, store.hypnogram(night, zone))
+        }
+    }
+
+    // An omitted hypnogram argument must never erase a stored one: an edit with no timeline to
+    // state leaves the stored timeline alone, and only an explicit empty list clears it.
+
+    /** Upstream `testAnEditWithNoHypnogramArgumentLeavesTheStoredTimelineIntact` (`:205`). */
+    @Test
+    fun anEditWithNoHypnogramArgumentLeavesTheStoredTimelineIntact() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            save(fullNight, store)
+
+            // A real edit (not the unchanged-times early return, which never reaches the write).
+            val times = SleepEdit.Times(inBedStart = at(-1.0), sleepOnset = at(-0.5), sleepWake = at(8.0))
+            val edited = SleepEdit.recompute(baseSegments = fullNight, times = times)
+            assertFalse(edited.isEmpty())
+            assertTrue(store.applySleepEdit(night, times, SleepStaging.summary(edited), now = now, zone = zone))
+
+            val row = assertNotNull(store.sleepSummary(night, zone))
+            assertTrue(row.isManuallyEdited, "the edit really was applied — not an early return")
+            assertEquals(fullNight, store.hypnogram(night, zone), "an omitted timeline must leave the recorded one alone, never wipe it")
+        }
+    }
+
+    /** Upstream `testAnEditThatExplicitlyPassesAnEmptyHypnogramStillClearsIt` (`:223`). */
+    @Test
+    fun anEditThatExplicitlyPassesAnEmptyHypnogramStillClearsIt() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            save(fullNight, store)
+
+            val times = SleepEdit.Times(inBedStart = at(-1.0), sleepOnset = at(-0.5), sleepWake = at(8.0))
+            assertTrue(
+                store.applySleepEdit(
+                    night, times, SleepStaging.summary(SleepEdit.recompute(baseSegments = fullNight, times = times)),
+                    hypnogram = emptyList(), now = now, zone = zone,
+                ),
+            )
+            assertEquals(emptyList(), store.hypnogram(night, zone), "an EXPLICIT empty list is a stated intent and must still clear the column")
+        }
+    }
+
+    /** Upstream `testTheTwoEdgeOverloadWithNoHypnogramArgumentAlsoLeavesTheTimelineIntact` (`:237`). */
+    @Test
+    fun theTwoEdgeOverloadWithNoHypnogramArgumentAlsoLeavesTheTimelineIntact() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            save(fullNight, store)
+
+            val window = SleepEdit.Window(inBedStart = at(-1.0), inBedEnd = at(8.0))
+            val times = SleepEdit.Times(inBedStart = at(-1.0), sleepOnset = at(-0.5), sleepWake = at(8.0))
+            val edited = SleepEdit.recompute(baseSegments = fullNight, times = times)
+            assertTrue(
+                store.applySleepEdit(
+                    night, editedWindow = window, summary = SleepStaging.summary(edited),
+                    sleepOnset = at(-0.5), sleepWake = at(8.0), now = now, zone = zone,
+                ),
+            )
+            assertEquals(fullNight, store.hypnogram(night, zone))
+        }
+    }
+
+    /**
+     * Upstream `testUnchangedEditIsANoOpAndLeavesTheRecordedTimelineIntact` (`:250`). Upstream asserts
+     * on the model object it fetched; the night is read again here.
+     */
+    @Test
+    fun unchangedEditIsANoOpAndLeavesTheRecordedTimelineIntact() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            save(fullNight, store)
+            val row = assertNotNull(store.sleepSummary(night, zone))
+            // Submitting the recorded times unchanged must not manufacture an edit — and must not
+            // clear the recorded timeline on its way through.
+            val unchanged = SleepEdit.Times(row.currentInBedStart, row.currentOnset, row.currentWake)
+
+            assertTrue(store.applySleepEdit(night, unchanged, row.asSummary, now = now, zone = zone))
+
+            assertFalse(assertNotNull(store.sleepSummary(night, zone)).isManuallyEdited)
+            assertEquals(fullNight, store.hypnogram(night, zone))
         }
     }
 }

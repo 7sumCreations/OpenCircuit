@@ -7,6 +7,7 @@ import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SleepHypnogramCodec
 import io.github.opencircuit.ringkit.SleepPersistOutcome
 import io.github.opencircuit.ringkit.SleepProvenanceBreakdown
+import io.github.opencircuit.ringkit.SleepScore
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SleepStage
 import io.github.opencircuit.ringkit.SleepStaging
@@ -18,9 +19,10 @@ import java.time.ZoneId
 // The store's sleep half: a staged night saved under its night key with upstream's merge rules,
 // and read back. Port of upstream ios/OpenCircuit/Store/LocalStore.swift (@ b1c2fdd):
 // `resolveSleepRow` (:1545-1552), `saveSleepSummary` (:1582-1802) — its insert, replace and
-// kept-fuller branches — `applyExtras` (:1855-1910) and the sleep reads `latestSleepSummary`
+// kept-fuller branches — `applyExtras` (:1855-1910), the sleep reads `latestSleepSummary`
 // (:2042), `recentSleepSummaries` (:2051), `sleepSummaries(from:to:)` (:2056), `sleepSummary(night:)`
-// (:2063), `hypnogram(night:)` (:2074) and `sleepSummaryOverlapping` (:2084).
+// (:2063), `hypnogram(night:)` (:2074) and `sleepSummaryOverlapping` (:2084), and the wearer's
+// edit `applySleepEdit` in both forms (:2133-2257).
 //
 // Not yet part of this file: the collision guard and the kept-manual-edit branch (:1639-1684), the
 // clamp-window widening on a kept night (:1712-1753), moving stored nights onto their wake day before
@@ -39,6 +41,8 @@ import java.time.ZoneId
 //   keeps it for NaN and stores +∞).
 // - Two nights overlapping a span equally resolve to the earlier night; upstream keeps whichever its
 //   unsorted fetch returned first.
+// - An edit writes its row, the night's undo stack and its onset in one transaction; upstream writes
+//   the two values to `UserDefaults` before a save that can still fail.
 
 /**
  * The sleep half of the on-device store, over the same [StoreDatabase] as [LocalStore]. Every write
@@ -121,6 +125,90 @@ class SleepStore internal constructor(
             SleepPersistOutcome.UPDATED
         }
     }
+
+    /**
+     * Applies a wearer's edit to the night stored for the day of [night] in [zone]: the edited
+     * bedtime and wake (the wake ends the in-bed window), the edited onset, and the minutes,
+     * efficiency and score of [summary] — the score from its own seconds — with the provenance of
+     * [hypnogram]. The night is then kept as edited by every later save. Returns false when no night
+     * is stored for that day, and true, writing nothing, when the three times are the night's current
+     * ones to the minute.
+     *
+     * [hypnogram] null leaves the stored timeline alone; an empty list clears it. On the first edit
+     * of a night whose ring timeline has no copy of its own yet, the timeline is copied there first.
+     * The edges being replaced are pushed onto the night's undo stack — unless the stored stack
+     * cannot be read, which is then kept as it is. The recorded window and timeline, the widened clamp,
+     * feel, the apnea summary, temperature, heart rates, stress and movement are left as stored.
+     *
+     * The row, the undo stack and the onset are one transaction: a failure leaves all three as they
+     * were. Throws, writing nothing, when the lookup or the write fails, or when a stage total does not
+     * fit an `Int` of minutes.
+     */
+    suspend fun applySleepEdit(
+        night: Instant,
+        times: SleepEdit.Times,
+        summary: SleepStaging.Summary,
+        hypnogram: List<SleepSegment>? = null,
+        now: Instant,
+        zone: ZoneId,
+    ): Boolean {
+        val minutes = StageMinutes.of(summary)
+        val efficiency = summary.efficiency
+        val score = SleepScore.composite(
+            SleepScore.CompositeInput(
+                totalAsleep = seconds(summary.totalAsleep), timeAwake = seconds(summary.awake), efficiency = efficiency,
+                deep = seconds(summary.deep), light = seconds(summary.light), rem = seconds(summary.rem),
+            ),
+        ).score
+        val timeline = hypnogram?.toList()
+        val timelineData = timeline?.let(SleepHypnogramCodec::encode)
+        val breakdown = timeline?.let(::SleepProvenanceBreakdown)
+        val edit = SleepEdit.Times(times.inBedStart.toStoredMillis(), times.sleepOnset.toStoredMillis(), times.sleepWake.toStoredMillis())
+        val at = now.toStoredMillis()
+        val dayStart = startOfDay(night.toStoredMillis(), zone)
+        return db.withWriteTransaction {
+            val row = sleepDao.summaryAt(dayStart) ?: return@withWriteTransaction false
+            val shown = value(row)
+            if (SleepEdit.isSamePickerMinute(edit.inBedStart, shown.currentInBedStart, zone) &&
+                SleepEdit.isSamePickerMinute(edit.sleepOnset, shown.currentOnset, zone) &&
+                SleepEdit.isSamePickerMinute(edit.sleepWake, shown.currentWake, zone)
+            ) {
+                return@withWriteTransaction true
+            }
+            // Reversibility before the timeline is overwritten: only a still-unedited night's timeline
+            // is the ring's reading.
+            val ringsReading = row.recordedHypnogramData.isEmpty() && !row.isManuallyEdited && row.hypnogramData.isNotEmpty()
+            val edited = row.copy(
+                editedInBedStart = edit.inBedStart,
+                editedInBedEnd = edit.inBedEnd,
+                isManuallyEdited = true,
+                efficiency = efficiency,
+                hypnogramData = timelineData ?: row.hypnogramData,
+                recordedHypnogramData = if (ringsReading) row.hypnogramData else row.recordedHypnogramData,
+                sleepScore = score,
+                updatedAt = at,
+            ).withMinutes(minutes)
+            sleepDao.updateSummary(if (breakdown != null) edited.withEditProvenance(breakdown) else edited)
+            overlays.pushPriorTimes(row.night, SleepEdit.Times(shown.currentInBedStart, shown.currentOnset, shown.currentWake), at)
+            overlays.saveOnset(row.night, edit.sleepOnset, at)
+            true
+        }
+    }
+
+    /**
+     * The two-edge form of [applySleepEdit], kept from upstream: [editedWindow]'s start is the edited
+     * bedtime and [sleepWake] the edited end — the window's own end is not used.
+     */
+    suspend fun applySleepEdit(
+        night: Instant,
+        editedWindow: SleepEdit.Window,
+        summary: SleepStaging.Summary,
+        sleepOnset: Instant,
+        sleepWake: Instant,
+        hypnogram: List<SleepSegment>? = null,
+        now: Instant,
+        zone: ZoneId,
+    ): Boolean = applySleepEdit(night, SleepEdit.Times(editedWindow.inBedStart, sleepOnset, sleepWake), summary, hypnogram, now, zone)
 
     // Every read of a night reads the onset saved with its edit in the same read transaction.
 
@@ -233,6 +321,19 @@ class SleepStore internal constructor(
         fun span(start: Instant, end: Instant): Duration = if (end > start) Duration.between(start, end) else Duration.ZERO
 
         fun withinOneEpoch(a: Instant, b: Instant): Boolean = Duration.between(a, b).abs() <= ONE_EPOCH
+
+        /** A duration in seconds, as Swift's `TimeInterval`. */
+        fun seconds(d: Duration): Double = d.seconds + d.nano / 1e9
+
+        /** Upstream `applySleepEdit`'s provenance columns (:2190-2197), from the edit's own timeline. */
+        fun StoredSleepSummaryEntity.withEditProvenance(b: SleepProvenanceBreakdown) = copy(
+            measuredAsleepSeconds = b.measuredAsleep,
+            assertedAsleepSeconds = b.assertedAsleep,
+            coverageFraction = b.coverageFraction,
+            longestGapSeconds = b.longestUnmeasuredGap,
+            measuredEfficiency = b.efficiency ?: NOT_COMPUTED,
+            sleepBasis = (if (b.hasAssertedTime) SleepBasis.ASSERTED_TAGGED else SleepBasis.MEASURED_ONLY).rawValue,
+        )
 
         fun StoredSleepSummaryEntity.withMinutes(m: StageMinutes) =
             copy(asleepMin = m.asleep, deepMin = m.deep, lightMin = m.light, remMin = m.rem, awakeMin = m.awake)
