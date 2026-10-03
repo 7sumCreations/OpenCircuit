@@ -278,6 +278,43 @@ class UserEntryStoreTest {
         assertEquals(listOf(0.0, 24.0), store.riskDays(from = at(0), to = at(48)).map { it.index })
     }
 
+    /**
+     * Kotlin-only (I-30 / PL-2026-10-01-o): an entry the store hands out shares no list with the
+     * row it was built from, and its lists cannot be changed by casting them to `MutableList`
+     * (Swift's arrays copy; a Kotlin `List` from the column reader is an `ArrayList`).
+     */
+    @Test
+    fun anEntrysListsAreItsOwnAndCannotBeChanged() {
+        val tags = mutableListOf("cramping")
+        val ids = mutableListOf("uuid-1")
+        val period = StoredPeriodEntryEntity(start = at(0), symptoms = tags, hkSampleUUIDs = ids).toPeriodEntry()
+        val custom = mutableListOf("aura")
+        val factors = mutableListOf("sleep")
+        val headache = StoredHeadacheEntryEntity(
+            onset = at(0), symptoms = tags, customSymptoms = custom, factors = factors, hkSampleUUIDs = ids,
+        ).toHeadacheEntry()
+
+        tags += "bloating"
+        ids += "uuid-2"
+        custom += "x"
+        factors += "y"
+
+        assertEquals(listOf("cramping"), period.symptoms)
+        assertEquals(listOf("uuid-1"), period.hkSampleUUIDs)
+        assertEquals(listOf("cramping"), headache.symptoms)
+        assertEquals(listOf("aura"), headache.customSymptoms)
+        assertEquals(listOf("sleep"), headache.factors)
+        assertEquals(listOf("uuid-1"), headache.hkSampleUUIDs)
+
+        val lists = listOf(period.symptoms, period.hkSampleUUIDs, headache.symptoms, headache.customSymptoms, headache.factors, headache.hkSampleUUIDs)
+        for (list in lists) {
+            @Suppress("UNCHECKED_CAST")
+            assertFailsWith<UnsupportedOperationException> { (list as MutableList<String>).add("z") }
+        }
+        assertEquals(listOf("cramping"), period.symptoms)
+        assertEquals(listOf("uuid-1"), headache.hkSampleUUIDs)
+    }
+
     private fun risk(day: Instant, nightKey: Instant, index: Double) =
         HeadacheRiskDay(day = day, nightKey = nightKey, index = index, computedAt = day, updatedAt = day)
 

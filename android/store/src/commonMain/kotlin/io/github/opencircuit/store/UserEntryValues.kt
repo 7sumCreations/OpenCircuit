@@ -2,6 +2,7 @@ package io.github.opencircuit.store
 
 import io.github.opencircuit.ringkit.SleepEdit
 import java.time.Instant
+import java.util.Collections
 
 // What the store hands back for the user-entered logs and the frozen risk rows (upstream returns
 // its SwiftData model objects; here the rows stay internal and callers get plain values). Ported
@@ -94,16 +95,20 @@ data class HeadacheRiskDay(
     val updatedAt: Instant,
 )
 
+// The only builders of PeriodEntry / HeadacheEntry: each list is copied out of the row and cannot
+// be changed through a cast (Swift's arrays copy; the column reader hands back an ArrayList).
 internal fun StoredPeriodEntryEntity.toPeriodEntry() = PeriodEntry(
-    start = start, end = end, flowLevelRaw = flowLevelRaw, symptoms = symptoms, notes = notes,
-    healthWritten = healthWritten, hkSampleUUIDs = hkSampleUUIDs, updatedAt = updatedAt,
+    start = start, end = end, flowLevelRaw = flowLevelRaw, symptoms = symptoms.ownCopy(), notes = notes,
+    healthWritten = healthWritten, hkSampleUUIDs = hkSampleUUIDs.ownCopy(), updatedAt = updatedAt,
 )
 
 internal fun StoredHeadacheEntryEntity.toHeadacheEntry() = HeadacheEntry(
-    onset = onset, end = end, severityRaw = severityRaw, symptoms = symptoms, customSymptoms = customSymptoms,
-    factors = factors, notes = notes, sourceRaw = sourceRaw, importedHKUUID = importedHKUUID,
-    healthWritten = healthWritten, hkSampleUUIDs = hkSampleUUIDs, updatedAt = updatedAt,
+    onset = onset, end = end, severityRaw = severityRaw, symptoms = symptoms.ownCopy(), customSymptoms = customSymptoms.ownCopy(),
+    factors = factors.ownCopy(), notes = notes, sourceRaw = sourceRaw, importedHKUUID = importedHKUUID,
+    healthWritten = healthWritten, hkSampleUUIDs = hkSampleUUIDs.ownCopy(), updatedAt = updatedAt,
 )
+
+private fun List<String>.ownCopy(): List<String> = Collections.unmodifiableList(ArrayList(this))
 
 /** The row for this day, every instant cut to the stored millisecond. */
 internal fun HeadacheRiskDay.toEntity() = StoredHeadacheRiskEntity(
