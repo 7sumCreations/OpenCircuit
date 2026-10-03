@@ -32,7 +32,7 @@ import java.time.ZoneId
 // realigning a night resolved by its span (:1561-1573), and pruning the automatic naps a saved
 // night covers (:1801).
 //
-// Differences, each deliberate (PORTING.md D-160 to D-163):
+// Differences, each deliberate (PORTING.md D-160 to D-166):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
 //   stored millisecond before it is compared. Upstream reads the wall clock and `Calendar.current`.
 // - Each save is one transaction: a failed save leaves the stored night exactly as it was, where

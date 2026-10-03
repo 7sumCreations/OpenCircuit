@@ -67,7 +67,7 @@ class NightOverlaysTest {
         }
     }
 
-    /** Depth 20: the oldest entry after the first is dropped, so the ring's own window always survives (:428-429). */
+    /** Depth 20: the oldest entry after the first is dropped, so the ring's own window always survives (:429-430). */
     @Test
     fun theStackKeepsItsFirstEntryAndTheNewestNineteen() = runBlocking<Unit> {
         withInMemoryStore { db ->

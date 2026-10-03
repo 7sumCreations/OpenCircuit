@@ -12,7 +12,7 @@ import java.time.Instant
 // `stack` and `push`) and `SleepEditOnsetOverlay` (:457-480, its key, `load` and `save`), which keep
 // them in `UserDefaults`.
 //
-// Differences, each deliberate:
+// Differences, each deliberate (PORTING.md D-164, D-165):
 // - The key's day is the stored row's own night key, written as whole seconds and `.0`: upstream's
 //   text (`"\(Double)"` prints `1749938400.0`, where Kotlin's `Double.toString` prints `1.7499384E9`),
 //   without recomputing the start of the day in the device's current zone, which upstream does and
