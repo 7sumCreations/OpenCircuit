@@ -12,7 +12,7 @@ import kotlin.test.assertNull
  * (ios/OpenCircuit/Store/LocalStore.swift @ b1c2fdd): `latestSample(kind:before:)` (:813, strictly
  * before), `earliestSample(kind:after:)` (:831, strictly after), `earliestSample(kind:)` (:842),
  * `recentSamples` (:1184, `start >= since && value > 0`), `daytimeTemperatures` (:795, `[from, to)`),
- * `stepSamples` (:1047, `[from, to)`), `latestDaily` (:3105), `recentDailies` (:3114, newest first,
+ * `stepSamples` (:803, `[from, to)`), `latestDaily` (:3105), `recentDailies` (:3114, newest first,
  * bounded), `dailies` (:3119, `[from, to)`). Upstream has no test of these reads.
  *
  * Fixture rows are inserted through the DAOs (the raw stored form), not through the ingest path.
