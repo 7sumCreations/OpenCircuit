@@ -423,6 +423,91 @@ class ExportEngineGuardTest {
         assertEquals(18, doubleSites.size, "every caller-supplied double in the tree")
     }
 
+    // --- schema 3 whole: the honesty blocks as CSV and the epoch archive ---
+
+    private fun archives() = listOf(
+        EpochArchiveRow("ring-1", "AQID", 1_234_567, t0, t1, ArchiveEvidenceCoverage.Report(1_234_567, 1_234_000, (1L..567L).toList(), 85_050)),
+        EpochArchiveRow("ring-2", "", 0, null, null, ArchiveEvidenceCoverage.Report(0, 0, emptyList(), 0)),
+    )
+
+    /** The full export: every section, sessions and archives included. */
+    private fun everything(zone: ZoneId): String = ExportEngine.toJSON(
+        listOf(SampleRow("heartRate", t0, t1, 72.5)), listOf(sleep()), listOf(DailyRow(night, 1_234_567)),
+        listOf(StepSampleRow(t0, t1, 12)), listOf(NapRow(t0, t1, 95, true)), listOf(DaytimeTemperatureRow(t0, 34.2)), listOf(evidence()),
+        zone = zone, now = t1, metadata = meta(zone), sleepSessions = sessions(zone), epochArchives = archives(),
+    )!!
+
+    @Test
+    fun theHonestyCsvsAndTheArchivePrintTheSameUnderEveryMachineLocaleAndZone() {
+        val savedLocale = Locale.getDefault()
+        val savedZone = TimeZone.getDefault()
+        val zone = ZoneId.of("America/St_Johns")
+        fun texts() = listOf(
+            ExportEngine.provenanceCSV(includesSleepSessions = true), ExportEngine.provenanceCSV(includesSleepSessions = false),
+            ExportEngine.unitsCSV(), ExportEngine.notesCSV(), everything(zone),
+        )
+        try {
+            Locale.setDefault(Locale.ROOT)
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+            val reference = texts()
+            assertTrue(reference[2].lines().drop(1).map { it.substringBefore(',') }.let { it == it.sorted() }, "units rows in code-point order")
+            assertTrue(reference[4].contains("\"recordCount\" : 1234567") && reference[4].contains("\"longestMissingRunSeconds\" : 85050"), "ASCII digits in the archive")
+            for (tag in listOf("ar-EG-u-nu-arab", "hi-IN-u-nu-deva", "th-TH-u-nu-thai", "fa-IR", "tr-TR")) {
+                Locale.setDefault(Locale.forLanguageTag(tag))
+                TimeZone.setDefault(TimeZone.getTimeZone("Asia/Tokyo"))
+                assertEquals(reference, texts(), tag)
+            }
+        } finally {
+            Locale.setDefault(savedLocale)
+            TimeZone.setDefault(savedZone)
+        }
+    }
+
+    @Test
+    fun everyTopLevelSectionOfTheFullExportIsClassifiedAndEveryNumberHasAUnitOrIsACount() {
+        // Upstream's own checks run on exports without an archive; this runs them on one with every section.
+        val root = ExportJsonReader.root(everything(ZoneId.of("Asia/Kolkata")))
+        val provenance = root.obj("provenance")!!
+        val sections = root.keys - setOf("schemaVersion", "exportedAt", "meta", "provenance", "units", "notes")
+        assertEquals(
+            setOf("samples", "sleep", "daily", "stepSamples", "naps", "daytimeTemperatures", "historySyncEvidence", "sleepSessions", "epochArchive"),
+            sections,
+        )
+        for (s in sections) assertTrue(provenance.has(s), "section $s is not classified")
+        assertEquals(sections, provenance.keys.filter { '.' !in it }.toSet(), "no classification for a section that is not written")
+        for (k in provenance.keys.filter { '.' in it }) assertTrue(k.substringBefore('.') in sections, "sub-classification $k without its section")
+
+        val units = root.obj("units")!!
+        // Upstream's allow-list of unitless numeric keys, verbatim (ExportSchemaV3Tests).
+        val unitless = setOf(
+            "schemaVersion", "channel", "firstOpcode", "lastOpcode", "syncAckFlag", "stagedSleepSegments", "mergedRecordCount",
+            "historySampleCount", "page4CCount", "page47Count", "page4DCount", "sportSampleCount", "endMarkerCount", "recordsAtStart",
+            "recordsAtEnd", "recordsAdded", "validWindows", "expectedSamples", "observedSamples", "recordCount", "archiveRecordCount",
+            "evidenceRecordCount", "missingFromEvidenceCount", "longestMissingRunSeconds", "value",
+        )
+        val numeric = mutableSetOf<String>()
+        fun walk(v: ReplayJson.Value?) {
+            val o = v?.asObject()
+            if (o != null) for (k in o.keys) { if (ExportJsonReader.isNumber(o[k])) numeric += k; walk(o[k]) } else v?.asArray()?.forEach(::walk)
+        }
+        walk(root)
+        assertTrue(setOf("recordCount", "archiveRecordCount", "missingFromEvidenceCount", "longestMissingRunSeconds", "odi", "durationSec").all { it in numeric })
+        // KNOWN UPSTREAM GAP, pinned exactly so no other key can join it: an edited night's
+        // `provenanceSummary` emits these twelve quantities, and upstream's `units` names none of them
+        // (its own audit runs on a fully measured night, which writes no summary). Upstream at the pin
+        // prints the same units block; changing it would move every JSON file away from upstream's bytes.
+        val provenanceSummaryGap = setOf(
+            "measuredAsleepSec", "assertedOverMeasuredAsleepSec", "assertedAsleepSec", "coverageUnknownAsleepSec",
+            "measuredAwakeSec", "assertedOverMeasuredAwakeSec", "assertedAwakeSec", "coverageUnknownAwakeSec",
+            "coveredInBedSec", "coverageUnknownInBedSec", "longestUnmeasuredGapSec", "measuredEfficiency",
+        )
+        val withoutUnit = numeric.filter { !units.has(it) && it !in unitless }.toSet()
+        // This night withholds its efficiency (too little covered ground), so `measuredEfficiency` is not
+        // written here; it has no unit either.
+        assertEquals(provenanceSummaryGap - "measuredEfficiency", withoutUnit, "numbers with no unit and not an allow-listed count")
+        assertFalse(units.has("measuredEfficiency"))
+    }
+
     @Test
     fun sessionAndOsaRowsAreValuesComparedAsSwift() {
         val source = mutableListOf(SleepSegment(t0, t1, SleepStage.ASLEEP_CORE))
