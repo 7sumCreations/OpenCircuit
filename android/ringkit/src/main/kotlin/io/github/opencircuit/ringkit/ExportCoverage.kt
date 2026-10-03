@@ -52,7 +52,7 @@ object ExportCoverage {
                 coverageFraction == other.coverageFraction && gaps == other.gaps && longestGapSeconds == other.longestGapSeconds
 
         override fun hashCode(): Int =
-            listOf(windowStart, windowEnd, expectedSamples, observedSamples, coverageFraction, gaps, longestGapSeconds).hashCode()
+            listOf(windowStart, windowEnd, expectedSamples, observedSamples, ieeeHash(coverageFraction), gaps, ieeeHash(longestGapSeconds)).hashCode()
 
         override fun toString(): String =
             "Assessment(windowStart=$windowStart, windowEnd=$windowEnd, expectedSamples=$expectedSamples, " +

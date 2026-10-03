@@ -29,8 +29,9 @@ package io.github.opencircuit.ringkit
 //
 // Shape notes: totals are `Double` seconds summed in input order, exactly as upstream's `TimeInterval`
 // arithmetic (so no total can overflow), each segment's seconds the difference of its two dates' doubles
-// as Swift's `duration` computes it — the export prints these totals with 17 significant digits. Whole minutes are 64-bit; a total whose rounded minute count
-// leaves 64 bits — about 10^13 years of segments — saturates there, where upstream traps.
+// as Swift's `duration` computes it — the export prints these totals with 17 significant digits.
+// Whole minutes are 64-bit; a total whose rounded minute count leaves 64 bits — about 10^13 years of
+// segments — saturates there, where upstream traps.
 
 import java.util.Collections
 

@@ -150,7 +150,10 @@ object ExportEngine {
     ) {
         private val traces: List<HistoryChannelTrace> = channels.map { it.copy() }
 
-        /** Copies of the traces, read-only: changing what you are handed never changes the row. */
+        /**
+         * Copies of the traces, read-only: changing what you are handed never changes the row. Every
+         * read copies every trace afresh, so read it once per use rather than inside a loop.
+         */
         val channels: List<HistoryChannelTrace> get() = Collections.unmodifiableList(traces.map { it.copy() })
 
         private fun fields(): List<Any?> = listOf(
@@ -676,8 +679,9 @@ object ExportEngine {
     fun notesCSV(): String = keyValueCSV("topic,note", notes)
 
     /**
-     * One row per key in Swift's `.sorted()` order — code-point order, NOT the JSON writer's key order
-     * (on the three shipped maps the two happen to agree, measured).
+     * One row per key in Swift's `.sorted()` order, NOT the JSON writer's key order (on the three shipped
+     * maps the two happen to agree, measured). Kotlin sorts by UTF-16 code unit, which matches Swift's
+     * order for the all-ASCII keys these maps hold; a key outside ASCII would need a Swift-order comparator.
      */
     private fun keyValueCSV(header: String, map: Map<String, String>): String {
         val lines = ArrayList<String>(map.size + 1)

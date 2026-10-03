@@ -99,6 +99,21 @@ class ExportCoverageHazardTest {
     }
 
     @Test
+    fun assessmentsEqualUnderIeeeEqualityHashAlike() {
+        // `equals` compares the doubles by IEEE `==`, so 0.0 and -0.0 are equal there; equal values
+        // must hash alike or a hashed collection holds both.
+        fun assessment(fraction: Double, longest: Double) =
+            ExportCoverage.Assessment(t0, at(750), 5L, 0, fraction, emptyList(), longest)
+        // Each double on its own: two sign flips can cancel out in a list hash and hide a third.
+        val plus = assessment(0.0, 0.0)
+        for (minus in listOf(assessment(-0.0, 0.0), assessment(0.0, -0.0))) {
+            assertEquals(plus, minus)
+            assertEquals(plus.hashCode(), minus.hashCode(), "$minus")
+            assertEquals(1, setOf(plus, minus).size)
+        }
+    }
+
+    @Test
     fun anExpectedCountBeyondSixtyFourBitsSaturatesInsteadOfTrapping() {
         // Upstream TRAPS here ("Double value cannot be converted to Int … greater than Int.max",
         // measured for a 1e-300 s cadence over an hour and a 1 ms cadence over 2e16 s).
