@@ -7,7 +7,8 @@ import androidx.room3.Update
 import java.time.Instant
 
 /**
- * Reads and writes of `stored_sleep_summary`. [SleepStore] wraps each write in one transaction.
+ * Reads and writes of `stored_sleep_summary` and `stored_nap`. [SleepStore] wraps each write in one
+ * transaction.
  *
  * Inserts and updates use the default ABORT conflict strategy: a row moved or added onto an
  * occupied `night` fails the write and keeps both rows. The replacing strategy is never used here,
@@ -49,4 +50,34 @@ internal interface SleepDao {
             "ORDER BY night, id",
     )
     suspend fun overlapCandidates(start: Instant, end: Instant): List<StoredSleepSummaryEntity>
+
+    /** Rows keyed `lo <= night <= hi` (both ends included), oldest night first. */
+    @Query("SELECT * FROM stored_sleep_summary WHERE night >= :lo AND night <= :hi ORDER BY night, id")
+    suspend fun summariesKeyedBetween(lo: Instant, hi: Instant): List<StoredSleepSummaryEntity>
+
+    // Naps, keyed by their unique `start`.
+
+    @Insert
+    suspend fun insertNap(row: StoredNapEntity)
+
+    @Update
+    suspend fun updateNap(row: StoredNapEntity)
+
+    /** Deletes the nap keyed [start]; returns the rows deleted (0 or 1). */
+    @Query("DELETE FROM stored_nap WHERE start = :start")
+    suspend fun deleteNapAt(start: Instant): Int
+
+    @Query("SELECT * FROM stored_nap WHERE start = :start")
+    suspend fun napAt(start: Instant): StoredNapEntity?
+
+    @Query("SELECT * FROM stored_nap ORDER BY start, id")
+    suspend fun allNaps(): List<StoredNapEntity>
+
+    /** Naps with `from <= start < to`, the earliest start first. */
+    @Query("SELECT * FROM stored_nap WHERE start >= :from AND start < :to ORDER BY start, id")
+    suspend fun napsStarting(from: Instant, to: Instant): List<StoredNapEntity>
+
+    /** Naps with `from <= start < to`, the latest start first. */
+    @Query("SELECT * FROM stored_nap WHERE start >= :from AND start < :to ORDER BY start DESC, id DESC")
+    suspend fun napsStartingLatestFirst(from: Instant, to: Instant): List<StoredNapEntity>
 }

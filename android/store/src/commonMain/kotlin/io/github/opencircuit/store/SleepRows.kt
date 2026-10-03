@@ -2,10 +2,14 @@ package io.github.opencircuit.store
 
 import io.github.opencircuit.ringkit.SleepHypnogramCodec
 import io.github.opencircuit.ringkit.SleepSegment
+import io.github.opencircuit.store.codec.Decoded
+import io.github.opencircuit.store.codec.SleepSegmentCodec
 import java.time.Instant
 import java.util.Collections
 
-// The one builder of StoredNight from a stored row. A timeline is decoded with upstream's codec,
+// The one builder of StoredNight and StoredNapRecord from a stored row. A nap's segment lists are
+// the segment codec's text as UTF-8 bytes; one that cannot be read is null, the nap coarse
+// (upstream `StoredNap.stagedSegments`, LocalStore.swift:749-751). A night's timeline is decoded with upstream's codec,
 // which never throws: an unreadable blob reads as no segments, as upstream `hypnogram(night:)`
 // (ios/OpenCircuit/Store/LocalStore.swift:2074-2077 @ b1c2fdd). Each list is the value's own copy
 // and cannot be changed through a cast (Swift's arrays copy; the column reader hands back an
@@ -28,6 +32,34 @@ internal fun StoredSleepSummaryEntity.toStoredNight(editedOnset: Instant?) = Sto
     measuredEfficiency = measuredEfficiency, sleepBasis = SleepBasis.fromStored(sleepBasis),
     editedOnset = editedOnset,
 )
+
+/** This nap row as a value, its segment lists decoded. */
+internal fun StoredNapEntity.toStoredNapRecord() = StoredNapRecord(
+    start = start, end = end, asleepMin = asleepMin, isLongNap = isLongNap, healthWritten = healthWritten,
+    updatedAt = updatedAt, isManuallyEdited = isManuallyEdited, isManuallyAdded = isManuallyAdded,
+    segments = decodedNapSegments(napSegmentsData), editedStart = editedStart, editedEnd = editedEnd,
+    recordedSegments = decodedNapSegments(recordedNapSegmentsData), healthWrittenStart = healthWrittenStart, healthWrittenEnd = healthWrittenEnd,
+)
+
+/** A nap's segments as stored: the segment codec's text in UTF-8. */
+internal fun napSegmentsBytes(segments: List<SleepSegment>): ByteArray = SleepSegmentCodec.encode(segments).encodeToByteArray()
+
+/**
+ * A nap's stored segments, or null — the nap is coarse — when none are stored or they cannot be read,
+ * as upstream's `try?` decode (LocalStore.swift:750). Bytes that are not UTF-8 are unreadable too.
+ */
+private fun decodedNapSegments(data: ByteArray?): List<SleepSegment>? {
+    if (data == null) return null
+    val text = try {
+        data.decodeToString(throwOnInvalidSequence = true)
+    } catch (_: CharacterCodingException) {
+        return null
+    }
+    return when (val d = SleepSegmentCodec.decode(text)) {
+        is Decoded.Readable -> d.value.ownCopy()
+        is Decoded.Unreadable -> null
+    }
+}
 
 /** The stored timeline's segments; none when the bytes are empty or unreadable. */
 internal fun decodedTimeline(data: ByteArray): List<SleepSegment> = SleepHypnogramCodec.decode(data).ownCopy()

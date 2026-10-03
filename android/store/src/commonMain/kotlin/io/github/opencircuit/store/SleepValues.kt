@@ -9,7 +9,8 @@ import java.time.Instant
 
 // What the sleep store takes and hands back. Ported from ios/OpenCircuit/Store/LocalStore.swift
 // (@ b1c2fdd): `SleepNightExtras` (:1450-1465), `StoreError` (:1480-1490), `SleepBasis` (:377-387),
-// and the stored night (`StoredSleepSummary`, :86-230) as a plain value. Upstream hands out its
+// and the stored night (`StoredSleepSummary`, :86-230) and nap (`StoredNap`, :695-751) as plain
+// values. Upstream hands out its
 // SwiftData model objects; here the rows stay internal and callers get values whose timelines are
 // already decoded, so no byte array (compared by identity) ever leaves the store.
 
@@ -159,6 +160,50 @@ data class StoredNight internal constructor(
             val asleep = light.plus(deep).plus(rem)
             val inBed = if (efficiency > 0) Duration.ofNanos(Math.round(asleep.seconds / efficiency * 1e9)) else asleep.plus(awake)
             return SleepStaging.Summary(inBed = inBed, awake = awake, light = light, deep = deep, rem = rem)
+        }
+}
+
+/**
+ * One stored nap, keyed by [start] — the start the ring first detected, kept when the nap is edited
+ * so a later detection updates the same nap. Every date column never written is
+ * [SleepEdit.DISTANT_PAST].
+ *
+ * [segments] is the nap's staged timeline, null when the nap is coarse: none was staged, or the
+ * stored list cannot be read. [recordedSegments] is the ring's own staging, kept by the first edit
+ * that replaced it. [healthWritten] and its window are what was last written to Health. Only the
+ * store builds these (its lists are its own copies).
+ */
+@ConsistentCopyVisibility
+data class StoredNapRecord internal constructor(
+    val start: Instant,
+    val end: Instant,
+    val asleepMin: Int,
+    val isLongNap: Boolean,
+    val healthWritten: Boolean,
+    val updatedAt: Instant,
+    val isManuallyEdited: Boolean,
+    val isManuallyAdded: Boolean,
+    val segments: List<SleepSegment>?,
+    val editedStart: Instant?,
+    val editedEnd: Instant?,
+    val recordedSegments: List<SleepSegment>?,
+    val healthWrittenStart: Instant,
+    val healthWrittenEnd: Instant,
+) {
+    // Upstream's model accessors (LocalStore.swift:745-747).
+
+    /** The start the nap shows: the edited one when edited, else the detected one. */
+    val effectiveStart: Instant get() = editedStart ?: start
+
+    /** The end the nap shows: the edited one when edited, else the detected one. */
+    val effectiveEnd: Instant get() = editedEnd ?: end
+
+    /** Whole minutes of the effective window, cut toward zero (never rounded) and never negative. */
+    val durationMin: Int
+        get() {
+            // Integer division of whole milliseconds cuts toward zero, as Swift's `Int(Double)`.
+            val minutes = Duration.between(effectiveStart, effectiveEnd).toMillis() / 60_000
+            return minutes.coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
         }
 }
 
