@@ -211,14 +211,22 @@ data class StoredNapRecord internal constructor(
 internal fun clampWindowOf(recorded: SleepEdit.RecordedWindow, widened: SleepEdit.RecordedWindow): SleepEdit.RecordedWindow =
     SleepEdit.widenRecorded(stored = recorded, incoming = widened) ?: recorded
 
+/**
+ * What one run of the move of stored nights onto their wake day did (upstream's
+ * `(examined, moved, skipped)`): the nights it looked at, the nights it moved, and the nights left
+ * on their key — their wake day held by another night, or something already kept under it.
+ */
+data class NightRekeyOutcome(val examined: Int, val moved: Int, val skipped: Int)
+
 /** Why a sleep write was refused (upstream `StoreError`). Nothing was written when one is thrown. */
-sealed class SleepStoreException(message: String) : Exception(message) {
+sealed class SleepStoreException(message: String, cause: Throwable? = null) : Exception(message, cause) {
     /**
      * The one-time move of stored nights onto their wake day has not succeeded yet, so a night
      * written under the new key could split a night across two rows. Deferred, not lost: the next
-     * drain stages the night again.
+     * drain stages the night again. [cause] is why the move failed.
      */
-    class NightKeyMigrationPending : SleepStoreException("the move of stored nights onto their wake day has not completed")
+    class NightKeyMigrationPending(cause: Throwable? = null) :
+        SleepStoreException("the move of stored nights onto their wake day has not completed", cause)
 
     /**
      * The move of stored nights onto their wake day found two rows that belong to one day; it

@@ -232,15 +232,16 @@ class SleepStoreHazardTest {
             val store = SleepStore(db)
             val start = Instant.parse("2025-06-14T22:00:00Z")
             val end = start.plusSeconds(8 * 3_600)
-            store.saveSleepSummary(summary(Duration.ofHours(8), Duration.ofMinutes(420)), night = now, inBedStart = start, inBedEnd = end, now = now, zone = utc)
+            // Keyed by the day the night ends on, as every save keys it.
+            store.saveSleepSummary(summary(Duration.ofHours(8), Duration.ofMinutes(420)), night = end, inBedStart = start, inBedEnd = end, now = now, zone = utc)
 
             val outcome = store.saveSleepSummary(
-                summary(Duration.ofMinutes(490), Duration.ofSeconds(25_170)), night = now, inBedStart = start.minusSeconds(600),
+                summary(Duration.ofMinutes(490), Duration.ofSeconds(25_170)), night = end, inBedStart = start.minusSeconds(600),
                 inBedEnd = end, now = now, zone = utc,
             )
 
             assertEquals(SleepPersistOutcome.UPDATED, outcome)
-            assertEquals(start.minusSeconds(600), store.sleepSummary(now, utc)?.inBedStart)
+            assertEquals(start.minusSeconds(600), store.sleepSummary(end, utc)?.inBedStart)
         }
     }
 }

@@ -38,9 +38,9 @@ class SleepEditHazardTest {
         inBed = Duration.ofHours(hours), awake = Duration.ZERO, light = Duration.ofHours(hours), deep = Duration.ZERO, rem = Duration.ZERO,
     )
 
-    private suspend fun seed(store: SleepStore, zone: ZoneId = utc, start: Instant = at(0.0)) {
+    private suspend fun seed(store: SleepStore, zone: ZoneId = utc, start: Instant = at(0.0), night: Instant = start) {
         store.saveSleepSummary(
-            recorded, night = start, inBedStart = start, inBedEnd = start.plusSeconds(8 * 3_600),
+            recorded, night = night, inBedStart = start, inBedEnd = start.plusSeconds(8 * 3_600),
             sleepOnset = start.plusSeconds(1_800), sleepWake = start.plusSeconds(27_900), now = now, zone = zone,
         )
     }
@@ -61,6 +61,8 @@ class SleepEditHazardTest {
             val store = SleepStore(db)
             seed(store)
             store.applySleepEdit(at(0.0), SleepEdit.Times(at(-1.0), at(-0.5), at(8.5)), asleepFor(9), now = now, zone = utc)
+            // The later save below would otherwise be the first to latch the one-time move of stored nights.
+            assertTrue(store.ensureNightKeyMigrated(utc, now))
             val beforeRows = db.sleepRows()
             val beforeKv = db.kvRows()
             val before = assertNotNull(store.sleepSummary(at(0.0), utc))
@@ -177,11 +179,13 @@ class SleepEditHazardTest {
             val crossesLocalMinute = Instant.parse("1971-06-20T22:00:20Z") // 21:15:50 local
             assertEquals(ZoneOffset.ofHoursMinutesSeconds(0, -44, -30), monrovia.rules.getOffset(crossesUtcMinute))
             val store = SleepStore(db)
-            seed(store, monrovia, crossesUtcMinute)
-            seed(store, monrovia, crossesLocalMinute)
+            // Each night keyed by the day it ends on, as every save keys it: a night keyed by its
+            // bedtime's day would be moved by the next save's one-time move of stored nights.
+            seed(store, monrovia, crossesUtcMinute, night = crossesUtcMinute.plusSeconds(8 * 3_600))
+            seed(store, monrovia, crossesLocalMinute, night = crossesLocalMinute.plusSeconds(8 * 3_600))
 
             for ((start, isEdit) in listOf(crossesUtcMinute to true, crossesLocalMinute to false)) {
-                val night = start // seeded under its bedtime's day
+                val night = start.plusSeconds(8 * 3_600)
                 val n =assertNotNull(store.sleepSummary(night, monrovia))
                 val moved = n.currentInBedStart.plusSeconds(if (isEdit) 10 else 20)
                 assertTrue(store.applySleepEdit(night, SleepEdit.Times(moved, n.currentOnset, n.currentWake), n.asSummary, now = now, zone = monrovia))

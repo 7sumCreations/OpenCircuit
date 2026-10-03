@@ -18,6 +18,7 @@ import io.github.opencircuit.ringkit.SleepSummaryMerge
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
+import kotlin.coroutines.cancellation.CancellationException
 
 // The store's sleep half: a staged night saved under its night key with upstream's merge rules,
 // and read back. Port of upstream ios/OpenCircuit/Store/LocalStore.swift (@ b1c2fdd):
@@ -33,8 +34,11 @@ import java.time.ZoneId
 // night check `overlapsStoredNight` (:2981-2995), and the automatic-nap prune a saved night runs
 // (`pruneAutoNaps`, :1837-1853, called at :1801).
 //
-// Not yet part of this file: moving stored nights onto their wake day before a save (:1589) and
-// realigning a night resolved by its span (:1561-1573).
+// The one-time move of stored nights onto their wake day — `ensureNightKeyMigrated` (:1517-1541),
+// run before every save (:1589), and `rekeySleepNightsToWakeDay` (:2600-2709) — with its renames in
+// NightRekey.
+//
+// Not yet part of this file: realigning a night resolved by its span (:1561-1573).
 //
 // Differences, each deliberate (PORTING.md D-160 to D-169):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
@@ -63,6 +67,10 @@ import java.time.ZoneId
 //   save whose failure it swallows, leaving the night saved and the naps in place.
 // - A nap's segments are stored as the segment codec's text in UTF-8; bytes that are not UTF-8 read
 //   as no segments (coarse), as Foundation refuses them.
+// - The move of stored nights onto their wake day is one transaction with its done-latch written in
+//   it (D-170): a failure changes nothing and latches nothing, where upstream reverses its
+//   `UserDefaults` moves by hand, best effort, and keeps the latch in a separate store. A failed move
+//   holds the save with the reason it failed attached; upstream records the reason only in its log.
 
 /**
  * The sleep half of the on-device store, over the same [StoreDatabase] as [LocalStore]. Every write
@@ -71,13 +79,15 @@ import java.time.ZoneId
 class SleepStore internal constructor(
     private val db: StoreDatabase,
     private val sleepDao: SleepDao,
-    kvDao: KvDao,
+    private val kvDao: KvDao,
 ) {
     constructor(db: StoreDatabase) : this(db, db.sleepDao(), db.kvDao())
 
     internal constructor(db: StoreDatabase, sleepDao: SleepDao) : this(db, sleepDao, db.kvDao())
 
     private val overlays = NightOverlays(kvDao)
+
+    private val nightRekey = NightRekey(sleepDao, kvDao)
 
     /**
      * Stores a staged night under the start of [night]'s day in [zone], or deliberately keeps the
@@ -105,6 +115,11 @@ class SleepStore internal constructor(
      * A new or replacing save also removes the automatic naps sharing time with `[inBedStart,
      * inBedEnd]` — the same sleep counted twice — in the same transaction; the wearer's naps stay.
      *
+     * Before anything else, the one-time move of stored nights onto their wake day runs
+     * ([ensureNightKeyMigrated]) in its own transaction; while it cannot complete the save throws
+     * [SleepStoreException.NightKeyMigrationPending], writing nothing — the night is deferred, not
+     * lost.
+     *
      * Throws, writing nothing, when a lookup or the write fails, or when a stage total does not fit
      * an `Int` of minutes.
      */
@@ -128,6 +143,9 @@ class SleepStore internal constructor(
         val at = now.toStoredMillis()
         val dayStart = startOfDay(night.toStoredMillis(), zone)
         val staged = StagedExtras.of(extras)
+        // Before the first write under the wake-day key (upstream :1589): an unfinished move defers
+        // the night rather than filing it under a scheme the stored nights have not adopted.
+        migrateNightKeys(zone, now)?.let { throw SleepStoreException.NightKeyMigrationPending(it) }
         return db.withWriteTransaction {
             val existing = resolveSleepRow(dayStart, start, end)
             if (existing == null) {
@@ -289,6 +307,47 @@ class SleepStore internal constructor(
                 ),
             )
             true
+        }
+    }
+
+    /**
+     * Moves every stored night keyed by the day it started onto the day it ended in [zone], with
+     * everything kept under its key — the edit's onset and undo stack, Health's sample ids, mirror
+     * and two edit watermarks, the risk rows naming it, its queued Health write — and the export
+     * watermark when it names a moved night. A night whose wake day is held, or under whose wake day
+     * something is already kept, stays where it is (skipped). Idempotent: a second run moves nothing.
+     *
+     * One transaction: throws, changing nothing, when a read or write fails, and
+     * [SleepStoreException.NightKeyMigrationUnsafe] when two stored nights belong to one day. Does
+     * not set the done-latch; [ensureNightKeyMigrated] does.
+     */
+    suspend fun rekeySleepNightsToWakeDay(zone: ZoneId, now: Instant): NightRekeyOutcome {
+        val at = now.toStoredMillis()
+        return db.withWriteTransaction { nightRekey.rekeyAll(zone, at) }
+    }
+
+    /**
+     * Runs [rekeySleepNightsToWakeDay] once per store: true when it has run (now or before), false
+     * when it failed, nothing changed. Its done-latch is written in the move's own transaction, and
+     * only once the store held a night, so an empty store is looked at again next time.
+     */
+    suspend fun ensureNightKeyMigrated(zone: ZoneId, now: Instant): Boolean = migrateNightKeys(zone, now) == null
+
+    /** [ensureNightKeyMigrated], returning why it failed (null once done). Cancellation propagates. */
+    private suspend fun migrateNightKeys(zone: ZoneId, now: Instant): Exception? {
+        val at = now.toStoredMillis()
+        return try {
+            db.withWriteTransaction {
+                if (kvDao.get(NIGHT_REKEY_DONE)?.value == LATCH_SET) return@withWriteTransaction
+                val outcome = nightRekey.rekeyAll(zone, at)
+                // Never on an empty examination (upstream :1530): a store with no night yet is looked at again.
+                if (outcome.examined > 0) kvDao.upsert(StoreKvEntity(NIGHT_REKEY_DONE, LATCH_SET, at))
+            }
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
         }
     }
 
@@ -603,6 +662,12 @@ class SleepStore internal constructor(
     }
 
     private companion object {
+        /** Upstream `nightRekeyDoneKey` (:1478); set once the move of stored nights has run on a store holding one. */
+        const val NIGHT_REKEY_DONE = "store.rekeyedSleepNightsToWakeDay.v1"
+
+        /** A latch's set value; anything else stored counts as unset. */
+        const val LATCH_SET = "true"
+
         val ONE_EPOCH: Duration = Duration.ofSeconds(BulkRecord.EPOCH_SECONDS.toLong())
 
         /** A provenance figure that was not computed (the columns' default), distinct from a real 0. */

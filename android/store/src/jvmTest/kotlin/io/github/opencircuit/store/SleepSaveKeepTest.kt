@@ -14,6 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * The night save's branches that keep the stored night, read from upstream's source
@@ -51,6 +52,13 @@ class SleepSaveKeepTest {
     private suspend fun StoreDatabase.snapshot(): List<String> =
         queryRaw("SELECT * FROM stored_sleep_summary ORDER BY id") + queryRaw("SELECT * FROM store_kv ORDER BY `key`")
 
+    /**
+     * The first save that finds a stored night also latches the one-time move of stored nights onto
+     * their wake day (NightKeyMigrationTest). Latched before a "nothing written" snapshot, so the
+     * snapshot still covers every row of the table.
+     */
+    private suspend fun SleepStore.latched(): SleepStore = also { assertTrue(it.ensureNightKeyMigrated(utc, now1)) }
+
     // The night that ended this morning, and the evening that follows it.
     private val bed = local("2025-06-14T23:00")
     private val wake = local("2025-06-15T07:00")
@@ -65,6 +73,7 @@ class SleepSaveKeepTest {
         withInMemoryStore { db ->
             val store = SleepStore(db)
             store.save(bed, wake, 420)
+            store.latched()
             val before = db.snapshot()
 
             assertEquals(
@@ -142,6 +151,7 @@ class SleepSaveKeepTest {
             val store = SleepStore(db)
             store.save(bed, wake, 420)
             store.applySleepEdit(wake, SleepEdit.Times(bed.minusSeconds(1_800), bed, wake), summary(510, 480), now = now1, zone = utc)
+            store.latched()
             val before = db.snapshot()
 
             assertEquals(
@@ -163,6 +173,7 @@ class SleepSaveKeepTest {
             val store = SleepStore(db)
             store.save(bed, wake, 420, onset = bed.plusSeconds(1_800), wake = wake.minusSeconds(900))
             store.applySleepEdit(wake, SleepEdit.Times(bed.minusSeconds(3_600), bed.plusSeconds(600), wake), summary(540, 500), now = now1, zone = utc)
+            store.latched()
             val before = assertNotNull(store.sleepSummary(wake, utc))
             val kvBefore = db.queryRaw("SELECT * FROM store_kv ORDER BY `key`")
 
@@ -207,6 +218,7 @@ class SleepSaveKeepTest {
             val store = SleepStore(db)
             store.save(bed, wake, 420, onset = bed.plusSeconds(1_800), wake = wake.minusSeconds(900))
             store.applySleepEdit(wake, SleepEdit.Times(bed.minusSeconds(3_600), bed.plusSeconds(600), wake), summary(540, 500), now = now1, zone = utc)
+            store.latched()
             val before = db.snapshot()
 
             assertEquals(
@@ -247,6 +259,7 @@ class SleepSaveKeepTest {
         withInMemoryStore { db ->
             val store = SleepStore(db)
             store.save(bed, wake, 420)
+            store.latched()
             val before = db.snapshot()
 
             assertEquals(SleepPersistOutcome.KEPT_FULLER_STORED_NIGHT, store.save(bed.plusSeconds(3_600), wake, 300, now = now2))
@@ -261,6 +274,7 @@ class SleepSaveKeepTest {
             val store = SleepStore(db)
             store.save(bed, wake, 420)
             store.applySleepEdit(wake, SleepEdit.Times(bed.minusSeconds(3_600), bed, wake), summary(540, 500), now = now1, zone = utc)
+            store.latched()
             val before = db.snapshot()
             val real = db.sleepDao()
             val failing = object : SleepDao by real {

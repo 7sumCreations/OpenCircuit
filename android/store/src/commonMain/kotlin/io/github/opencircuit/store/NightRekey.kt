@@ -1,6 +1,7 @@
 package io.github.opencircuit.store
 
 import io.github.opencircuit.ringkit.SleepNightRekeyPlan
+import java.time.DateTimeException
 import java.time.Instant
 import java.time.ZoneId
 
@@ -56,6 +57,57 @@ internal class NightRekey(private val sleepDao: SleepDao, private val kv: KvDao)
     }
 
     /**
+     * Upstream `rekeySleepNightsToWakeDay` (:2600-2709), inside the caller's transaction: moves each
+     * stored night keyed by the day it started onto the day it ended in [zone], with everything kept
+     * under its key, in [SleepNightRekeyPlan]'s order (newest first, so each destination is free when
+     * its move runs). A night is left on its key — counted skipped — when the plan refuses it, when
+     * its wake day is held at the moment of its move, or when [canRename] refuses it. Throws
+     * [SleepStoreException.NightKeyMigrationUnsafe] when two stored nights belong to one day, before
+     * anything is changed and again before returning should a move ever have collided; the caller's
+     * rollback then undoes every move.
+     */
+    suspend fun rekeyAll(zone: ZoneId, now: Instant): NightRekeyOutcome {
+        val rows = sleepDao.allSummaries()
+        if (rows.isEmpty()) return NightRekeyOutcome(0, 0, 0)
+        val plan = SleepNightRekeyPlan.plan(rows.map { SleepNightRekeyPlan.Row(it.night, it.inBedStart, it.inBedEnd) }, zone)
+        if (plan.moves.isEmpty() && plan.refused.isEmpty()) return NightRekeyOutcome(rows.size, 0, 0)
+
+        // Two rows on one day would let one be moved twice while the other is left behind.
+        val byOldKey = HashMap<Instant, StoredSleepSummaryEntity>()
+        for (row in rows) {
+            if (byOldKey.put(dayKey(row.night, zone), row) != null) throw SleepStoreException.NightKeyMigrationUnsafe()
+        }
+
+        // Re-checked live before every move, never trusted from the plan: a skip below can leave a
+        // later destination held.
+        val occupied = HashSet(byOldKey.keys)
+        val nights = rows.associateTo(HashMap()) { it.id to it.night }
+        var moved = 0
+        var skipped = plan.refused.size
+        val applied = ArrayList<SleepNightRekeyPlan.Move>()
+        for (move in plan.moves) {
+            val row = byOldKey[move.from] ?: continue
+            if (move.to in occupied || !canRename(row.night, move.to, zone)) {
+                skipped++
+                continue
+            }
+            rename(row.night, move.to, zone, now)
+            sleepDao.updateSummary(row.copy(night = move.to))
+            occupied.remove(move.from)
+            occupied.add(move.to)
+            nights[row.id] = move.to
+            applied += SleepNightRekeyPlan.Move(row.night, move.to)
+            moved++
+        }
+        advanceExportWatermark(applied)
+
+        // The unique index would refuse a collision, but prove the bookkeeping before returning.
+        val keys = nights.values.map { dayKey(it, zone) }
+        if (keys.toSet().size != keys.size) throw SleepStoreException.NightKeyMigrationUnsafe()
+        return NightRekeyOutcome(rows.size, moved, skipped)
+    }
+
+    /**
      * The export watermark names an exported night by its key: when one of [moves] moved that
      * night, the watermark follows it. Nothing is created when there is no watermark.
      */
@@ -95,5 +147,13 @@ internal class NightRekey(private val sleepDao: SleepDao, private val kv: KvDao)
         const val EXPORT_SESSIONS = "export:sleepSessions"
 
         fun watermarkKey(prefix: String, night: Instant): String = prefix + NightOverlays.dayText(night)
+
+        /** The start of [night]'s day in [zone], as the plan keys it; a night that cannot be placed stands for itself. */
+        fun dayKey(night: Instant, zone: ZoneId): Instant =
+            try {
+                startOfDay(night, zone)
+            } catch (_: DateTimeException) {
+                night
+            }
     }
 }
