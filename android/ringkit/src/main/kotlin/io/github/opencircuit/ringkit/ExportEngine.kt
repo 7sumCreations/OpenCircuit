@@ -1,15 +1,15 @@
 package io.github.opencircuit.ringkit
 
-// Port of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/ExportEngine.swift (@ b1c2fdd), growing
-// in slices (see PORTING.md): pure export serialization — callers fetch from the store and pass plain
-// rows here. So far: schema 2 whole — the sample, sleep, daily, step, nap, daytime-temperature and
-// history-sync-evidence rows, their CSV writers (with the CSV field escaper and number text), the
-// device-local `sessionID` / `dayStamp`, and `toJSON` with every schema-2 section plus the
-// provenance, units and notes — the epoch-archive row type, and `SleepEdgeProvenanceRow`
-// (`:354-427`), which the sleep confidence tests use; and the schema-3 core — the metadata block, the
-// OSA and sleep-session rows, the metadata / sessions / hypnogram CSVs and the `meta` and
-// `sleepSessions` JSON sections. Every byte follows upstream's Foundation output on valid input
-// (FoundationText, ExportJson); the export differential compares whole files.
+// Port of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/ExportEngine.swift (@ b1c2fdd), whole
+// (see PORTING.md): pure export serialization — callers fetch from the store and pass plain rows here.
+// Schema 2 — the sample, sleep, daily, step, nap, daytime-temperature and history-sync-evidence rows,
+// their CSV writers (with the CSV field escaper and number text), the device-local `sessionID` /
+// `dayStamp`; schema 3 — the metadata block, the OSA, sleep-session and epoch-archive rows, the
+// metadata / sessions / hypnogram CSVs, the provenance / units / notes blocks as CSV, and `toJSON` with
+// every section; and `SleepEdgeProvenanceRow`, which the sleep confidence tests also use. Every byte
+// follows upstream's Foundation output on valid input (FoundationText, ExportJson); the export
+// differential compares whole files. Upstream's formatter lock and cache are not ported: the formatters
+// here are stateless functions of (instant, zone).
 //
 // No ambient environment: every writer that prints a device-local label (`night`, `day`) or a
 // schema-3 offset takes the zone to print it in, and `toJSON` the export instant (upstream reads
@@ -659,6 +659,33 @@ object ExportEngine {
         return lines.joinToString("\n")
     }
 
+    // --- the honesty blocks as CSV: the SAME maps `toJSON` writes, so the two formats cannot disagree ---
+
+    /**
+     * CSV of the provenance map. Header `section,provenance` (the value column is named after the JSON
+     * block it mirrors). Like upstream, it takes only [includesSleepSessions]: the epoch archive has no
+     * CSV, so its classification appears in the JSON alone.
+     */
+    fun provenanceCSV(includesSleepSessions: Boolean): String =
+        keyValueCSV("section,provenance", provenance(includesSleepSessions = includesSleepSessions))
+
+    /** CSV of the units map. Header `field,unit`. */
+    fun unitsCSV(): String = keyValueCSV("field,unit", units)
+
+    /** CSV of the caveats. Header `topic,note`. Free text with commas and quotes — [csvField] keeps each note in its row. */
+    fun notesCSV(): String = keyValueCSV("topic,note", notes)
+
+    /**
+     * One row per key in Swift's `.sorted()` order — code-point order, NOT the JSON writer's key order
+     * (on the three shipped maps the two happen to agree, measured).
+     */
+    private fun keyValueCSV(header: String, map: Map<String, String>): String {
+        val lines = ArrayList<String>(map.size + 1)
+        lines += header
+        for (key in map.keys.sorted()) lines += csvLine(listOf(key, map.getValue(key)))
+        return lines.joinToString("\n")
+    }
+
     // --- JSON ---
 
     private fun str(s: String): ExportJson = ExportJson.JString(s)
@@ -725,8 +752,8 @@ object ExportEngine {
      * `exportedAt` = [now]. Every schema-2 section is written, as an empty array when it has no rows.
      * Times in these sections print UTC (`…Z`); the `night` / `day` labels print `yyyy-MM-dd` in [zone],
      * the zone the rows were bucketed with. Schema 3 adds keys only: `meta` when [metadata] is given and
-     * `sleepSessions` when [sleepSessions] is not empty, both with [zone]'s offset (and the provenance
-     * map then classifies the session sections).
+     * `sleepSessions` when [sleepSessions] is not empty, both with [zone]'s offset, and `epochArchive`
+     * when [epochArchives] is not empty (its epochs UTC); the provenance map then classifies each of them.
      *
      * Returns null if any number in the tree is NaN or infinite: upstream documents nil for a failed
      * serialization but crashes there instead (PORTING.md).
@@ -743,6 +770,7 @@ object ExportEngine {
         now: Instant,
         metadata: ExportMetadata? = null,
         sleepSessions: List<SleepSessionRow> = emptyList(),
+        epochArchives: List<EpochArchiveRow> = emptyList(),
     ): String? {
         val root = linkedMapOf(
             "schemaVersion" to int(SCHEMA_VERSION),
@@ -788,7 +816,29 @@ object ExportEngine {
         // --- schema 3: new keys only; nothing above is touched ---
         if (metadata != null) root["meta"] = ExportJson.obj(*metadataFields(metadata, zone).toTypedArray())
         if (sleepSessions.isNotEmpty()) root["sleepSessions"] = ExportJson.arr(sleepSessions.map { sessionJSON(it, zone) })
-        root["provenance"] = stringMap(provenance(includesSleepSessions = sleepSessions.isNotEmpty()))
+        // The app's own deduped epoch archive and what the evidence blobs miss of it — written only when
+        // there is one, so an export without an archive gains no empty section. Its epochs print UTC.
+        if (epochArchives.isNotEmpty()) {
+            root["epochArchive"] = ExportJson.arr(
+                epochArchives.map { a ->
+                    ExportJson.obj(
+                        "ringID" to str(a.ringID),
+                        "recordCount" to int(a.recordCount),
+                        "firstEpoch" to jsonOrNull(a.firstEpoch?.let(::iso8601)),
+                        "lastEpoch" to jsonOrNull(a.lastEpoch?.let(::iso8601)),
+                        "recordsBase64" to str(a.recordsBase64),
+                        "evidenceBlobCoverage" to ExportJson.obj(
+                            "archiveRecordCount" to int(a.coverage.archiveRecordCount),
+                            "evidenceRecordCount" to int(a.coverage.evidenceRecordCount),
+                            "missingFromEvidenceCount" to int(a.coverage.missingFromEvidence.size),
+                            "longestMissingRunSeconds" to int(a.coverage.longestMissingRunSeconds),
+                            "isComplete" to bool(a.coverage.isComplete),
+                        ),
+                    )
+                },
+            )
+        }
+        root["provenance"] = stringMap(provenance(includesSleepSessions = sleepSessions.isNotEmpty(), includesEpochArchive = epochArchives.isNotEmpty()))
         root["units"] = stringMap(units)
         root["notes"] = stringMap(notes)
         return ExportJson.pretty(ExportJson.JObject(root))
@@ -940,7 +990,7 @@ object ExportEngine {
      * Which sections are raw and which are computed: `measured` came off the ring, `derived` was
      * computed on the device, `diagnostic` is troubleshooting exhaust, not health data.
      */
-    private fun provenance(includesSleepSessions: Boolean): Map<String, String> {
+    private fun provenance(includesSleepSessions: Boolean, includesEpochArchive: Boolean = false): Map<String, String> {
         val map = linkedMapOf(
             "samples" to "measured",
             "stepSamples" to "measured",
@@ -950,6 +1000,12 @@ object ExportEngine {
             "naps" to "derived",
             "historySyncEvidence" to "diagnostic",
         )
+        if (includesEpochArchive) {
+            // Measured: the ring's own bytes, deduped — nothing is estimated.
+            map["epochArchive"] = "measured"
+            // Diagnostic: a statement about the FILE, not about the wearer.
+            map["epochArchive.evidenceBlobCoverage"] = "diagnostic"
+        }
         if (includesSleepSessions) {
             map["sleepSessions"] = "derived"
             map["sleepSessions.summary"] = "derived"

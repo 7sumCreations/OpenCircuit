@@ -2,6 +2,7 @@ package io.github.opencircuit.ringkit
 
 import io.github.opencircuit.ringkit.ExportEngine.DailyRow
 import io.github.opencircuit.ringkit.ExportEngine.DaytimeTemperatureRow
+import io.github.opencircuit.ringkit.ExportEngine.EpochArchiveRow
 import io.github.opencircuit.ringkit.ExportEngine.ExportMetadata
 import io.github.opencircuit.ringkit.ExportEngine.HistorySyncEvidenceRow
 import io.github.opencircuit.ringkit.ExportEngine.NapRow
@@ -26,10 +27,10 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/ExportSchemaV3Tests.swift (@ b1c2fdd)
- * — the 33 tests declared before its `:703` (the schema-v3 superset lock, the metadata block, the
- * session and hypnogram CSVs and the `sleepSessions` JSON); the other 22 port with the rest of
- * schema 3.
+ * Port of upstream ios/OpenCircuitKit/Tests/OpenCircuitKitTests/ExportSchemaV3Tests.swift (@ b1c2fdd),
+ * all 55 tests: the schema-v3 superset lock, the metadata block, the session and hypnogram CSVs, the
+ * `sleepSessions` JSON, the timestamp policy, the provenance / units / notes blocks in both formats,
+ * the epoch-archive section and `sessionID`.
  *
  * Schema v3 is a strict SUPERSET of schema v2: every key v2 emitted still appears, at the same path,
  * with the same value. If the superset test fails, a consumer built against the old export just broke,
@@ -38,7 +39,9 @@ import kotlin.test.fail
  * Upstream prints the device-local labels and the schema-3 offsets in `Calendar.current` and builds
  * its expectation in `TimeZone.current`; here both take [zone], fixed to America/New_York, where the
  * tests' midnight-UTC `night` is the previous local day and every offset is non-zero — so a label or
- * a timestamp printed in UTC fails. The two MAC tests keep upstream's own test MAC verbatim.
+ * a timestamp printed in UTC fails. The two MAC tests keep upstream's own test MAC verbatim. Upstream's
+ * four tests that change the process zone between two calls pass two zones in and expect two labels
+ * out here (the zones are named in each test).
  */
 class ExportSchemaV3Test {
 
@@ -656,6 +659,402 @@ class ExportSchemaV3Test {
         assertEquals(1L, s.obj("coverage")?.long("observedSamples"))
         assertEquals(20L, s.obj("coverage")?.long("expectedSamples"))
         assertEquals(1, s.obj("coverage")?.get("gaps")?.asObjectList()?.size)
+    }
+
+    // MARK: - 8. Timestamp policy
+
+    @Test
+    fun offsetFormatterEmitsAUTCOffsetNotZ() {
+        // Pinned zones, so the assertion cannot go vacuous on a UTC test machine.
+        assertEquals("2023-11-14T23:13:20.000+01:00", ExportEngine.offsetISO8601(t0, ZoneId.of("Europe/Amsterdam")))
+        assertEquals("2023-11-15T03:43:20.000+05:30", ExportEngine.offsetISO8601(t0, ZoneId.of("Asia/Kolkata")))
+        for (id in listOf("Europe/Amsterdam", "Asia/Kolkata", "America/New_York")) {
+            val s = ExportEngine.offsetISO8601(t0, ZoneId.of(id))
+            assertFalse(s.endsWith("Z"), "$id must print an offset, not a UTC Z: $s")
+        }
+    }
+
+    @Test
+    fun existingSectionsKeepUTCZWhileNewSectionsCarryTheLocalOffset() {
+        val obj = parsed(
+            ExportEngine.toJSON(
+                samples = listOf(sampleRow), sleep = listOf(sleepRow), daily = emptyList(), zone = zone, now = t0,
+                metadata = metadata, sleepSessions = listOf(session(hypnogram = hypnogram)),
+            ),
+        )
+
+        // v2 sections: unchanged UTC bytes.
+        assertEquals("2023-11-14T22:13:20.000Z", obj.string("exportedAt"))
+        assertEquals("2023-11-14T22:13:20.000Z", obj["samples"]?.asObjectList()?.firstOrNull()?.string("start"))
+        assertEquals("2023-11-14T22:13:20.000Z", obj["sleep"]?.asObjectList()?.firstOrNull()?.string("inBedStart"))
+
+        // v3 sections: the device's local offset policy (here America/New_York, -05:00 on that date).
+        val s = firstSession(obj) ?: fail("sleepSessions missing")
+        assertEquals(ExportEngine.offsetISO8601(t0, zone), s.string("inBedStart"))
+        assertEquals(ExportEngine.offsetISO8601(t0, zone), s.obj("summary")?.string("inBedStart"))
+        assertEquals(ExportEngine.offsetISO8601(t0, zone), s["hypnogram"]?.asObjectList()?.firstOrNull()?.string("start"))
+        assertEquals(ExportEngine.offsetISO8601(t0, zone), obj.obj("meta")?.string("exportedAt"))
+        assertEquals("2023-11-14T17:13:20.000-05:00", s.string("inBedStart"))
+    }
+
+    // MARK: The declared zone and the printed offsets can never disagree
+    //
+    // Upstream's device-local formatters were once built once per process with the zone of first use,
+    // so an app left running across a flight or a DST change declared one zone in `meta` and printed
+    // another. Its four tests change the process zone between two calls. Here the zone is an argument,
+    // so each test passes TWO zones in and expects TWO labels out, with upstream's assertions: if the
+    // writer ignored its argument (or read the machine's zone) the two outputs would be equal and fail.
+
+    /** Upstream `testDeviceLocalOffsetsFollowALiveTimeZoneChange` — Europe/Amsterdam then Asia/Kolkata. */
+    @Test
+    fun deviceLocalOffsetsFollowTheZonePassedTwoZonesInTwoLabelsOut() {
+        assertEquals("2023-11-14T23:13:20.000+01:00", ExportEngine.offsetISO8601(t0, ZoneId.of("Europe/Amsterdam")))
+        // Same process, different zone.
+        assertEquals(
+            "2023-11-15T03:43:20.000+05:30", ExportEngine.offsetISO8601(t0, ZoneId.of("Asia/Kolkata")),
+            "the offset formatter froze the zone it was first given",
+        )
+    }
+
+    /** Upstream `testDeviceLocalDayLabelsFollowALiveTimeZoneChange` — 2023-11-14T22:13:20Z straddles the two zones' day boundary. */
+    @Test
+    fun deviceLocalDayLabelsFollowTheZonePassedTwoZonesInTwoLabelsOut() {
+        assertEquals("night-2023-11-14", ExportEngine.sessionID(t0, ZoneId.of("Europe/Amsterdam")))
+        assertEquals("night-2023-11-15", ExportEngine.sessionID(t0, ZoneId.of("Asia/Kolkata")), "the yyyy-MM-dd formatter froze the zone it was first given")
+    }
+
+    /**
+     * Upstream `testFilenameDayStampFollowsTheSameLiveTimeZoneAsTheLabelsInsideTheFile` — the export
+     * FILENAME's day stamp is the same label as everything inside the file: ONE local-day source.
+     * Europe/Amsterdam then Asia/Kolkata.
+     */
+    @Test
+    fun filenameDayStampFollowsTheSameZoneAsTheLabelsInsideTheFileTwoZonesInTwoLabelsOut() {
+        val amsterdam = ZoneId.of("Europe/Amsterdam")
+        assertEquals("2023-11-14", ExportEngine.dayStamp(t0, amsterdam))
+        assertEquals("night-" + ExportEngine.dayStamp(t0, amsterdam), ExportEngine.sessionID(t0, amsterdam))
+
+        val kolkata = ZoneId.of("Asia/Kolkata")
+        assertEquals("2023-11-15", ExportEngine.dayStamp(t0, kolkata), "the filename day stamp froze the zone it was first given")
+        assertEquals(
+            "night-" + ExportEngine.dayStamp(t0, kolkata), ExportEngine.sessionID(t0, kolkata),
+            "filename stamp and session id must never describe different days",
+        )
+    }
+
+    /**
+     * Upstream `testDeclaredZoneAlwaysMatchesThePrintedOffsetAfterAZoneChange` — what `meta` DECLARES and
+     * what the file PRINTS come from one source. Upstream builds the metadata with its default (live) zone
+     * arguments; here `ExportMetadata.of` derives both from the zone passed, at the export instant.
+     */
+    @Test
+    fun declaredZoneAlwaysMatchesThePrintedOffsetForEveryZonePassed() {
+        // Four IANA zones spanning both signs and a half-hour offset, Sydney in its summer time on t0.
+        for (id in listOf("Europe/Amsterdam", "Asia/Kolkata", "America/New_York", "Australia/Sydney")) {
+            val zone = ZoneId.of(id)
+            val live = ExportMetadata.of(zone, exportedAt = t0, rangeStart = t0, rangeEnd = t1)
+            assertEquals(id, live.timeZoneIdentifier)
+            // Upstream compares with the zone's offset NOW (its default reads the clock); the port's offset
+            // is the zone's at the export instant, which is what `meta.exportedAt` prints with.
+            assertEquals(zone.rules.getOffset(t0).totalSeconds.toLong(), live.timeZoneOffsetSeconds, "$id: the declared offset must be this zone's")
+
+            // Every printed timestamp must be in the zone `meta` names. (The scalar offset is the one at
+            // EXPORT time; a timestamp across a DST change prints another offset in the SAME zone, which is
+            // why the invariant is the zone, not the number.)
+            val declared = ZoneId.of(live.timeZoneIdentifier)
+            for (date in listOf(t0, t1, night)) {
+                assertEquals(ExportEngine.offsetISO8601(date, zone), ExportEngine.offsetISO8601(date, declared), "$id: printed offsets must use the zone meta declares")
+            }
+        }
+    }
+
+    @Test
+    fun timestampPolicyStatesBothConventions() {
+        assertTrue(ExportEngine.TIMESTAMP_POLICY_DESCRIPTION.contains("UTC"))
+        assertTrue(ExportEngine.TIMESTAMP_POLICY_DESCRIPTION.contains("'Z'"))
+        assertTrue(ExportEngine.TIMESTAMP_POLICY_DESCRIPTION.contains("UTC offset"))
+        assertTrue(ExportEngine.TIMESTAMP_POLICY_DESCRIPTION.contains("yyyy-MM-dd"))
+    }
+
+    // MARK: - 9. Provenance / units / notes
+
+    /** Top-level keys that carry no health rows and therefore need no provenance classification. */
+    private val nonDataKeys = setOf("schemaVersion", "exportedAt", "meta", "provenance", "units", "notes")
+
+    private fun stringMap(o: ReplayJson.Obj?): Map<String, String>? = o?.let { obj -> obj.keys.associateWith { obj.string(it) ?: return null } }
+
+    @Test
+    fun everyEmittedSectionIsClassifiedInProvenance() {
+        val obj = parsed(
+            ExportEngine.toJSON(
+                samples = listOf(sampleRow), sleep = listOf(sleepRow),
+                daily = listOf(DailyRow(day = night, steps = 8_000)),
+                stepSamples = listOf(StepSampleRow(start = t0, end = t1, delta = 1)),
+                naps = listOf(NapRow(start = t0, end = t1, asleepMin = 30, isLongNap = false)),
+                daytimeTemperatures = listOf(DaytimeTemperatureRow(time = t0, celsius = 34.2)),
+                historySyncEvidence = listOf(evidenceRow), zone = zone, now = t0,
+                metadata = metadata,
+                sleepSessions = listOf(session(hypnogram = hypnogram, edgeProvenance = stoppedAtWakeEdge)),
+            ),
+        )
+
+        val provenance = stringMap(obj.obj("provenance")) ?: fail("provenance block missing")
+        val emitted = obj.keys - nonDataKeys
+        assertFalse(emitted.isEmpty())
+        for (key in emitted) {
+            assertNotNull(
+                provenance[key],
+                "Section '$key' is emitted but has no provenance classification. Every data section must be labelled " +
+                    "measured/derived/diagnostic — an unlabelled one reads as if the ring reported it.",
+            )
+        }
+        for ((key, value) in provenance) assertTrue(value in setOf("measured", "derived", "diagnostic"), "'$key' has unknown provenance '$value'")
+        assertEquals("measured", provenance["samples"])
+        assertEquals("measured", provenance["stepSamples"])
+        assertEquals("measured", provenance["daytimeTemperatures"])
+        assertEquals("derived", provenance["sleep"])
+        assertEquals("derived", provenance["daily"])
+        assertEquals("derived", provenance["naps"])
+        assertEquals("diagnostic", provenance["historySyncEvidence"])
+        // The load-bearing honesty claim: staging is OURS, coverage is a count of what we hold.
+        assertEquals("derived", provenance["sleepSessions.hypnogram"])
+        assertEquals("derived", provenance["sleepSessions.summary"])
+        assertEquals("derived", provenance["sleepSessions.osa"])
+        assertEquals("measured", provenance["sleepSessions.coverage"])
+        // DERIVED: the gaps inside it are measured, but the verdicts and the reason list are a
+        // classifier's output at a chosen threshold — a policy decision, not an observation.
+        assertEquals("derived", provenance["sleepSessions.edgeProvenance"])
+    }
+
+    @Test
+    fun provenanceOmitsSleepSessionSubKeysWhenNoSessionsAreEmitted() {
+        val obj = json()
+        val provenance = stringMap(obj.obj("provenance")) ?: fail("provenance block missing")
+        assertNull(provenance["sleepSessions"])
+        assertNull(provenance["sleepSessions.hypnogram"])
+        assertEquals(obj.keys - nonDataKeys, provenance.keys, "provenance must classify exactly the sections that were emitted")
+    }
+
+    /**
+     * The cross-checks that are NOT a restatement of the production map: each one is a fact about the
+     * data that would still be wrong if the code and the test were written together. (`spo2` vs
+     * `osaAvgSpO2` in particular: samples carry 0…1, the OSA figures carry percent.)
+     */
+    @Test
+    fun unitsGetTheAmbiguousFieldsRight() {
+        val units = stringMap(json().obj("units")) ?: fail("units block missing")
+        assertEquals("fraction", units["spo2"], "samples' SpO₂ is 0…1")
+        assertEquals("percent", units["osaAvgSpO2"], "OSA SpO₂ is a percentage — not the same")
+        assertEquals("percent", units["avgSpO2"], "…under the key the JSON osa object emits, too")
+        assertEquals("events/hour", units["osaODI"])
+        assertEquals("events/hour", units["odi"])
+        assertEquals("fraction", units["coverageFraction"])
+        assertEquals("s", units["durationSec"])
+        assertEquals("fraction", units["efficiency"])
+        assertEquals("degC", units["skinTempC"])
+    }
+
+    // MARK: - The `units` block's own completeness claim
+    //
+    // This walks the emitted JSON of a FULLY POPULATED export and demands that every numeric leaf either
+    // has a unit or is an explicitly listed count / identifier.
+
+    /** Keys whose numeric value expresses no physical quantity, so a unit would be an invention (upstream's list, verbatim). */
+    private val unitlessNumericKeys = setOf(
+        // Identifiers and versions.
+        "schemaVersion", "channel", "firstOpcode", "lastOpcode", "syncAckFlag",
+        // Plain counts of rows/pages/epochs — dimensionless by construction.
+        "stagedSleepSegments", "mergedRecordCount", "historySampleCount",
+        "page4CCount", "page47Count", "page4DCount", "sportSampleCount", "endMarkerCount",
+        "recordsAtStart", "recordsAtEnd", "recordsAdded",
+        "validWindows", "expectedSamples", "observedSamples",
+        // Archive-vs-evidence coverage: plain counts of epochs, and one duration that DOES carry a unit
+        // (`longestMissingRunSeconds` → `units["seconds"]` covers the suffix form).
+        "recordCount", "archiveRecordCount", "evidenceRecordCount", "missingFromEvidenceCount",
+        "longestMissingRunSeconds",
+        // `samples[].value`'s unit is per-ROW: it is `units[kind]` for that row's `kind`.
+        "value",
+    )
+
+    // MARK: - The epoch-archive section
+
+    /** The export must carry the record set staging actually ran on, not only the per-drain blobs. */
+    @Test
+    fun epochArchiveSectionCarriesTheRecordsAndItsOwnCoverage() {
+        val archive = EpochArchiveRow(
+            ringID = "ring-1", recordsBase64 = "AQID", recordCount = 380, firstEpoch = t0, lastEpoch = t1,
+            coverage = ArchiveEvidenceCoverage.Report(
+                archiveRecordCount = 380, evidenceRecordCount = 367,
+                missingFromEvidence = (1L..13L).toList(), longestMissingRunSeconds = 1950,
+            ),
+        )
+        val obj = parsed(ExportEngine.toJSON(samples = emptyList(), sleep = emptyList(), daily = emptyList(), zone = zone, now = t0, epochArchives = listOf(archive)))
+        val row = obj["epochArchive"]?.asObjectList()?.firstOrNull() ?: fail("epochArchive section missing")
+        assertEquals("ring-1", row.string("ringID"))
+        assertEquals("AQID", row.string("recordsBase64"))
+        assertEquals(380L, row.long("recordCount"))
+        val cov = row.obj("evidenceBlobCoverage") ?: fail("coverage missing — the section without it is just another blob")
+        assertEquals(13L, cov.long("missingFromEvidenceCount"))
+        assertEquals(1950L, cov.long("longestMissingRunSeconds"))
+        assertEquals(ReplayJson.Bool(false), cov["isComplete"])
+        val provenance = stringMap(obj.obj("provenance")) ?: fail("provenance block missing")
+        assertEquals("measured", provenance["epochArchive"])
+        assertEquals("diagnostic", provenance["epochArchive.evidenceBlobCoverage"])
+    }
+
+    /** Absent by default: an export with no archive must not gain an empty section. */
+    @Test
+    fun epochArchiveSectionIsOmittedWhenThereIsNoArchive() {
+        val obj = json()
+        assertNull(obj["epochArchive"])
+        assertNull(obj.obj("provenance")?.get("epochArchive"))
+    }
+
+    @Test
+    fun everyNumericLeafInTheJSONHasAUnitOrIsAnExplicitCount() {
+        val coverage = ExportCoverage.assess(sampleTimes = (0L until 5L).map { plus(t0, it * 150) }, from = t0, to = plus(t0, 3_000))
+        val osa = OSARow(avgSpO2 = 95.4, minSpO2 = 88.0, timeBelow90Sec = 312.5, odi = 4.25, validWindows = 96)
+        val obj = parsed(
+            ExportEngine.toJSON(
+                samples = listOf(sampleRow), sleep = listOf(sleepRow),
+                daily = listOf(DailyRow(day = night, steps = 8_000)),
+                stepSamples = listOf(StepSampleRow(start = t0, end = t1, delta = 123)),
+                naps = listOf(NapRow(start = t0, end = t1, asleepMin = 30, isLongNap = false)),
+                daytimeTemperatures = listOf(DaytimeTemperatureRow(time = t0, celsius = 34.2)),
+                historySyncEvidence = listOf(evidenceRow), zone = zone, now = t0, metadata = metadata,
+                sleepSessions = listOf(session(hypnogram = stagedNight, osa = osa, coverage = coverage, edgeProvenance = stoppedAtWakeEdge)),
+            ),
+        )
+
+        val units = stringMap(obj.obj("units")) ?: fail("units block missing")
+        val numericKeys = mutableSetOf<String>()
+        collectNumericKeys(obj, numericKeys)
+        // The walk must actually have found the interesting fields, or a silent shape change would make
+        // this pass by visiting nothing.
+        for (expected in listOf("odi", "durationSec", "efficiency", "coverageFraction", "delta")) {
+            assertTrue(expected in numericKeys, "the walk never reached '$expected' — fixture no longer populated?")
+        }
+        for (key in numericKeys.sorted()) {
+            assertTrue(
+                units[key] != null || key in unitlessNumericKeys,
+                "'$key' is emitted as a number with no entry in `units` and is not in this test's unitless allow-list. Give it a " +
+                    "unit in ExportEngine.units, or — if it is genuinely a plain count or an identifier — add it to " +
+                    "`unitlessNumericKeys` on purpose.",
+            )
+        }
+    }
+
+    /** Every key whose value is a number, EXCLUDING booleans (upstream's `isNumber`). */
+    private fun collectNumericKeys(value: ReplayJson.Value?, keys: MutableSet<String>) {
+        val obj = value?.asObject()
+        if (obj != null) {
+            for (key in obj.keys) {
+                val child = obj[key]
+                if (ExportJsonReader.isNumber(child)) keys += key
+                collectNumericKeys(child, keys)
+            }
+        } else {
+            value?.asArray()?.forEach { collectNumericKeys(it, keys) }
+        }
+    }
+
+    @Test
+    fun notesStateTheHonestCaveats() {
+        val notes = stringMap(json().obj("notes")) ?: fail("notes block missing")
+        // Each of these is a claim we would otherwise be making silently.
+        assertTrue(notes["hrvSDNN"]?.contains("RMSSD") == true)
+        assertTrue(notes["hrvSDNN"]?.contains("BulkSleep.swift:107") == true, "the RMSSD note must cite its source")
+        assertTrue(notes["sleepStages"]?.contains("ESTIMATE") == true)
+        assertTrue(notes["sleepStages"]?.contains("APPROXIMATION, NOT GROUND TRUTH") == true)
+        assertTrue(notes["osa"]?.contains("±1%") == true)
+        assertTrue(notes["osa"]?.contains("EXPERIMENTAL") == true)
+        assertTrue(notes["skinTemperature"]?.contains("back-filled") == true)
+        assertTrue(notes["coverage"]?.contains("not what the ring recorded") == true)
+    }
+
+    // MARK: - The honesty blocks reach BOTH formats
+    //
+    // CSV is the default export format. It used to carry no provenance, units or notes, so the file most
+    // people hand to a clinician said nothing about which numbers are estimates.
+
+    private fun csvTable(csv: String, expectedHeader: List<String>): Map<String, String> {
+        val records = parseCSV(csv)
+        assertEquals(expectedHeader, records.firstOrNull() ?: emptyList<String>())
+        val out = mutableMapOf<String, String>()
+        for (record in records.drop(1)) if (record.size == 2) out[record[0]] = record[1]
+        assertEquals(records.size - 1, out.size, "duplicate or malformed rows in $expectedHeader")
+        return out
+    }
+
+    @Test
+    fun provenanceCSVClassifiesExactlyWhatTheJSONProvenanceDoes() {
+        for (includesSessions in listOf(true, false)) {
+            val table = csvTable(ExportEngine.provenanceCSV(includesSleepSessions = includesSessions), listOf("section", "provenance"))
+            val obj = parsed(
+                ExportEngine.toJSON(
+                    samples = listOf(sampleRow), sleep = listOf(sleepRow), daily = emptyList(), zone = zone, now = t0,
+                    sleepSessions = if (includesSessions) listOf(session(hypnogram = stagedNight)) else emptyList(),
+                ),
+            )
+            val json = stringMap(obj.obj("provenance")) ?: fail("provenance block missing")
+            assertEquals(json, table, "the CSV and JSON provenance must come from one map, not two")
+        }
+    }
+
+    @Test
+    fun unitsAndNotesCSVMatchTheirJSONBlocks() {
+        val obj = json()
+        assertEquals(stringMap(obj.obj("units")), csvTable(ExportEngine.unitsCSV(), listOf("field", "unit")))
+        assertEquals(stringMap(obj.obj("notes")), csvTable(ExportEngine.notesCSV(), listOf("topic", "note")))
+    }
+
+    /** The caveats a clinician reading the file has to meet, in the format they are most likely to open. */
+    @Test
+    fun notesCSVCarriesTheCaveatsThatUsedToBeJSONOnly() {
+        val notes = ExportEngine.notesCSV()
+        for (phrase in listOf("ON-DEVICE ESTIMATE", "APPROXIMATION, NOT GROUND TRUTH", "EXPERIMENTAL", "±1%", "RMSSD", "not what the ring recorded")) {
+            assertTrue(notes.contains(phrase), "the CSV notes section must state: $phrase")
+        }
+    }
+
+    /** Free text with commas and quotes in it is exactly what shifts a CSV row silently. */
+    @Test
+    fun notesCSVStaysWellFormedDespiteCommasInEveryNote() {
+        for (record in parseCSV(ExportEngine.notesCSV()).drop(1)) assertEquals(2, record.size, "a note leaked into extra columns: $record")
+    }
+
+    @Test
+    fun coverageNoteNamesLocalRetentionAsACause() {
+        // A night older than the retention window has had its raw samples deleted by local housekeeping;
+        // the export omits coverage there, and the note has to say so.
+        val note = json().obj("notes")?.string("coverage") ?: ""
+        assertTrue(note.contains("retention"), "coverage note must name local retention")
+        assertTrue(note.contains("EMPTY"), "coverage note must say the fields are left empty")
+    }
+
+    /** The ring block is a snapshot of the LAST connected ring; multi-ring is a shared timeline by design. */
+    @Test
+    fun ringIdentityNoteRefusesToClaimPerNightRingProvenance() {
+        val note = json().obj("notes")?.string("ringIdentity") ?: ""
+        assertTrue(note.contains("LAST RING THIS APP CONNECTED TO"))
+        assertTrue(note.contains("historySyncEvidence[].ringID"), "the note must point at the only per-capture ring attribution in the file")
+    }
+
+    @Test
+    fun hypnogramNoteStatesTheRowsArePartitioned() {
+        val note = json().obj("notes")?.string("hypnogram") ?: ""
+        assertTrue(note.contains("PARTITION"))
+        assertTrue(note.contains("inBedStart/inBedEnd"), "the note must point at where the in-bed window actually lives")
+    }
+
+    // MARK: - sessionID
+
+    @Test
+    fun sessionIDIsStableSortableAndMatchesTheNightLabel() {
+        val id = ExportEngine.sessionID(night, zone)
+        assertEquals("night-${localDayLabel(night)}", id)
+        assertEquals(ExportEngine.sessionID(night, zone), id, "must be stable")
+        assertTrue(id < ExportEngine.sessionID(plus(night, 86_400), zone), "ids must sort chronologically as plain strings")
     }
 
     // MARK: - Helpers

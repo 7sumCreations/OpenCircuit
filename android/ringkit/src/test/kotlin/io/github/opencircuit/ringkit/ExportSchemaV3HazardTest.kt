@@ -239,6 +239,84 @@ class ExportSchemaV3HazardTest {
         }
     }
 
+    private fun archives() = listOf(
+        ExportEngine.EpochArchiveRow(
+            "ring-1", "AQID", 380, FoundationDate.unix(1_700_000_000.0005), null,
+            ArchiveEvidenceCoverage.Report(380, 367, (1L..13L).toList(), 1950),
+        ),
+        ExportEngine.EpochArchiveRow("", "", Long.MAX_VALUE, null, FoundationDate.unix(1_700_000_000.9995), ArchiveEvidenceCoverage.Report(0, 0, emptyList(), 0)),
+    )
+
+    @Test
+    fun theEpochArchiveSectionPrintsUpstreamsBytesWithNullEpochsAndSwiftInts() {
+        // Measured (upstream's toJSON, Asia/Kolkata process zone): the archive's epochs print UTC with the
+        // millisecond carry whatever the zone, an absent epoch is an explicit null, Int.max prints whole,
+        // and an empty archive list writes no section at all.
+        val text = ExportEngine.toJSON(emptyList(), emptyList(), emptyList(), zone = kolkata, now = t0, epochArchives = archives()) ?: fail("toJSON null")
+        val start = text.indexOf("  \"epochArchive\" : [")
+        assertTrue(start >= 0, "no epochArchive section")
+        val section = text.substring(start, text.indexOf("\n  ],\n", start) + 5)
+        val expected = listOf(
+            "  \"epochArchive\" : [",
+            "    {",
+            "      \"evidenceBlobCoverage\" : {",
+            "        \"archiveRecordCount\" : 380,",
+            "        \"evidenceRecordCount\" : 367,",
+            "        \"isComplete\" : false,",
+            "        \"longestMissingRunSeconds\" : 1950,",
+            "        \"missingFromEvidenceCount\" : 13",
+            "      },",
+            "      \"firstEpoch\" : \"2023-11-14T22:13:20.001Z\",",
+            "      \"lastEpoch\" : null,",
+            "      \"recordCount\" : 380,",
+            "      \"recordsBase64\" : \"AQID\",",
+            "      \"ringID\" : \"ring-1\"",
+            "    },",
+            "    {",
+            "      \"evidenceBlobCoverage\" : {",
+            "        \"archiveRecordCount\" : 0,",
+            "        \"evidenceRecordCount\" : 0,",
+            "        \"isComplete\" : true,",
+            "        \"longestMissingRunSeconds\" : 0,",
+            "        \"missingFromEvidenceCount\" : 0",
+            "      },",
+            "      \"firstEpoch\" : null,",
+            "      \"lastEpoch\" : \"2023-11-14T22:13:21.000Z\",",
+            "      \"recordCount\" : 9223372036854775807,",
+            "      \"recordsBase64\" : \"\",",
+            "      \"ringID\" : \"\"",
+            "    }",
+            "  ],",
+        ).joinToString("\n")
+        assertEquals(expected, section)
+        val none = ExportEngine.toJSON(emptyList(), emptyList(), emptyList(), zone = kolkata, now = t0, epochArchives = emptyList()) ?: fail("toJSON null")
+        assertFalse(none.contains("epochArchive"))
+    }
+
+    @Test
+    fun theArchiveIsClassifiedOnlyWhenWrittenAndTheCsvProvenanceNeverListsIt() {
+        // Measured: an archive alone adds `epochArchive` (measured) and `epochArchive.evidenceBlobCoverage`
+        // (diagnostic) to the seven base keys (9); with sessions too, 16. Upstream's provenanceCSV takes only
+        // `includesSleepSessions`, so its CSV never lists the archive (there is no archive CSV either).
+        fun provenance(sessions: List<SleepSessionRow>, archive: Boolean): Map<String, String?> {
+            val text = ExportEngine.toJSON(
+                emptyList(), emptyList(), emptyList(), zone = kolkata, now = t0, sleepSessions = sessions,
+                epochArchives = if (archive) archives() else emptyList(),
+            ) ?: fail("toJSON null")
+            val p = ExportJsonReader.root(text).obj("provenance") ?: fail("no provenance")
+            return p.keys.associateWith { p.string(it) }
+        }
+        val archiveOnly = provenance(emptyList(), archive = true)
+        assertEquals(9, archiveOnly.size)
+        assertEquals("measured", archiveOnly["epochArchive"])
+        assertEquals("diagnostic", archiveOnly["epochArchive.evidenceBlobCoverage"])
+        assertEquals(16, provenance(listOf(session("k")), archive = true).size)
+        assertFalse(provenance(emptyList(), archive = false).keys.any { it.startsWith("epochArchive") })
+        val csv = parseCSV(ExportEngine.provenanceCSV(includesSleepSessions = true)).drop(1).map { it[0] }
+        assertEquals(14, csv.size)
+        assertFalse(csv.any { it.startsWith("epochArchive") })
+    }
+
     @Test
     fun theEdgeRowKeepsBothConstructorsAndSwiftsEquality() {
         // The E3 row is consumed unchanged: its absence-is-not-zero gaps compare as Swift's optionals.
