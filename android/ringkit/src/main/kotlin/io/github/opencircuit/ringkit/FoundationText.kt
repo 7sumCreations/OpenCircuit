@@ -95,7 +95,11 @@ internal object FoundationText {
      * instant that came from a `Date` this is that `Date`'s own double again.
      */
     fun referenceSeconds(t: Instant): Double =
-        BigDecimal.valueOf(t.epochSecond - REFERENCE_UNIX_SECONDS).add(BigDecimal.valueOf(t.nano.toLong(), 9)).toPlainString().toDouble()
+        if (t.nano == 0) {
+            (t.epochSecond - REFERENCE_UNIX_SECONDS).toDouble() // whole seconds: `Long.toDouble` rounds to nearest, as the general path
+        } else {
+            BigDecimal.valueOf(t.epochSecond - REFERENCE_UNIX_SECONDS).add(BigDecimal.valueOf(t.nano.toLong(), 9)).toPlainString().toDouble()
+        }
 
     /**
      * The millisecond Foundation's formatters print for [t] — measured: `floor((d + 978307200) * 1000

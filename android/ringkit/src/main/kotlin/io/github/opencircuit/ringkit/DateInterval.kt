@@ -54,10 +54,22 @@ internal fun Duration.wholeSecondsTowardZero(): Long = if (isNegative && nano > 
 internal fun secondsBetween(from: Instant, to: Instant): Double = SleepStaging.seconds(Duration.between(from, to))
 
 /**
+ * `to - from` as Swift computes `to.timeIntervalSince(from)` on two `Date`s: the difference of their
+ * seconds-since-2001 doubles ([FoundationText.referenceSeconds]), not the exact duration. The two differ
+ * in the last digits for instants between whole seconds (measured: a gap from …000.580 to …1000.913 is
+ * `1000.3330001831055` upstream, not 1000.333). Use it where the number reaches the export, which
+ * prints it with 17 significant digits; [secondsBetween] stays the exact duration everywhere else.
+ */
+internal fun dateSecondsBetween(from: Instant, to: Instant): Double =
+    FoundationText.referenceSeconds(to) - FoundationText.referenceSeconds(from)
+
+/**
  * [t] moved by [seconds] — Swift's `t.addingTimeInterval(seconds)` — to the nearest nanosecond; null
- * for a NaN offset (a Swift `Date` built from NaN compares false with everything). A Swift `Date`
- * goes on to infinity where an `Instant` cannot: a result past either end of `Instant`'s range
- * saturates at [Instant.MAX] or [Instant.MIN] instead of throwing.
+ * for a NaN offset, which no `Instant` can hold. Callers decide what a NaN bound means: a Swift `Date`
+ * built from NaN compares false under `<`, `>` and `==` but TRUE under `<=` and `>=` (Swift's defaults
+ * `!(b < a)`, measured), so a NaN window bound admits everything there. A Swift `Date` goes on to
+ * infinity where an `Instant` cannot: a result past either end of `Instant`'s range saturates at
+ * [Instant.MAX] or [Instant.MIN] instead of throwing.
  */
 internal fun addingSeconds(t: Instant, seconds: Double): Instant? {
     if (seconds.isNaN()) return null

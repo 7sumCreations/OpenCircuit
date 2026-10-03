@@ -14,7 +14,9 @@ package io.github.opencircuit.ringkit
 //
 // Shape notes: cadence, minimum gap and gap lengths are `Double` seconds (Swift `TimeInterval`), so a
 // NaN or infinite parameter behaves as upstream's comparisons do. The expected count is 64-bit and
-// saturates where upstream traps (a cadence so small that `window / cadence` leaves 64 bits).
+// saturates where upstream traps (a cadence so small that `window / cadence` leaves 64 bits). Every
+// span and gap is `timeIntervalSince` as Swift computes it — the difference of the two dates' doubles
+// (`dateSecondsBetween`) — because the export prints these seconds with 17 significant digits.
 
 import java.time.Instant
 import java.util.Collections
@@ -24,7 +26,7 @@ object ExportCoverage {
 
     /** A stretch of the window with no stored sample. */
     data class Gap(val start: Instant, val end: Instant) {
-        val seconds: Double get() = secondsBetween(start, end)
+        val seconds: Double get() = dateSecondsBetween(start, end)
     }
 
     /** What we hold over `[windowStart, windowEnd]`. Its gap list is copied in and read-only out. */
@@ -70,7 +72,7 @@ object ExportCoverage {
         cadence: Double = BulkRecord.EPOCH_SECONDS.toDouble(),
         minGap: Double = 2.0 * BulkRecord.EPOCH_SECONDS,
     ): Assessment {
-        val span = secondsBetween(from, to)
+        val span = dateSecondsBetween(from, to)
         if (!(span > 0 && cadence > 0)) {
             return Assessment(from, to, expectedSamples = 0, observedSamples = 0, coverageFraction = 0.0, gaps = emptyList(), longestGapSeconds = 0.0)
         }
@@ -86,10 +88,10 @@ object ExportCoverage {
         val gaps = ArrayList<Gap>()
         var cursor = from
         for (t in inWindow) {
-            if (secondsBetween(cursor, t) > minGap) gaps += Gap(cursor, t)
+            if (dateSecondsBetween(cursor, t) > minGap) gaps += Gap(cursor, t)
             cursor = t
         }
-        if (secondsBetween(cursor, to) > minGap) gaps += Gap(cursor, to)
+        if (dateSecondsBetween(cursor, to) > minGap) gaps += Gap(cursor, to)
 
         val fraction = if (expected > 0) swiftMin(1.0, swiftMax(0.0, inWindow.size.toDouble() / expected.toDouble())) else 0.0
         return Assessment(

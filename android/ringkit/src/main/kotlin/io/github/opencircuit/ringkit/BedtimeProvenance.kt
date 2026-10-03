@@ -81,7 +81,7 @@ object BedtimeProvenance {
         }
         // A measurement at or after the edge is not "before" it: no usable evidence, never a negative gap.
         if (!lastMeasurementBefore.isBefore(inBedStart)) return Verdict.Unknown
-        val gap = secondsBetween(lastMeasurementBefore, inBedStart)
+        val gap = dateSecondsBetween(lastMeasurementBefore, inBedStart) // Swift's `timeIntervalSince`: the export prints it
         return if (gap <= CONTINUOUS_TOLERANCE_SECONDS) Verdict.Witnessed else Verdict.ResumedAfterGap(gap)
     }
 

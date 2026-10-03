@@ -79,6 +79,25 @@ class ExportCoverageHazardTest {
         assertEquals(1e16, far.longestGapSeconds)
     }
 
+    /**
+     * Upstream's `end.timeIntervalSince(start)` subtracts the two dates' doubles (seconds since 2001),
+     * so a millisecond-stamped gap is not the exact duration in its last digits — and the export
+     * prints both numbers with 17 significant digits. Measured at the pin: `1000.3330001831055`.
+     */
+    @Test
+    fun gapSecondsAreTheDifferenceOfTheTwoDateDoubles() {
+        val a = ExportCoverage.assess(
+            listOf(FoundationDate.unix(1_755_000_000.580), FoundationDate.unix(1_755_001_000.913)),
+            FoundationDate.unix(1_755_000_000.0), FoundationDate.unix(1_755_001_000.913),
+        )
+        assertEquals(1, a.gaps.size)
+        assertEquals(4_652_010_237_941_776_384L, a.gaps[0].seconds.toRawBits(), "gap: ${a.gaps[0].seconds}")
+        assertEquals(4_652_010_237_941_776_384L, a.longestGapSeconds.toRawBits(), "longest: ${a.longestGapSeconds}")
+        assertEquals(1000.3330001831055, a.longestGapSeconds)
+        assertEquals(6L, a.expectedSamples)
+        assertEquals(2, a.observedSamples)
+    }
+
     @Test
     fun anExpectedCountBeyondSixtyFourBitsSaturatesInsteadOfTrapping() {
         // Upstream TRAPS here ("Double value cannot be converted to Int … greater than Int.max",

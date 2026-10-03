@@ -81,7 +81,7 @@ object WakeProvenance {
         val next = firstMeasurementAfter ?: return Verdict.Unknown
         // A measurement at or before the edge is not "after" it: no usable evidence, never a negative gap.
         if (!next.isAfter(inBedEnd)) return Verdict.Unknown
-        val gap = secondsBetween(inBedEnd, next)
+        val gap = dateSecondsBetween(inBedEnd, next) // Swift's `timeIntervalSince`: the export prints it
         return if (gap <= CONTINUOUS_TOLERANCE_SECONDS) Verdict.Witnessed else Verdict.StoppedThenResumed(gap)
     }
 
@@ -124,11 +124,11 @@ object WakeProvenance {
 
         var previous = inBedEnd
         for (m in ordered) {
-            val gap = secondsBetween(previous, m)
+            val gap = dateSecondsBetween(previous, m)
             if (gap > CONTINUOUS_TOLERANCE_SECONDS) return Stoppage(Verdict.StoppedThenResumed(gap), previous)
             previous = m
             // The run carried on well past the edge: the night ended while the ring was still measuring.
-            if (secondsBetween(inBedEnd, previous) > resumeRunLimit) return Stoppage(Verdict.Witnessed, null)
+            if (dateSecondsBetween(inBedEnd, previous) > resumeRunLimit) return Stoppage(Verdict.Witnessed, null)
         }
         // The run reached the end of what we hold without breaking — unchanged from the single step.
         return Stoppage(Verdict.Witnessed, null)
