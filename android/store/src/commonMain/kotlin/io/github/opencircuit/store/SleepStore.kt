@@ -3,6 +3,7 @@ package io.github.opencircuit.store
 import androidx.room3.withReadTransaction
 import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.BulkRecord
+import io.github.opencircuit.ringkit.MeasuredCoverage
 import io.github.opencircuit.ringkit.NapDetection
 import io.github.opencircuit.ringkit.OSASpO2
 import io.github.opencircuit.ringkit.SleepEdit
@@ -10,6 +11,7 @@ import io.github.opencircuit.ringkit.SleepHypnogramCodec
 import io.github.opencircuit.ringkit.SleepNightKey
 import io.github.opencircuit.ringkit.SleepPersistOutcome
 import io.github.opencircuit.ringkit.SleepProvenanceBreakdown
+import io.github.opencircuit.ringkit.SleepProvenanceRederivation
 import io.github.opencircuit.ringkit.SleepScore
 import io.github.opencircuit.ringkit.SleepScoreHeal
 import io.github.opencircuit.ringkit.SleepSegment
@@ -41,9 +43,10 @@ import kotlin.coroutines.cancellation.CancellationException
 // of the staging that replaces it.
 //
 // The launch-time repairs `backfillSleepProvenance` (:1926-1952) and `healWithheldSleepScores`
-// (:2405-2446).
+// (:2405-2446), and the drain's `rederiveEditedNightProvenance` (:2293-2365), which queues the
+// night's Health rewrite.
 //
-// Differences, each deliberate (PORTING.md D-160 to D-175):
+// Differences, each deliberate (PORTING.md D-160 to D-176):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
 //   stored millisecond before it is compared. Upstream reads the wall clock and `Calendar.current`.
 // - Each save is one transaction: a failed save leaves the stored night exactly as it was, where
@@ -79,6 +82,10 @@ import kotlin.coroutines.cancellation.CancellationException
 //   that the bytes are non-empty, so its backfill stamps such a night "measured only" with zero
 //   measured sleep. A failed repair write is thrown, nothing changed; upstream's backfill swallows it
 //   and still returns its count.
+// - The re-derivation writes its nights and the queued Health rewrites in one transaction, and fails
+//   with nothing changed when the queue cannot be read (D-176); upstream saves the nights, then writes
+//   the queue to `UserDefaults`, reading an unreadable one as empty and writing over it. Its changed
+//   nights come back oldest first.
 
 /**
  * The sleep half of the on-device store, over the same [StoreDatabase] as [LocalStore]. Every write
@@ -96,6 +103,8 @@ class SleepStore internal constructor(
     private val overlays = NightOverlays(kvDao)
 
     private val nightRekey = NightRekey(sleepDao, kvDao)
+
+    private val pending = PendingSleepReconciles(kvDao)
 
     /**
      * Stores a staged night under the start of [night]'s day in [zone], or deliberately keeps the
@@ -380,6 +389,42 @@ class SleepStore internal constructor(
                 healed += row.night
             }
             healed.sortedDescending()
+        }
+    }
+
+    /**
+     * Re-labels the proven holes of every edited night that [coverage] — the raw coverage of the whole
+     * retained record archive — now has records under ([SleepProvenanceRederivation.upgraded]), and
+     * queues that night's Health rewrite: its current bedtime, onset and wake with the upgraded
+     * timeline, replacing any item queued for the same day in [zone]. Only the timeline, its six
+     * provenance columns and the update time change; the edited window, minutes, efficiency and score
+     * stay as saved. A night with no segments, or no hole the archive has filled, is left as stored.
+     * Returns the changed nights, oldest first, each with the asleep seconds that left the asserted
+     * bucket; none, reading nothing, when [coverage] is empty.
+     *
+     * The nights and the queue are one transaction. Throws, changing nothing, when a read or write
+     * fails, and [SleepStoreException.UnreadablePendingReconcile] when a night changed but the queue is
+     * stored in a form this build cannot read — the queue is never written over (D-176).
+     */
+    suspend fun rederiveEditedNightProvenance(coverage: MeasuredCoverage, now: Instant, zone: ZoneId): List<RederivedNight> {
+        if (coverage.isEmpty) return emptyList()
+        val at = now.toStoredMillis()
+        return db.withWriteTransaction {
+            val changed = ArrayList<RederivedNight>()
+            for (row in sleepDao.allSummaries()) {
+                if (!row.isManuallyEdited) continue
+                val stored = decodedTimeline(row.hypnogramData)
+                if (stored.isEmpty()) continue
+                val upgraded = SleepProvenanceRederivation.upgraded(stored, coverage) ?: continue
+                val shown = value(row)
+                sleepDao.updateSummary(
+                    row.copy(hypnogramData = SleepHypnogramCodec.encode(upgraded), updatedAt = at)
+                        .withEditProvenance(SleepProvenanceBreakdown(upgraded)),
+                )
+                pending.upsert(PendingSleepReconcile(row.night, shown.currentInBedStart, shown.currentOnset, shown.currentWake, upgraded), zone, at)
+                changed += RederivedNight(row.night, SleepProvenanceRederivation.upgradedAsleepSeconds(stored, upgraded))
+            }
+            changed
         }
     }
 

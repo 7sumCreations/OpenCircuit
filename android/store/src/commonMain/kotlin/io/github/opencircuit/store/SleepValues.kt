@@ -218,6 +218,13 @@ internal fun clampWindowOf(recorded: SleepEdit.RecordedWindow, widened: SleepEdi
  */
 data class NightRekeyOutcome(val examined: Int, val moved: Int, val skipped: Int)
 
+/**
+ * One edited night whose timeline labels moved toward more measurement (upstream's
+ * `(night, upgradedAsleepSeconds)`): the night's key, and the asleep seconds that left the asserted
+ * bucket.
+ */
+data class RederivedNight(val night: Instant, val upgradedAsleepSeconds: Double)
+
 /** Why a sleep write was refused (upstream `StoreError`). Nothing was written when one is thrown. */
 sealed class SleepStoreException(message: String, cause: Throwable? = null) : Exception(message, cause) {
     /**
