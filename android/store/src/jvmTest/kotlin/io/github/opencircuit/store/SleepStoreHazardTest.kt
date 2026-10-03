@@ -156,7 +156,7 @@ class SleepStoreHazardTest {
                 )
             }
 
-            assertEquals(listOf(before), real.allSummaries().map { it.toStoredNight() })
+            assertEquals(listOf(before), real.allSummaries().map { it.toStoredNight(editedOnset = null) })
         }
     }
 

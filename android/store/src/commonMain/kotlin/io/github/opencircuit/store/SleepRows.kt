@@ -2,6 +2,7 @@ package io.github.opencircuit.store
 
 import io.github.opencircuit.ringkit.SleepHypnogramCodec
 import io.github.opencircuit.ringkit.SleepSegment
+import java.time.Instant
 import java.util.Collections
 
 // The one builder of StoredNight from a stored row. A timeline is decoded with upstream's codec,
@@ -11,7 +12,8 @@ import java.util.Collections
 // ArrayList). Code that needs a row's raw bytes reads the entity and compares them with
 // `contentEquals`, never `==` (a `ByteArray`'s `==` is identity).
 
-internal fun StoredSleepSummaryEntity.toStoredNight() = StoredNight(
+/** This row as a value; [editedOnset] is the onset saved with the row's edit (null for an unedited row). */
+internal fun StoredSleepSummaryEntity.toStoredNight(editedOnset: Instant?) = StoredNight(
     night = night, asleepMin = asleepMin, deepMin = deepMin, lightMin = lightMin, remMin = remMin, awakeMin = awakeMin,
     efficiency = efficiency, inBedStart = inBedStart, inBedEnd = inBedEnd, sleepOnset = sleepOnset, sleepWake = sleepWake,
     updatedAt = updatedAt, skinTempC = skinTempC, sleepScore = sleepScore, stressScore = stressScore, feelScore = feelScore,
@@ -24,6 +26,7 @@ internal fun StoredSleepSummaryEntity.toStoredNight() = StoredNight(
     recordedHypnogram = decodedTimeline(recordedHypnogramData), measuredAsleepSeconds = measuredAsleepSeconds,
     assertedAsleepSeconds = assertedAsleepSeconds, coverageFraction = coverageFraction, longestGapSeconds = longestGapSeconds,
     measuredEfficiency = measuredEfficiency, sleepBasis = SleepBasis.fromStored(sleepBasis),
+    editedOnset = editedOnset,
 )
 
 /** The stored timeline's segments; none when the bytes are empty or unreadable. */

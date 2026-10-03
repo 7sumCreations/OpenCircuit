@@ -3,6 +3,8 @@ package io.github.opencircuit.store
 import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SleepStage
+import io.github.opencircuit.ringkit.SleepStaging
+import java.time.Duration
 import java.time.Instant
 
 // What the sleep store takes and hands back. Ported from ios/OpenCircuit/Store/LocalStore.swift
@@ -55,6 +57,10 @@ data class SleepNightExtras(
  * [hypnogram] is the night's current timeline and [recordedHypnogram] the ring's own reading, kept
  * where an edit cannot reach it; a stored timeline this build cannot read reads as no segments, and
  * the rest of the night is still returned. Only the store builds these (its lists are its own copies).
+ *
+ * [editedOnset] is the onset saved with the wearer's edit, read with the row; null when the night is
+ * not edited, or no onset this build can read was saved with the edit. The `current…` edges are
+ * what the night shows: the edited ones once [isManuallyEdited], the recorded ones before.
  */
 @ConsistentCopyVisibility
 data class StoredNight internal constructor(
@@ -99,7 +105,66 @@ data class StoredNight internal constructor(
     val longestGapSeconds: Double,
     val measuredEfficiency: Double,
     val sleepBasis: SleepBasis,
-)
+    val editedOnset: Instant?,
+) {
+    // Upstream's model accessors (LocalStore.swift:281-335). The edit stores one edited end, which is
+    // both the in-bed end and the wake.
+
+    /** The bedtime the night shows: the edited one once the wearer edited it, else the recorded one. */
+    val currentInBedStart: Instant get() = if (isManuallyEdited) editedInBedStart else inBedStart
+
+    /** The in-bed end the night shows: the edited end once edited, else the recorded one. */
+    val currentInBedEnd: Instant get() = if (isManuallyEdited) editedInBedEnd else inBedEnd
+
+    /**
+     * The onset the night shows. Once edited: the onset saved with the edit, or — when none was saved
+     * or it cannot be read — the recorded onset clamped into the edited window (the edited bedtime
+     * when no onset was recorded), never the bedtime itself, which would read as falling asleep at once.
+     */
+    val currentOnset: Instant
+        get() {
+            if (!isManuallyEdited) return sleepOnset
+            editedOnset?.let { return it }
+            val recorded = if (sleepOnset > SleepEdit.DISTANT_PAST) sleepOnset else editedInBedStart
+            return minOf(maxOf(recorded, editedInBedStart), editedInBedEnd)
+        }
+
+    /** The wake the night shows: the edited end once edited, else the recorded wake. */
+    val currentWake: Instant get() = if (isManuallyEdited) editedInBedEnd else sleepWake
+
+    /** The window the ring recorded, as the save stored it; an edit never moves it. */
+    val recordedWindow: SleepEdit.RecordedWindow get() = SleepEdit.RecordedWindow(inBedStart, inBedEnd, sleepOnset, sleepWake)
+
+    /**
+     * The recorded window an edit is clamped within: [recordedWindow] widened outward by any fuller
+     * staging kept beside an edited or a fuller stored night since. Only the editor anchors on it.
+     */
+    val clampWindow: SleepEdit.RecordedWindow
+        get() = clampWindowOf(
+            recordedWindow,
+            SleepEdit.RecordedWindow(widenedRecordedInBedStart, widenedRecordedInBedEnd, widenedRecordedOnset, widenedRecordedWake),
+        )
+
+    /**
+     * The stored minutes as a staging summary: in bed recovered as asleep / [efficiency] so the shown
+     * efficiency matches, or asleep + awake when the efficiency is not positive. An in-bed time past
+     * what a `Duration` of nanoseconds holds (~292 years, from a vanishing efficiency) is capped there.
+     */
+    val asSummary: SleepStaging.Summary
+        get() {
+            val light = Duration.ofMinutes(lightMin.toLong())
+            val deep = Duration.ofMinutes(deepMin.toLong())
+            val rem = Duration.ofMinutes(remMin.toLong())
+            val awake = Duration.ofMinutes(awakeMin.toLong())
+            val asleep = light.plus(deep).plus(rem)
+            val inBed = if (efficiency > 0) Duration.ofNanos(Math.round(asleep.seconds / efficiency * 1e9)) else asleep.plus(awake)
+            return SleepStaging.Summary(inBed = inBed, awake = awake, light = light, deep = deep, rem = rem)
+        }
+}
+
+/** [recorded] widened outward by [widened] (upstream `sleepEditClampWindow`), or [recorded] when that widens nothing. */
+internal fun clampWindowOf(recorded: SleepEdit.RecordedWindow, widened: SleepEdit.RecordedWindow): SleepEdit.RecordedWindow =
+    SleepEdit.widenRecorded(stored = recorded, incoming = widened) ?: recorded
 
 /** Why a sleep write was refused (upstream `StoreError`). Nothing was written when one is thrown. */
 sealed class SleepStoreException(message: String) : Exception(message) {

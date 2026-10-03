@@ -47,7 +47,7 @@ class SleepValuesTest {
             coverageFraction = 0.5, longestGapSeconds = 3_600.0, measuredEfficiency = 0.9, sleepBasis = "assertedTagged",
         )
 
-        val night = row.toStoredNight()
+        val night = row.toStoredNight(editedOnset = null)
 
         assertEquals(
             StoredNight(
@@ -70,11 +70,12 @@ class SleepValuesTest {
                 ),
                 measuredAsleepSeconds = 3_600.0, assertedAsleepSeconds = 3_600.0, coverageFraction = 0.5,
                 longestGapSeconds = 3_600.0, measuredEfficiency = 0.9, sleepBasis = SleepBasis.ASSERTED_TAGGED,
+                editedOnset = null,
             ),
             night,
         )
         // Two reads of the same row are equal values (a byte array would make them differ).
-        assertEquals(night, row.copy().toStoredNight())
+        assertEquals(night, row.copy().toStoredNight(editedOnset = null))
     }
 
     @Test
@@ -84,7 +85,7 @@ class SleepValuesTest {
             recordedHypnogramData = ByteArray(0), sleepBasis = "measuredOnly",
         )
 
-        val night = row.toStoredNight()
+        val night = row.toStoredNight(editedOnset = null)
 
         assertEquals(emptyList(), night.hypnogram)
         assertEquals(emptyList(), night.recordedHypnogram)
@@ -105,7 +106,7 @@ class SleepValuesTest {
         val night = StoredSleepSummaryEntity(
             movementLevels = arrayListOf(1, 2),
             hypnogramData = "[[1750000000,1750003600,2]]".toByteArray(),
-        ).toStoredNight()
+        ).toStoredNight(editedOnset = null)
 
         @Suppress("UNCHECKED_CAST")
         assertFailsWith<UnsupportedOperationException> { (night.movementLevels as MutableList<Int>).add(3) }

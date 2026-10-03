@@ -1,5 +1,6 @@
 package io.github.opencircuit.store
 
+import androidx.room3.withReadTransaction
 import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.BulkRecord
 import io.github.opencircuit.ringkit.SleepEdit
@@ -46,8 +47,13 @@ import java.time.ZoneId
 class SleepStore internal constructor(
     private val db: StoreDatabase,
     private val sleepDao: SleepDao,
+    kvDao: KvDao,
 ) {
-    constructor(db: StoreDatabase) : this(db, db.sleepDao())
+    constructor(db: StoreDatabase) : this(db, db.sleepDao(), db.kvDao())
+
+    internal constructor(db: StoreDatabase, sleepDao: SleepDao) : this(db, sleepDao, db.kvDao())
+
+    private val overlays = NightOverlays(kvDao)
 
     /**
      * Stores a staged night under the start of [night]'s day in [zone], or deliberately keeps the
@@ -116,17 +122,21 @@ class SleepStore internal constructor(
         }
     }
 
+    // Every read of a night reads the onset saved with its edit in the same read transaction.
+
     /** The night stored for the day of [night] in [zone], or null. */
-    suspend fun sleepSummary(night: Instant, zone: ZoneId): StoredNight? = rowFor(night, zone)?.toStoredNight()
+    suspend fun sleepSummary(night: Instant, zone: ZoneId): StoredNight? = db.withReadTransaction { rowFor(night, zone)?.let { value(it) } }
 
     /** The stored night with the latest key, or null when none is stored. */
-    suspend fun latestSleepSummary(): StoredNight? = sleepDao.latestSummary()?.toStoredNight()
+    suspend fun latestSleepSummary(): StoredNight? = db.withReadTransaction { sleepDao.latestSummary()?.let { value(it) } }
 
     /** At most [limit] stored nights, the latest key first. */
-    suspend fun recentSleepSummaries(limit: Int = 40): List<StoredNight> = sleepDao.recentSummaries(limit).map { it.toStoredNight() }
+    suspend fun recentSleepSummaries(limit: Int = 40): List<StoredNight> =
+        db.withReadTransaction { sleepDao.recentSummaries(limit).map { value(it) } }
 
     /** The stored nights keyed `from <= night < to`, oldest first. */
-    suspend fun sleepSummaries(from: Instant, to: Instant): List<StoredNight> = sleepDao.summaries(from, to).map { it.toStoredNight() }
+    suspend fun sleepSummaries(from: Instant, to: Instant): List<StoredNight> =
+        db.withReadTransaction { sleepDao.summaries(from, to).map { value(it) } }
 
     /**
      * The timeline stored for the day of [night] in [zone]; no segments when no night is stored,
@@ -142,7 +152,11 @@ class SleepStore internal constructor(
      * time, the earlier one.
      */
     suspend fun sleepSummaryOverlapping(start: Instant, end: Instant): StoredNight? =
-        overlappingRow(start.toStoredMillis(), end.toStoredMillis())?.toStoredNight()
+        db.withReadTransaction { overlappingRow(start.toStoredMillis(), end.toStoredMillis())?.let { value(it) } }
+
+    /** [row] as a value, with the onset saved with its edit; an unedited row's is not read. */
+    private suspend fun value(row: StoredSleepSummaryEntity): StoredNight =
+        row.toStoredNight(editedOnset = if (row.isManuallyEdited) overlays.onset(row.night) else null)
 
     private suspend fun rowFor(night: Instant, zone: ZoneId): StoredSleepSummaryEntity? =
         sleepDao.summaryAt(startOfDay(night.toStoredMillis(), zone))
