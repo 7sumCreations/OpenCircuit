@@ -39,6 +39,18 @@ internal interface SampleDao {
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start < :before ORDER BY start DESC, id DESC LIMIT 1")
     suspend fun latestSampleBefore(kindRaw: String, before: Instant): StoredSampleEntity?
 
+    /** The oldest sample of one kind strictly after [after] (upstream `earliestSample(kind:after:)`). */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start > :after ORDER BY start, id LIMIT 1")
+    suspend fun earliestSampleAfter(kindRaw: String, after: Instant): StoredSampleEntity?
+
+    /** The oldest sample of one kind (upstream `earliestSample(kind:)`). */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw ORDER BY start, id LIMIT 1")
+    suspend fun earliestSample(kindRaw: String): StoredSampleEntity?
+
+    /** Samples of one kind with `start >= since` and a positive value, oldest first (upstream `recentSamples`). */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start >= :since AND value > 0 ORDER BY start, id")
+    suspend fun recentSamples(kindRaw: String, since: Instant): List<StoredSampleEntity>
+
     /** The newest sample of one kind with `from <= start < to` and `start < before`. */
     @Query(
         "SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start >= :from AND start < :to " +

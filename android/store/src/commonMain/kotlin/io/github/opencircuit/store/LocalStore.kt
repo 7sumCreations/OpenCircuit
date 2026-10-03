@@ -17,7 +17,10 @@ import java.time.temporal.ChronoUnit
 // Port of upstream ios/OpenCircuit/Store/LocalStore.swift (@ b1c2fdd): `IngestPreview` (:878),
 // `storeCursorRows` (:891), `previewIngest` (:899), `loadCursor` (:929), `ingest` (:941-1028),
 // `isPlausible` (:1039), `samples` (:1177), `latestSample(kind:)` (:1192), `upsertCursor` (:3126)
-// and `cumulativeState` (:3136).
+// and `cumulativeState` (:3136); the other sample reads (`latestSample(kind:before:)` :813,
+// `earliestSample` :831 / :842, `recentSamples` :1184); daily steps and step samples
+// (`addDailySteps` :3058, `todaySteps` :3073, `stepSamples` :3100, `latestDaily` :3105,
+// `recentDailies` :3114, `dailies` :3119); daytime temperatures (:1073, :1079).
 //
 // Differences, each deliberate:
 // - `now` and `zone` are parameters. Upstream reads the wall clock and `Calendar.current`; the
@@ -26,6 +29,8 @@ import java.time.temporal.ChronoUnit
 //   is what the store keeps; otherwise a sub-millisecond sample would look newer than its own
 //   stored cursor and be stored again on every re-sync.
 // - A heart rate that is NaN or infinite is dropped as implausible; upstream's `Int(value)` traps.
+// - Step totals are `Long` (Swift's `Int` is 64-bit) and an overflowing total fails the write, as
+//   Swift's `+=` traps; a failed day lookup fails the write (upstream's `try?` inserts a new row).
 
 /**
  * The on-device store over one [StoreDatabase]. Every write is one transaction: it commits whole
@@ -33,9 +38,11 @@ import java.time.temporal.ChronoUnit
  */
 class LocalStore internal constructor(
     private val db: StoreDatabase,
-    private val sampleDao: SampleDao,
+    private val sampleDao: SampleDao = db.sampleDao(),
+    private val dailyDao: DailyDao = db.dailyDao(),
+    private val kvDao: KvDao = db.kvDao(),
 ) {
-    constructor(db: StoreDatabase) : this(db, db.sampleDao())
+    constructor(db: StoreDatabase) : this(db, db.sampleDao(), db.dailyDao(), db.kvDao())
 
     /** What [ingest] would do with a batch, without writing (upstream `IngestPreview`). */
     data class IngestPreview(
@@ -145,6 +152,65 @@ class LocalStore internal constructor(
 
     /** The newest stored sample of [kind], or null (the launch screen's last known heart rate). */
     suspend fun latestSample(kind: MetricKind): QuantitySample? = sampleDao.latestSample(kind.rawValue)?.toSample()
+
+    /** The newest stored sample of [kind] strictly before [before], or null. */
+    suspend fun latestSample(kind: MetricKind, before: Instant): QuantitySample? =
+        sampleDao.latestSampleBefore(kind.rawValue, before)?.toSample()
+
+    /** The oldest stored sample of [kind] strictly after [after], or null. */
+    suspend fun earliestSample(kind: MetricKind, after: Instant): QuantitySample? =
+        sampleDao.earliestSampleAfter(kind.rawValue, after)?.toSample()
+
+    /** The oldest stored sample of [kind], or null when none is kept. */
+    suspend fun earliestSample(kind: MetricKind): QuantitySample? = sampleDao.earliestSample(kind.rawValue)?.toSample()
+
+    /** Stored samples of [kind] with `start >= since` and a value above zero, oldest first. */
+    suspend fun recentSamples(kind: MetricKind, since: Instant): List<QuantitySample> =
+        sampleDao.recentSamples(kind.rawValue, since).mapNotNull { it.toSample() }
+
+    /**
+     * Adds a step [delta] read off the ring at [day] to that local day's total in [zone], and keeps
+     * the delta with its window — `[windowStart, day]`, or the whole day so far when [windowStart]
+     * is null — in one transaction. A delta of zero or less writes nothing. A total that would
+     * overflow fails the write.
+     */
+    suspend fun addDailySteps(delta: Long, day: Instant, windowStart: Instant? = null, now: Instant, zone: ZoneId) {
+        if (delta <= 0) return
+        val dayStart = startOfDay(day, zone)
+        db.withWriteTransaction {
+            val existing = dailyDao.dailyOn(dayStart)
+            if (existing != null) {
+                dailyDao.updateDaily(existing.copy(steps = Math.addExact(existing.steps, delta), updatedAt = now))
+            } else {
+                dailyDao.insertDaily(StoredDailyEntity(day = dayStart, steps = delta, updatedAt = now))
+            }
+            dailyDao.insertStepSample(StoredStepSampleEntity(start = windowStart ?: dayStart, end = day, delta = delta))
+        }
+    }
+
+    /** The step total of [day]'s local day in [zone]; 0 when nothing is stored for it. */
+    suspend fun todaySteps(day: Instant, zone: ZoneId): Long = dailyDao.dailyOn(startOfDay(day, zone))?.steps ?: 0
+
+    /** Step deltas with `from <= start < to`, oldest first. */
+    suspend fun stepSamples(from: Instant, to: Instant): List<StepSample> = dailyDao.stepSamples(from, to).map { it.toStepSample() }
+
+    /** The newest day's step total, or null. */
+    suspend fun latestDaily(): DailySteps? = dailyDao.recentDailies(limit = 1).firstOrNull()?.toDailySteps()
+
+    /** At most [limit] day totals, newest day first. */
+    suspend fun recentDailies(limit: Int = 14): List<DailySteps> = dailyDao.recentDailies(limit).map { it.toDailySteps() }
+
+    /** Day totals whose day starts in `[from, to)`, oldest first. */
+    suspend fun dailies(from: Instant, to: Instant): List<DailySteps> = dailyDao.dailies(from, to).map { it.toDailySteps() }
+
+    /** Keeps one daytime skin-temperature reading (a plain append: readings are timestamped). */
+    suspend fun recordDaytimeTemperature(celsius: Double, at: Instant) {
+        dailyDao.insertDaytimeTemp(StoredDaytimeTempEntity(time = at, celsius = celsius))
+    }
+
+    /** Daytime readings with `from <= time < to`, oldest first. */
+    suspend fun daytimeTemperatures(from: Instant, to: Instant): List<DaytimeTemperature> =
+        dailyDao.daytimeTemps(from, to).map { it.toDaytimeTemperature() }
 
     private suspend fun storeCursorRows(): List<StoredCursorEntity> =
         sampleDao.allCursors().filter { !it.kindRaw.startsWith(HEALTH_CURSOR_PREFIX) && !it.kindRaw.startsWith(EXPORT_CURSOR_PREFIX) }
