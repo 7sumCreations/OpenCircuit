@@ -53,13 +53,7 @@ object HistoryFrameCaptureCodec {
         return ByteArray(parts.size) { i ->
             val p = parts[i]
             if (p.length != 2) unreadable("hex is not in the capture's form")
-            ((digit(p[0]) shl 4) or digit(p[1])).toByte()
+            ((lowerHexDigit(p[0]) shl 4) or lowerHexDigit(p[1])).toByte()
         }
-    }
-
-    private fun digit(c: Char): Int = when (c) {
-        in '0'..'9' -> c - '0'
-        in 'a'..'f' -> c - 'a' + 10
-        else -> unreadable("hex is not in the capture's form")
     }
 }

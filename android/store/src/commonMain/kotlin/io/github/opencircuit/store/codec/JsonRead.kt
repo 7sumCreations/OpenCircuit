@@ -144,6 +144,16 @@ internal fun JsonElement.string(): String {
 /** A date: whole epoch milliseconds. */
 internal fun JsonElement.instant(): Instant = Instant.ofEpochMilli(long())
 
+/**
+ * One lowercase hex digit, the only form the store writes: `0`–`9` and `a`–`f` in ASCII. An
+ * uppercase digit, a fullwidth digit or anything else is unreadable.
+ */
+internal fun lowerHexDigit(c: Char): Int = when (c) {
+    in '0'..'9' -> c - '0'
+    in 'a'..'f' -> c - 'a' + 10
+    else -> unreadable("not the stored lowercase hex")
+}
+
 /** The entry whose raw string is exactly this string. */
 internal fun <E> JsonElement.enumOf(entries: List<E>, raw: (E) -> String): E {
     val s = string()
