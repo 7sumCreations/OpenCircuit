@@ -279,6 +279,28 @@ class UserEntryStoreTest {
     }
 
     /**
+     * Upstream checks no raw value and no `end >= start` at save (CycleStore.swift :81-135,
+     * HeadacheStore.swift :206-268, :332-406), and its readers expect odd values: the health import
+     * stores any severity another app wrote (HealthKitWriter.swift :1065), an unknown band is a
+     * newer build's row after a downgrade (HeadacheEngine.swift :849-856), and the health writer
+     * clamps an end before the start (:945-951). So the store keeps them exactly as given.
+     */
+    @Test
+    fun oddRawValuesAndAnEndBeforeTheStartAreKeptExactlyAsGiven() = withStore { store, _ ->
+        store.savePeriodEntry(start = at(10), end = at(5), flowLevelRaw = 0, symptoms = emptyList(), notes = "", now = now)
+        store.saveHeadacheEntry(onset = at(10), end = at(5), severityRaw = 99, symptoms = emptyList(), now = now)
+        store.saveHeadacheEntry(onset = at(20), end = null, severityRaw = -1, symptoms = emptyList(), now = now)
+        store.insertRiskDayIfAbsent(risk(day = at(0), nightKey = SleepEdit.DISTANT_PAST, index = 250.0).copy(bandRaw = 7, ringFeatureCount = -3))
+
+        val period = store.allPeriodEntries().single()
+        assertEquals(0, period.flowLevelRaw)
+        assertEquals(at(5), period.end)
+        assertEquals(listOf(99 to at(5), -1 to null), store.allHeadacheEntries().map { it.severityRaw to it.end })
+        val row = store.riskDays(from = at(-100), to = at(100)).single()
+        assertEquals(Triple(7, -3, 250.0), Triple(row.bandRaw, row.ringFeatureCount, row.index))
+    }
+
+    /**
      * Kotlin-only: a NaN score would be bound as NULL (NOT NULL fails with an `SQLiteException`)
      * and ±∞ would be frozen as a day's score for good. Either is refused before the database with
      * an `IllegalArgumentException`, and no row is written.
