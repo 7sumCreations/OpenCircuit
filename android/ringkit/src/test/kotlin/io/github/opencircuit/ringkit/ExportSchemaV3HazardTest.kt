@@ -209,6 +209,37 @@ class ExportSchemaV3HazardTest {
     }
 
     @Test
+    fun aNonFiniteSessionValueKeepsSwiftsTextInTheSessionsCsv() {
+        // Measured: upstream's sleepSessionsCSV with every double of one session non-finite (summary
+        // efficiency, the four OSA readings, coverage fraction and longest gap, the edge gaps, the
+        // reference fraction) prints `nan` for NaN of either sign, `inf`, `-inf` — never empty, never
+        // `NaN` — while the JSON of the same row cannot be written at all (it raises upstream; null here).
+        for ((bad, text) in listOf(Double.NaN to "nan", -Double.NaN to "nan", Double.POSITIVE_INFINITY to "inf", Double.NEGATIVE_INFINITY to "-inf")) {
+            val cov = ExportCoverage.Assessment(t0, t1, expectedSamples = 24, observedSamples = 12, coverageFraction = bad, gaps = emptyList(), longestGapSeconds = bad)
+            val refAssessment = ExportCoverage.Assessment(t0, t1, expectedSamples = 24, observedSamples = 12, coverageFraction = bad, gaps = emptyList(), longestGapSeconds = 0.0)
+            val ref = ExportReferenceCoverage.Row(ExportReferenceCoverage.Reference.MANUAL_SCHEDULE_WAKE, t1, bad, refAssessment)
+            val edge = SleepEdgeProvenanceRow(t0, t1, "resumedAfterGap", bad, "stoppedThenResumed", bad, emptyList(), bad)
+            val row = SleepSessionRow(
+                sessionID = "s", night = night, inBedStart = t0, inBedEnd = t1,
+                summary = SleepRow(
+                    night = night, asleepMin = 450, deepMin = 90, lightMin = 180, remMin = 120, awakeMin = 30,
+                    efficiency = bad, inBedStart = t0, inBedEnd = t1, skinTempC = bad, sleepScore = 82, stressScore = 40,
+                ),
+                osa = OSARow(bad, bad, bad, bad, validWindows = 3), coverage = cov,
+                referenceCoverage = ExportReferenceCoverage.Outcome.Measured(ref), edgeProvenance = edge,
+            )
+            assertEquals(
+                "s,2023-11-14,2023-11-15T03:43:20.000+05:30,2023-11-15T04:43:20.000+05:30,,,false,450,90,180,120,30,$text,82,40,," +
+                    "$text,$text,$text,$text,3,$text,24,12,$text,resumedAfterGap,$text,stoppedThenResumed,$text,,recorded," +
+                    "manualScheduleWake,2023-11-15T04:43:20.000+05:30,$text",
+                ExportEngine.sleepSessionsCSV(listOf(row), kolkata).split("\n")[1],
+                "$bad",
+            )
+            assertNull(ExportEngine.toJSON(emptyList(), emptyList(), emptyList(), zone = kolkata, now = t0, sleepSessions = listOf(row)), "$bad")
+        }
+    }
+
+    @Test
     fun theEdgeRowKeepsBothConstructorsAndSwiftsEquality() {
         // The E3 row is consumed unchanged: its absence-is-not-zero gaps compare as Swift's optionals.
         val assessment = SleepConfidence.assess(

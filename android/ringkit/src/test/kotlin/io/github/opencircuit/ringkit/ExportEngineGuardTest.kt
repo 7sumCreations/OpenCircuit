@@ -364,6 +364,65 @@ class ExportEngineGuardTest {
         assertEquals(7 + 5 * 2 * 8, checked, "instants checked (five of the zones change twice in 2024)")
     }
 
+    /**
+     * One builder per place a caller-supplied double reaches the JSON, each taking the value to put
+     * there. The hypnogram's `durationSec` and the provenance summary are computed from instants and
+     * cannot be non-finite; `meta`, `historySyncEvidence` and `epochArchive` carry no double at all.
+     */
+    private val doubleSites: List<Pair<String, (Double) -> String?>> = run {
+        val zone = ZoneId.of("Asia/Kolkata")
+        fun cov(fraction: Double = 0.5, longest: Double = 0.0) =
+            ExportCoverage.Assessment(t0, t1, expectedSamples = 24, observedSamples = 12, coverageFraction = fraction, gaps = emptyList(), longestGapSeconds = longest)
+        fun ref(beyond: Double = 0.0, a: ExportCoverage.Assessment = cov()) =
+            ExportReferenceCoverage.Outcome.Measured(ExportReferenceCoverage.Row(ExportReferenceCoverage.Reference.MANUAL_SCHEDULE_WAKE, t1, beyond, a))
+        fun edge(bed: Double? = 1.0, wake: Double? = 1.0, material: Double = 3_600.0) =
+            ExportEngine.SleepEdgeProvenanceRow(t0, t1, "resumedAfterGap", bed, "stoppedThenResumed", wake, emptyList(), material)
+        fun osa(a: Double = 95.0, m: Double = 88.0, t: Double = 1.0, o: Double = 2.0) = ExportEngine.OSARow(a, m, t, o, validWindows = 3)
+        fun session(summary: SleepRow = sleep(), osa: ExportEngine.OSARow? = osa(), cov: ExportCoverage.Assessment? = cov(),
+                    ref: ExportReferenceCoverage.Outcome? = ref(), edge: ExportEngine.SleepEdgeProvenanceRow? = edge()) =
+            ExportEngine.SleepSessionRow(
+                sessionID = "s", night = night, inBedStart = t0, inBedEnd = t1, summary = summary, osa = osa, coverage = cov,
+                referenceCoverage = ref, edgeProvenance = edge,
+            )
+        fun json(samples: List<SampleRow> = emptyList(), sleepRows: List<SleepRow> = emptyList(), temps: List<DaytimeTemperatureRow> = emptyList(),
+                 sessions: List<ExportEngine.SleepSessionRow> = listOf(session())) =
+            ExportEngine.toJSON(samples, sleepRows, emptyList(), daytimeTemperatures = temps, zone = zone, now = t0, sleepSessions = sessions)
+        listOf(
+            "samples.value" to { x -> json(samples = listOf(SampleRow("heartRate", t0, t1, 60.0), SampleRow("heartRate", t0, t1, x))) },
+            "sleep.efficiency" to { x -> json(sleepRows = listOf(sleep(efficiency = x))) },
+            "sleep.skinTempC" to { x -> json(sleepRows = listOf(sleep(skinTempC = x))) },
+            "daytimeTemperatures.celsius" to { x -> json(temps = listOf(DaytimeTemperatureRow(t0, x))) },
+            "sleepSessions.summary.efficiency" to { x -> json(sessions = listOf(session(summary = sleep(efficiency = x)))) },
+            "sleepSessions.summary.skinTempC" to { x -> json(sessions = listOf(session(summary = sleep(skinTempC = x)))) },
+            "sleepSessions.osa.avgSpO2" to { x -> json(sessions = listOf(session(osa = osa(a = x)))) },
+            "sleepSessions.osa.minSpO2" to { x -> json(sessions = listOf(session(osa = osa(m = x)))) },
+            "sleepSessions.osa.timeBelow90Sec" to { x -> json(sessions = listOf(session(osa = osa(t = x)))) },
+            "sleepSessions.osa.odi" to { x -> json(sessions = listOf(session(osa = osa(o = x)))) },
+            "sleepSessions.coverage.coverageFraction" to { x -> json(sessions = listOf(session(cov = cov(fraction = x), ref = null))) },
+            "sleepSessions.coverage.longestGapSeconds" to { x -> json(sessions = listOf(session(cov = cov(longest = x), ref = null))) },
+            "sleepSessions.referenceCoverage.beyondReportedEndSeconds" to { x -> json(sessions = listOf(session(ref = ref(beyond = x)))) },
+            "sleepSessions.referenceCoverage.coverageToReference" to { x -> json(sessions = listOf(session(ref = ref(a = cov(fraction = x))))) },
+            "sleepSessions.referenceCoverage.longestGapSeconds" to { x -> json(sessions = listOf(session(ref = ref(a = cov(longest = x))))) },
+            "sleepSessions.edgeProvenance.bedtimeGapSeconds" to { x -> json(sessions = listOf(session(edge = edge(bed = x)))) },
+            "sleepSessions.edgeProvenance.wakeGapSeconds" to { x -> json(sessions = listOf(session(edge = edge(wake = x)))) },
+            "sleepSessions.edgeProvenance.materialGapSeconds" to { x -> json(sessions = listOf(session(edge = edge(material = x)))) },
+        )
+    }
+
+    @Test
+    fun aNonFiniteNumberInAnySectionMakesToJsonReturnNullAndNeverThrow() {
+        // Upstream hands JSONSerialization a NaN or an infinity wherever the caller put one, and it raises
+        // an uncaught exception there — the app dies (measured). The port returns null (PORTING.md D-132):
+        // checked at every place a caller's double reaches the tree, each with a finite control that writes.
+        val bad = listOf(Double.NaN, -Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, java.lang.Double.longBitsToDouble(0x7ff4_0000_0000_0000L))
+        for ((site, write) in doubleSites) {
+            val control = write(0.25)
+            assertTrue(control != null && ExportJsonReader.root(control).has("schemaVersion"), "$site: the finite control must write")
+            for (x in bad) assertEquals(null, write(x), "$site = $x")
+        }
+        assertEquals(18, doubleSites.size, "every caller-supplied double in the tree")
+    }
+
     @Test
     fun sessionAndOsaRowsAreValuesComparedAsSwift() {
         val source = mutableListOf(SleepSegment(t0, t1, SleepStage.ASLEEP_CORE))
