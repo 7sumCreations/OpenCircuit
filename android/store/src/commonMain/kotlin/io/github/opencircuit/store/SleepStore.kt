@@ -36,9 +36,8 @@ import kotlin.coroutines.cancellation.CancellationException
 //
 // The one-time move of stored nights onto their wake day — `ensureNightKeyMigrated` (:1517-1541),
 // run before every save (:1589), and `rekeySleepNightsToWakeDay` (:2600-2709) — with its renames in
-// NightRekey.
-//
-// Not yet part of this file: realigning a night resolved by its span (:1561-1573).
+// NightRekey — and `realignNightKey` (:1561-1573), which moves a night found by its span to the key
+// of the staging that replaces it.
 //
 // Differences, each deliberate (PORTING.md D-160 to D-169):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
@@ -112,6 +111,11 @@ class SleepStore internal constructor(
      * too. It never writes the feel score, the apnea summary, the edited window or the widened
      * clamp window. The wake window and every day boundary are read in [zone].
      *
+     * A replacing save of a night found by its span under another day's key also moves the night,
+     * with everything kept under its key, to the start of [night]'s day — unless another night holds
+     * that day or something is already kept under it, when the night keeps its key and is still
+     * replaced.
+     *
      * A new or replacing save also removes the automatic naps sharing time with `[inBedStart,
      * inBedEnd]` — the same sleep counted twice — in the same transaction; the wearer's naps stay.
      *
@@ -179,8 +183,11 @@ class SleepStore internal constructor(
                 widenClamp(existing, incoming, at)
                 return@withWriteTransaction SleepPersistOutcome.KEPT_FULLER_STORED_NIGHT
             }
+            // Only now, past every early return: a night found by its span may still carry its first
+            // slice's key, and moves to the key this replacing staging gives it.
+            val key = if (NightRekey.dayKey(existing.night, zone) != dayStart && realignNightKey(existing, dayStart, zone, at)) dayStart else existing.night
             sleepDao.updateSummary(
-                existing.copy(efficiency = efficiency, updatedAt = at).withMinutes(minutes).withWindow(start, end, onset, wake).withExtras(staged),
+                existing.copy(night = key, efficiency = efficiency, updatedAt = at).withMinutes(minutes).withWindow(start, end, onset, wake).withExtras(staged),
             )
             pruneAutoNaps(start, end)
             SleepPersistOutcome.UPDATED
@@ -597,6 +604,19 @@ class SleepStore internal constructor(
                 widenedRecordedOnset = w.sleepOnset, widenedRecordedWake = w.sleepWake, updatedAt = at,
             ),
         )
+    }
+
+    /**
+     * Upstream `realignNightKey` (:1561-1573), inside the save's transaction: moves everything kept
+     * under [row]'s key to [dayStart] and returns true, or returns false — moving nothing — when
+     * another night holds [dayStart] or something is already kept under it. A failing read fails the
+     * save; upstream reads a failing occupancy read as a free key.
+     */
+    private suspend fun realignNightKey(row: StoredSleepSummaryEntity, dayStart: Instant, zone: ZoneId, at: Instant): Boolean {
+        if (sleepDao.summaryAt(dayStart) != null) return false
+        if (!nightRekey.canRename(row.night, dayStart, zone)) return false
+        nightRekey.rename(row.night, dayStart, zone, at)
+        return true
     }
 
     /** The row this staging belongs to: by in-bed overlap first (identity), then by day (index). */
