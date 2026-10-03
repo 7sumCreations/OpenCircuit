@@ -451,6 +451,11 @@ class SleepStore internal constructor(
      */
     suspend fun ensureNightKeyMigrated(zone: ZoneId, now: Instant): Boolean = migrateNightKeys(zone, now) == null
 
+    /** [ensureNightKeyMigrated] for the launch repairs: throws why the move failed, so the launch reports it. */
+    internal suspend fun ensureNightKeyMigratedOrThrow(zone: ZoneId, now: Instant) {
+        migrateNightKeys(zone, now)?.let { throw it }
+    }
+
     /** [ensureNightKeyMigrated], returning why it failed (null once done). Cancellation propagates. */
     private suspend fun migrateNightKeys(zone: ZoneId, now: Instant): Exception? {
         val at = now.toStoredMillis()

@@ -235,7 +235,7 @@ class RetentionAndRepairTest {
             )
             db.sampleDao().upsertCursors(listOf(StoredCursorEntity("heartRate", now.plusSeconds(tenYears))))
 
-            val report = LaunchRepairs.run(LocalStore(db), now, utc)
+            val report = LaunchRepairs.run(LocalStore(db), SleepStore(db), now, utc)
 
             assertEquals(emptyList(), db.sampleDao().allSamples())
             assertEquals(emptyList(), db.sampleDao().allCursors())
@@ -250,12 +250,12 @@ class RetentionAndRepairTest {
     fun aSecondLaunchSkipsTheLatchedPurgesButStillPrunesAndRepairs() = runBlocking<Unit> {
         withInMemoryStore { db ->
             val store = LocalStore(db)
-            LaunchRepairs.run(store, now, utc)
+            LaunchRepairs.run(store, SleepStore(db), now, utc)
             val implausible = row(MetricKind.HEART_RATE, now.minusSeconds(3600), 4.0)
             db.sampleDao().insertSamples(listOf(implausible, row(MetricKind.SPO2, now.minusSeconds(40L * 86_400), 0.97)))
             db.sampleDao().upsertCursors(listOf(StoredCursorEntity("spo2", now.plusSeconds(tenYears))))
 
-            val second = LaunchRepairs.run(store, now, utc)
+            val second = LaunchRepairs.run(store, SleepStore(db), now, utc)
 
             assertEquals(listOf(4.0), db.heartRates())
             assertEquals(1, db.sampleDao().allSamples().size)
@@ -275,7 +275,7 @@ class RetentionAndRepairTest {
             }
             db.sampleDao().upsertCursors(listOf(StoredCursorEntity("heartRate", now.plusSeconds(tenYears))))
 
-            val report = LaunchRepairs.run(LocalStore(db, sampleDao = failing), now, utc)
+            val report = LaunchRepairs.run(LocalStore(db, sampleDao = failing), SleepStore(db), now, utc)
 
             assertTrue(report.prune.isFailure)
             assertEquals(Result.success(0), report.heartRatePurge)
