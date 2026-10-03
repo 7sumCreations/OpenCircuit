@@ -3,6 +3,7 @@ package io.github.opencircuit.store
 import androidx.room3.withReadTransaction
 import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.BulkRecord
+import io.github.opencircuit.ringkit.OSASpO2
 import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SleepHypnogramCodec
 import io.github.opencircuit.ringkit.SleepNightKey
@@ -23,8 +24,9 @@ import java.time.ZoneId
 // edit, replace, insert and kept-fuller branches with the clamp widening — `applyExtras`
 // (:1855-1910), the sleep reads `latestSleepSummary`
 // (:2042), `recentSleepSummaries` (:2051), `sleepSummaries(from:to:)` (:2056), `sleepSummary(night:)`
-// (:2063), `hypnogram(night:)` (:2074) and `sleepSummaryOverlapping` (:2084), and the wearer's
-// edit `applySleepEdit` in both forms (:2133-2257).
+// (:2063), `hypnogram(night:)` (:2074) and `sleepSummaryOverlapping` (:2084), the wearer's
+// edit `applySleepEdit` in both forms (:2133-2257), `setFeelScore` (:2101-2109) and
+// `applyOSASummary` (:2029-2039).
 //
 // Not yet part of this file: moving stored nights onto their wake day before a save (:1589) and
 // realigning a night resolved by its span (:1561-1573), and pruning the automatic naps a saved
@@ -44,6 +46,9 @@ import java.time.ZoneId
 //   unsorted fetch returned first.
 // - An edit writes its row, the night's undo stack and its onset in one transaction; upstream writes
 //   the two values to `UserDefaults` before a save that can still fail.
+// - An apnea summary with a NaN or infinite figure is refused before anything is written (SQLite
+//   would bind NaN as NULL, which the column refuses); upstream stores it. A failed apnea write is
+//   thrown, where upstream swallows it and still reports the summary applied.
 
 /**
  * The sleep half of the on-device store, over the same [StoreDatabase] as [LocalStore]. Every write
@@ -228,6 +233,45 @@ class SleepStore internal constructor(
         now: Instant,
         zone: ZoneId,
     ): Boolean = applySleepEdit(night, SleepEdit.Times(editedWindow.inBedStart, sleepOnset, sleepWake), summary, hypnogram, now, zone)
+
+    /**
+     * Stores the wearer's own rating of the night stored for the day of [night] in [zone], clamped to
+     * 0…9. Nothing is written when no night is stored for that day. Throws, writing nothing, when the
+     * lookup or the write fails.
+     */
+    suspend fun setFeelScore(score: Int, night: Instant, now: Instant, zone: ZoneId) {
+        val at = now.toStoredMillis()
+        val dayStart = startOfDay(night.toStoredMillis(), zone)
+        db.withWriteTransaction {
+            val row = sleepDao.summaryAt(dayStart) ?: return@withWriteTransaction
+            sleepDao.updateSummary(row.copy(feelScore = score.coerceIn(0, 9), updatedAt = at))
+        }
+    }
+
+    /**
+     * Attaches a night's apnea summary to the stored night with the latest key — whatever night the
+     * burst was recorded in, as upstream. Returns false, writing nothing, when [osa] has no valid
+     * window or no night is stored; true once written. Throws, writing nothing, when the lookup or
+     * the write fails, and refuses with [IllegalArgumentException] a summary whose saturations, time
+     * below 90 % or event rate is NaN or infinite.
+     */
+    suspend fun applyOSASummary(osa: OSASpO2.NightSummary, now: Instant): Boolean {
+        if (osa.validWindows <= 0) return false
+        require(osa.averageSpO2.isFinite() && osa.minSpO2.isFinite() && osa.timeBelow90Seconds.isFinite() && osa.odi.isFinite()) {
+            "an apnea summary figure is not a number: $osa"
+        }
+        val at = now.toStoredMillis()
+        return db.withWriteTransaction {
+            val row = sleepDao.latestSummary() ?: return@withWriteTransaction false
+            sleepDao.updateSummary(
+                row.copy(
+                    osaAvgSpO2 = osa.averageSpO2, osaMinSpO2 = osa.minSpO2, osaTimeBelow90Sec = osa.timeBelow90Seconds,
+                    osaODI = osa.odi, osaValidWindows = osa.validWindows, updatedAt = at,
+                ),
+            )
+            true
+        }
+    }
 
     // Every read of a night reads the onset saved with its edit in the same read transaction.
 
