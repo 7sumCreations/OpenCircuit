@@ -39,7 +39,9 @@ import kotlin.coroutines.cancellation.CancellationException
 // NightRekey — and `realignNightKey` (:1561-1573), which moves a night found by its span to the key
 // of the staging that replaces it.
 //
-// Differences, each deliberate (PORTING.md D-160 to D-169):
+// The launch-time repair `backfillSleepProvenance` (:1926-1952).
+//
+// Differences, each deliberate (PORTING.md D-160 to D-175):
 // - `now` and `zone` are parameters, one zone for every day boundary; every instant is cut to the
 //   stored millisecond before it is compared. Upstream reads the wall clock and `Calendar.current`.
 // - Each save is one transaction: a failed save leaves the stored night exactly as it was, where
@@ -70,6 +72,11 @@ import kotlin.coroutines.cancellation.CancellationException
 //   it (D-170): a failure changes nothing and latches nothing, where upstream reverses its
 //   `UserDefaults` moves by hand, best effort, and keeps the latch in a separate store. A failed move
 //   holds the save with the reason it failed attached; upstream records the reason only in its log.
+// - The launch repairs treat a timeline that decodes to no segments — the two-byte `[]` a night saved
+//   without one stores, or bytes this build cannot read — as no timeline (D-175): upstream checks only
+//   that the bytes are non-empty, so its backfill stamps such a night "measured only" with zero
+//   measured sleep. A failed repair write is thrown, nothing changed; upstream's backfill swallows it
+//   and still returns its count.
 
 /**
  * The sleep half of the on-device store, over the same [StoreDatabase] as [LocalStore]. Every write
@@ -315,6 +322,40 @@ class SleepStore internal constructor(
             )
             true
         }
+    }
+
+    /**
+     * Fills the provenance split of every stored night that has none yet — unknown basis, never
+     * edited, and a timeline with at least one segment: the measured and asserted asleep seconds,
+     * coverage, longest gap and measured efficiency from that timeline, basis "measured only", and the
+     * timeline copied to the ring's own reading when that is empty. An edited night is left unknown:
+     * its timeline is edit output, not a recording. A night with no timeline, or one this build cannot
+     * read, is left unknown too (D-175). The update time is not changed. Idempotent; returns how many
+     * nights it filled. One transaction: throws, changing nothing, when a read or write fails.
+     */
+    suspend fun backfillSleepProvenance(): Int = db.withWriteTransaction {
+        var changed = 0
+        for (row in sleepDao.allSummaries()) {
+            if (SleepBasis.fromStored(row.sleepBasis) != SleepBasis.UNKNOWN) continue
+            if (row.isManuallyEdited) continue
+            // Upstream checks the bytes (:1938), which a night saved without a timeline still has (`[]`).
+            val timeline = decodedTimeline(row.hypnogramData)
+            if (timeline.isEmpty()) continue
+            val b = SleepProvenanceBreakdown(timeline)
+            sleepDao.updateSummary(
+                row.copy(
+                    recordedHypnogramData = if (row.recordedHypnogramData.isEmpty()) row.hypnogramData else row.recordedHypnogramData,
+                    measuredAsleepSeconds = b.measuredAsleep,
+                    assertedAsleepSeconds = b.assertedAsleep,
+                    coverageFraction = b.coverageFraction,
+                    longestGapSeconds = b.longestUnmeasuredGap,
+                    measuredEfficiency = b.efficiency ?: NOT_COMPUTED,
+                    sleepBasis = SleepBasis.MEASURED_ONLY.rawValue,
+                ),
+            )
+            changed++
+        }
+        changed
     }
 
     /**
