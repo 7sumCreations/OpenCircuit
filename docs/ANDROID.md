@@ -28,7 +28,10 @@ the phone.
   as empty or unknown, never as a wrong value; an alarm that cannot be read is kept as stored until
   the person saves a new one.
 
-Only raw ring data older than 30 days is ever deleted. Nothing a person entered is pruned.
+The store deletes only raw ring data on its own: samples, step samples and daytime readings older
+than 30 days, plus a one-time clean-up of raw samples that fail the import checks (heart rates
+outside 30–220 bpm, and times before the ring's clock epoch or more than a day ahead). Nothing a
+person entered is pruned.
 
 **No destructive fallback, ever.** The store is never deleted or recreated to get past a problem.
 If the database cannot be opened (a damaged file, a schema with no migration path, a newer schema
