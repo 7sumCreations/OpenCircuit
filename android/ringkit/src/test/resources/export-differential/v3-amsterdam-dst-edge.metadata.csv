@@ -1,0 +1,16 @@
+field,value
+schemaVersion,3
+exportedAt,2024-03-31T03:00:00.000+02:00
+rangeStart,2024-03-28T23:59:59.750+01:00
+rangeEnd,2024-03-31T03:00:00.000+02:00
+appVersion,1.0
+appBuild,37
+deviceModel,"iPhone15,2"
+osVersion,18.5
+ringModel,RingConn Gen2
+ringFirmware,FR02.018
+ringGeneration,Gen 2
+ringIdentifier,1E2E3E4E-0000-0000-0000-000000000001
+timeZoneIdentifier,Europe/Amsterdam
+timeZoneOffsetSeconds,7200
+timestampPolicy,"Timestamps in the schema-2 sections (samples, sleep, daily, stepSamples, naps, daytimeTemperatures, historySyncEvidence) are ISO-8601 in UTC and end in 'Z'. Timestamps in the schema-3 sections (meta, sleepSessions and its hypnogram/coverage) are ISO-8601 with the exporting device's UTC offset. Date-only labels (night, day) are yyyy-MM-dd in the device's local calendar in BOTH, which is the calendar the night/day buckets were formed with."

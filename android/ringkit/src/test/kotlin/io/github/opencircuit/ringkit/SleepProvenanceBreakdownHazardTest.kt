@@ -215,4 +215,29 @@ class SleepProvenanceBreakdownHazardTest {
         val empty = emptyList<SleepSegment>().healthPublication
         assertEquals(SleepHealthPublication(emptyList(), emptyList(), emptyList(), emptyList()), empty)
     }
+
+    /**
+     * Upstream sums each segment's `duration` (`end.timeIntervalSince(start)`, the difference of the two
+     * dates' doubles) and measures the longest proven hole the same way; the export prints these totals
+     * with 17 significant digits. Measured at the pin on a millisecond-stamped night.
+     */
+    @Test
+    fun totalsSumTheDifferencesOfTheDateDoubles() {
+        val a = FoundationDate.unix(1_755_000_000.580)
+        val b = FoundationDate.unix(1_755_003_000.913)
+        val c = FoundationDate.unix(1_755_020_000.207)
+        val night = listOf(
+            SleepSegment(a, b, inBed), SleepSegment(b, c, inBed, asserted),
+            SleepSegment(a, b, core), SleepSegment(b, c, core, asserted),
+        )
+        val br = SleepProvenanceBreakdown(night)
+        assertEquals(4_671_226_669_565_280_256L, br.totalInBed.toRawBits(), "totalInBed ${br.totalInBed}")
+        assertEquals(19_999.62700009346, br.totalInBed)
+        assertEquals(4_658_816_217_115_525_120L, br.coveredInBed.toRawBits(), "coveredInBed ${br.coveredInBed}")
+        assertEquals(4_658_816_217_115_525_120L, br.measuredAsleep.toRawBits(), "measuredAsleep ${br.measuredAsleep}")
+        assertEquals(4_670_401_944_310_054_912L, br.assertedAsleep.toRawBits(), "assertedAsleep ${br.assertedAsleep}")
+        assertEquals(4_670_401_944_310_054_912L, br.longestUnmeasuredGap.toRawBits(), "longest ${br.longestUnmeasuredGap}")
+        assertEquals(4_594_573_040_526_782_387L, br.coverageFraction.toRawBits(), "coverageFraction ${br.coverageFraction}")
+        assertNull(br.efficiency, "under three covered hours the ratio is withheld")
+    }
 }

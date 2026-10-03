@@ -36,9 +36,12 @@ class EdgeProvenanceHazardTest {
         assertEquals(BedtimeProvenance.Verdict.Unknown, v(s(10_000_000_000_000_000), s(-10_000_000_000_000_000)), "a far-future 'before' is no evidence")
         // A predecessor older than the oldest retained row is still a gap (the store never checks this).
         assertEquals(BedtimeProvenance.Verdict.ResumedAfterGap(1000.0), v(bed.minusSeconds(1000), bed.minusSeconds(10)))
-        // One millisecond past the tolerance is a gap. Upstream measured 300.00099992752075 (its Date
-        // is a Double, |Δ| 7e-8 s); an Instant holds the millisecond exactly.
-        assertEquals(BedtimeProvenance.Verdict.ResumedAfterGap(300.001), v(bed.minusMillis(300_001), null))
+        // One millisecond past the tolerance is a gap, measured as upstream does: the difference of the
+        // two dates' doubles. Measured at the pin: `bed.addingTimeInterval(-300.001)` — the Date nearest
+        // this instant — gives 300.00100004673004; `Date(timeIntervalSince1970: 1786602677.999)`, one
+        // ulp away, gives 300.00099992752075. (This test once expected the exact 300.001.)
+        assertEquals(BedtimeProvenance.Verdict.ResumedAfterGap(300.00100004673004), v(bed.minusMillis(300_001), null))
+        assertEquals(BedtimeProvenance.Verdict.ResumedAfterGap(300.00099992752075), v(FoundationDate.unix(1_786_602_677.999), null))
     }
 
     @Test
@@ -154,5 +157,36 @@ class EdgeProvenanceHazardTest {
         val shipped = WakeProvenance.stoppage(inBedEnd = wake, measurementsAfter = reversed, earliestRetainedMeasurement = deep)
         assertEquals(WakeProvenance.Verdict.Witnessed, shipped.verdict)
         assertNull(shipped.silenceBegan)
+    }
+
+    /**
+     * Both edge gaps are `timeIntervalSince` upstream: the difference of the two dates' doubles, not the
+     * exact duration. The export prints them with 17 significant digits, so the last digits are bytes.
+     * Measured at the pin through `SleepConfidence.assess` and the export row, millisecond-stamped.
+     */
+    @Test
+    fun edgeGapsAreTheDifferenceOfTheTwoDateDoubles() {
+        val start = FoundationDate.unix(1_755_000_000.580)
+        val end = FoundationDate.unix(1_755_010_800.913)
+        val coverage = SleepConfidence.Coverage(
+            inBedStart = start, inBedEnd = end,
+            lastMeasurementBeforeStart = FoundationDate.unix(1_754_999_000.123),
+            firstMeasurementAfterEnd = FoundationDate.unix(1_755_025_200.456),
+            measurementsAfterEnd = emptyList(),
+            earliestRetainedMeasurement = FoundationDate.unix(1_754_000_000.0),
+        )
+        val row = ExportEngine.SleepEdgeProvenanceRow(start, end, SleepConfidence.assess(5.0 * 3600, 6.0 * 3600, coverage))
+        assertEquals("resumedAfterGap", row.bedtimeVerdict)
+        assertEquals(4_652_011_328_655_851_520L, row.bedtimeGapSeconds?.toRawBits(), "bedtime: ${row.bedtimeGapSeconds}")
+        assertEquals(1000.4570000171661, row.bedtimeGapSeconds)
+        assertEquals("stoppedThenResumed", row.wakeVerdict)
+        assertEquals(4_669_141_846_810_034_176L, row.wakeGapSeconds?.toRawBits(), "wake: ${row.wakeGapSeconds}")
+        assertEquals(14_399.542999982834, row.wakeGapSeconds)
+        assertEquals(listOf("noRecordingAfterWake"), row.reasons)
+        // The run walk measures its steps the same way (measured: 14339.542999982834, from end + 60 s).
+        val walked = WakeProvenance.stoppage(end, listOf(end.plusSeconds(60), FoundationDate.unix(1_755_025_200.456)), FoundationDate.unix(1_754_000_000.0))
+        val step = (walked.verdict as WakeProvenance.Verdict.StoppedThenResumed).seconds
+        assertEquals(4_669_108_861_461_200_896L, step.toRawBits(), "walk step: $step")
+        assertEquals(end.plusSeconds(60), walked.silenceBegan)
     }
 }

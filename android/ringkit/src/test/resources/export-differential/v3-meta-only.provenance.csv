@@ -1,0 +1,8 @@
+section,provenance
+daily,derived
+daytimeTemperatures,measured
+historySyncEvidence,diagnostic
+naps,derived
+samples,measured
+sleep,derived
+stepSamples,measured

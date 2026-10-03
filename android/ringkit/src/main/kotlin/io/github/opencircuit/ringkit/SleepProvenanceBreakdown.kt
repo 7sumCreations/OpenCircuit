@@ -28,8 +28,10 @@ package io.github.opencircuit.ringkit
 // all-measured, coverage is 1 and every number is published as before.
 //
 // Shape notes: totals are `Double` seconds summed in input order, exactly as upstream's `TimeInterval`
-// arithmetic (so no total can overflow). Whole minutes are 64-bit; a total whose rounded minute count
-// leaves 64 bits — about 10^13 years of segments — saturates there, where upstream traps.
+// arithmetic (so no total can overflow), each segment's seconds the difference of its two dates' doubles
+// as Swift's `duration` computes it — the export prints these totals with 17 significant digits.
+// Whole minutes are 64-bit; a total whose rounded minute count leaves 64 bits — about 10^13 years of
+// segments — saturates there, where upstream traps.
 
 import java.util.Collections
 
@@ -121,7 +123,7 @@ class SleepProvenanceBreakdown(segments: List<SleepSegment>, private val tuning:
 
     init {
         fun sum(predicate: (SleepSegment) -> Boolean): Double =
-            segments.filter(predicate).fold(0.0) { acc, s -> acc + swiftMax(0.0, SleepStaging.seconds(s.duration)) }
+            segments.filter(predicate).fold(0.0) { acc, s -> acc + swiftMax(0.0, dateSecondsBetween(s.start, s.end)) }
         val asleepStages = setOf(SleepStage.ASLEEP_CORE, SleepStage.ASLEEP_DEEP, SleepStage.ASLEEP_REM)
 
         // In-bed: the in-bed layer when there is one (a stitched night carries one per fragment, and the
@@ -158,7 +160,7 @@ class SleepProvenanceBreakdown(segments: List<SleepSegment>, private val tuning:
         val assertedSpans = segments
             .filter { it.provenance.isProvenUnmeasured && it.end.isAfter(it.start) }
             .map { DateInterval(it.start, it.end) }
-        longestUnmeasuredGap = MeasuredCoverage(assertedSpans).intervals.maxOfOrNull { SleepStaging.seconds(it.duration) } ?: 0.0
+        longestUnmeasuredGap = MeasuredCoverage(assertedSpans).intervals.maxOfOrNull { dateSecondsBetween(it.start, it.end) } ?: 0.0
     }
 
     // MARK: verdicts

@@ -1,0 +1,2617 @@
+{
+  "daily" : [
+
+  ],
+  "daytimeTemperatures" : [
+
+  ],
+  "exportedAt" : "2023-11-14T23:13:20.000Z",
+  "historySyncEvidence" : [
+
+  ],
+  "naps" : [
+
+  ],
+  "notes" : {
+    "coverage" : "coverageFraction measures what THIS APP holds for the window, not what the ring recorded. A low value can mean the ring was not worn, was not drained yet, or that epochs were lost — the export cannot tell those apart. The coverage fields are left EMPTY for a night older than the app's raw-sample retention window: those epochs were deleted by local housekeeping, so a number there would report routine housekeeping as missing data. It is assessed over TWO witnesses unioned: the raw 0x4c epoch archive (~30 h, per ring) and the persisted heart-rate rows. The archive witness exists because the persisted rows are filtered by a strictly forward-only sync cursor, so a single late-stamped live sample can strand every earlier epoch delivered after it and make a fully-recorded night read as a gap — that reports our own cursor, not the ring. Neither witness can invent data: every counted instant is a record or a sample actually on disk. Nights older than the archive's retention are carried by the store witness alone, exactly as before. READ ITS NAME AS coverageWithinReportedWindow, which is emitted beside it in JSON and is the same number: the window is the night's REPORTED in-bed window (windowStart\/windowEnd say which). On a night the wearer never corrected, that window's right edge IS the last record, so no amount of missing data at the wake can lower this fraction: a night whose recording stopped four hours before the wearer got up reports 1.0000 with an empty gaps list, and that is the arithmetic working as written, not a clean night. On a night the wearer DID correct (isManuallyEdited true) the right edge is her own wake instead, so a trailing hole is inside the window and this fraction does fall — a low value there is real. referenceCoverage is the falsifiable companion for the nights nobody corrected; the old key is kept because this file's schema version is unchanged.",
+    "edgeProvenance" : "edgeProvenance says whether the record stream ran INTO the printed bedtime and CONTINUED past the printed wake — the question coverageFraction structurally cannot answer, because the detected window is defined by the records inside it (it measures 0.976-1.049 on all 21 nights of the development corpus, including two understated by 246 minutes, whose ~4 h hole starts exactly AT the in-bed end). The gaps are measured; the verdicts and reasons are a classifier's output at materialGapSeconds, a threshold the evidence does not pin down (gap sizes are bimodal with an empty interval from 33 to 242 minutes, so every cut in there scores identically). A gap BOUNDS the error in the reported duration, it does NOT estimate it. 'unknown' means there was no measurement on that side at all — which is equally consistent with the ring having stopped and with the app not having drained that far yet, so it carries no claim. Measured against the RECORDED (detector) window, which on an edited night is NOT the window inBedStart\/inBedEnd report: the edit changes what the app shows, not what was recorded. reasons[] is the classifier's own list, NOT a record of what the app displayed: no coverage caveat is shown to the wearer in this build, and any future card would apply its own render guards on top, so treat reasons[] as an upper bound on what anyone actually saw. durationBasis says which night's totals fed the durationLikelyHigh half of reasons[]: 'recorded' is the recorded night's own totals, which is the same frame of reference as the edges, and 'edited' means the night was corrected AND predates the stored recorded timeline, so only the post-edit totals were available. Before durationBasis existed the block always used the post-edit totals against a recorded-window coverage, so an edit could add or remove a caveat about a window it had never touched.",
+    "exportRange" : "meta.rangeStart and meta.rangeEnd are the window this file ACTUALLY covers, which can be narrower than the one that was requested: the app caps how much it assembles in a single pass and says so on screen. Trust these two fields over the filename or the range you asked for.",
+    "hrvSDNN" : "The hrvSDNN sample kind carries RMSSD, not SDNN. The ring reports RMSSD and HealthKit offers only an SDNN field; no fixed RMSSD→SDNN conversion exists, so the RMSSD value is stored in the SDNN field and tagged in sample metadata rather than converted (HealthKitWriter.swift:881-887, BulkSleep.swift:107).",
+    "hypnogram" : "The hypnogram rows for a session are a PARTITION of its sleep window: they never overlap, so durationSec can be summed. The surrounding time in bed is carried by inBedStart\/inBedEnd on the session row, NOT as an extra all-night segment — a night with no rows means no timeline was recorded, not a night with no stages. That distinction is explicit: hypnogramSegments is EMPTY (and the JSON hypnogram key is absent) when no timeline was recorded, and 0 only when one was recorded and contained no stage blocks.",
+    "hypnogramProvenance" : "Every hypnogram segment carries a provenance: measured = the ring recorded epochs across this span; asserted = the wearer edited their sleep window over ground holding NO ring data, so this block is their claim and not a measurement; assertedOverMeasured = the wearer's label sits on ground the ring did record, and the two disagree (the ring's own reading is kept separately); assertedCoverageUnknown = the wearer's claim over ground this app no longer retains records for, so neither reading is available. Only 'measured' is a device observation. In CSV the column is always present; in JSON the key is omitted when the value is 'measured'.",
+    "osa" : "osaAvgSpO2 is validated to ±1% against the RingConn app. osaMinSpO2, osaTimeBelow90Sec and osaODI are EXPERIMENTAL estimates — reproducing the app's numbers needs its proprietary artifact rejection and event scoring (OSASpO2.swift header, docs\/RUNBOOK_OSA_APNEA.md).",
+    "provenanceSummary" : "In provenanceSummary, 'measured' means OVER GROUND THE RING RECORDED ACROSS — not 'the stage the ring reported'. measuredAsleepSec is the efficiency numerator and therefore includes spans the wearer relabelled asleep over recorded ground; assertedOverMeasuredAsleepSec states how much of it that is and is a SUBSET of it, never a separate bucket to add in. measuredAwakeSec is the one exception: it counts only what the ring's own staging called awake, and the wearer's awake paint over recorded ground is reported separately as assertedOverMeasuredAwakeSec, because nothing derived depends on that total and a reader takes it as the ring's word. So asleep sums as measured + asserted + coverageUnknown, and awake as measured + assertedOverMeasured + asserted + coverageUnknown.",
+    "referenceCoverage" : "referenceCoverage measures the SAME records over a window whose right edge came from somewhere the recording had no vote in — today the wake time in the wearer's own manual sleep schedule (reference = manualScheduleWake). That is the only kind of denominator a trailing data hole can actually show up in. It is a REFERENCE and not a truth: a scheduled wake is when the wearer intends to get up, so a night they slept in or rose early scores low for a reason that is about the schedule, not the ring — compare beyondReportedEndSeconds (signed: negative means the reference closed EARLIER than the reported window, so coverageToReference is over a shorter span and is not comparable with coverageFraction). Nothing in the app is gated on it. It never reaches past the moment the file was written: when the schedule wake has not arrived yet the window is closed at exportedAt instead and reference says manualScheduleWakeSoFar, because measuring to a wake in the future would report the future as a hole. When the wearer has set no schedule the block is still emitted, with reference = null and an unavailableReason, because no denominator is invented in its place and a missing key would be indistinguishable from an older export. Only the right edge is moved: a schedule also names a bedtime, but a wearer who went to bed late would then be reported as a hole on a night nothing was wrong with.",
+    "ringIdentity" : "The meta.ring* fields describe the LAST RING THIS APP CONNECTED TO, which is not necessarily the ring that produced every night in this file. Rings are used one at a time and their data merges into a single shared timeline with no per-ring attribution (RingScanner.swift:72-74), so on an install that has paired more than one ring an older night may have come from a different ring than the one named here. historySyncEvidence[].ringID is the only per-capture ring attribution in this file.",
+    "skinTemperature" : "Skin temperature is LIVE-only: it is not part of the drainable 0x4c history, so a window the app did not observe cannot be back-filled. Overnight coverage is NOT predictable from the app's sleep-window quiet gate: a night recorded under that gate has carried hundreds of overnight readings, so a quiet night is not an empty one. Read the timestamps in this file rather than inferring coverage from the gate.",
+    "sleepStages" : "Sleep stages are an ON-DEVICE ESTIMATE. The ring transmits no hypnogram; stages are computed here from the same per-epoch vitals the RingConn app uses. Stage TOTALS approximate the app's, but per-epoch cycle placement is NOT validated against any reference (SleepStaging.swift header: \"APPROXIMATION, NOT GROUND TRUTH\")."
+  },
+  "provenance" : {
+    "daily" : "derived",
+    "daytimeTemperatures" : "measured",
+    "historySyncEvidence" : "diagnostic",
+    "naps" : "derived",
+    "samples" : "measured",
+    "sleep" : "derived",
+    "stepSamples" : "measured"
+  },
+  "samples" : [
+    {
+      "end" : "2023-11-14T22:14:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:13:20.000Z",
+      "value" : 7.5570873144098735e-178
+    },
+    {
+      "end" : "2023-11-14T22:15:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T22:14:20.000Z",
+      "value" : -2.8584436031889001e+79
+    },
+    {
+      "end" : "2023-11-14T22:16:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T22:15:20.000Z",
+      "value" : 8.4960713630083646e-308
+    },
+    {
+      "end" : "2023-11-14T22:17:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T22:16:20.000Z",
+      "value" : -2.9047167175898813e-202
+    },
+    {
+      "end" : "2023-11-14T22:18:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T22:17:20.000Z",
+      "value" : 2.6347190339680371e+43
+    },
+    {
+      "end" : "2023-11-14T22:19:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T22:18:20.000Z",
+      "value" : -3172242.6304821614
+    },
+    {
+      "end" : "2023-11-14T22:20:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T22:19:20.000Z",
+      "value" : -1.3418019295959545e-239
+    },
+    {
+      "end" : "2023-11-14T22:21:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T22:20:20.000Z",
+      "value" : 7.592489900176915e-218
+    },
+    {
+      "end" : "2023-11-14T22:22:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T22:21:20.000Z",
+      "value" : 5.5675375176748565
+    },
+    {
+      "end" : "2023-11-14T22:23:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T22:22:20.000Z",
+      "value" : 1.4644113655830923e-74
+    },
+    {
+      "end" : "2023-11-14T22:24:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T22:23:20.000Z",
+      "value" : -2.6342512015700898e+221
+    },
+    {
+      "end" : "2023-11-14T22:25:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:24:20.000Z",
+      "value" : 1.1772827690480724e+104
+    },
+    {
+      "end" : "2023-11-14T22:26:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T22:25:20.000Z",
+      "value" : 6.1514349057571994e+292
+    },
+    {
+      "end" : "2023-11-14T22:27:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T22:26:20.000Z",
+      "value" : -1.0332979633542832e+186
+    },
+    {
+      "end" : "2023-11-14T22:28:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T22:27:20.000Z",
+      "value" : -1.4262300286269718e-135
+    },
+    {
+      "end" : "2023-11-14T22:29:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T22:28:20.000Z",
+      "value" : 2.2219868194223259e+55
+    },
+    {
+      "end" : "2023-11-14T22:30:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T22:29:20.000Z",
+      "value" : 8.3083557618174697e+41
+    },
+    {
+      "end" : "2023-11-14T22:31:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T22:30:20.000Z",
+      "value" : -1.1750304335846874e-243
+    },
+    {
+      "end" : "2023-11-14T22:32:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T22:31:20.000Z",
+      "value" : 1.8064065396225939e-48
+    },
+    {
+      "end" : "2023-11-14T22:33:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T22:32:20.000Z",
+      "value" : -1.0077117418862612e+92
+    },
+    {
+      "end" : "2023-11-14T22:34:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T22:33:20.000Z",
+      "value" : 2.7525309030556198e+52
+    },
+    {
+      "end" : "2023-11-14T22:35:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T22:34:20.000Z",
+      "value" : -5.3386288367487633e+120
+    },
+    {
+      "end" : "2023-11-14T22:36:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:35:20.000Z",
+      "value" : 4.5956528636319981e-230
+    },
+    {
+      "end" : "2023-11-14T22:37:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T22:36:20.000Z",
+      "value" : 4.4665503938591651e+167
+    },
+    {
+      "end" : "2023-11-14T22:38:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T22:37:20.000Z",
+      "value" : -0.022952481535457085
+    },
+    {
+      "end" : "2023-11-14T22:39:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T22:38:20.000Z",
+      "value" : 6.1317139866782206e+57
+    },
+    {
+      "end" : "2023-11-14T22:40:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T22:39:20.000Z",
+      "value" : 7.5650289632453019e-260
+    },
+    {
+      "end" : "2023-11-14T22:41:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T22:40:20.000Z",
+      "value" : -6.9086646574142515e+252
+    },
+    {
+      "end" : "2023-11-14T22:42:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T22:41:20.000Z",
+      "value" : 8.3571009944324172e-243
+    },
+    {
+      "end" : "2023-11-14T22:43:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T22:42:20.000Z",
+      "value" : -7.7380107317101624e-92
+    },
+    {
+      "end" : "2023-11-14T22:44:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T22:43:20.000Z",
+      "value" : 6.2423399627780291e-37
+    },
+    {
+      "end" : "2023-11-14T22:45:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T22:44:20.000Z",
+      "value" : -3.0138269276237299e-223
+    },
+    {
+      "end" : "2023-11-14T22:46:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T22:45:20.000Z",
+      "value" : 1.6037412402611706e+199
+    },
+    {
+      "end" : "2023-11-14T22:47:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:46:20.000Z",
+      "value" : 2.9631747660579757e-05
+    },
+    {
+      "end" : "2023-11-14T22:48:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T22:47:20.000Z",
+      "value" : 5.1863772789724334e+52
+    },
+    {
+      "end" : "2023-11-14T22:49:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T22:48:20.000Z",
+      "value" : -1.5307522542004736e+210
+    },
+    {
+      "end" : "2023-11-14T22:50:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T22:49:20.000Z",
+      "value" : 8.6470303593554698e+189
+    },
+    {
+      "end" : "2023-11-14T22:51:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T22:50:20.000Z",
+      "value" : 2.1465976966479532e-22
+    },
+    {
+      "end" : "2023-11-14T22:52:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T22:51:20.000Z",
+      "value" : 5.7903319273559646e+297
+    },
+    {
+      "end" : "2023-11-14T22:53:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T22:52:20.000Z",
+      "value" : 4.8394175804197585e+275
+    },
+    {
+      "end" : "2023-11-14T22:54:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T22:53:20.000Z",
+      "value" : -2.5109821420594144e+148
+    },
+    {
+      "end" : "2023-11-14T22:55:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T22:54:20.000Z",
+      "value" : -2.4909269671107229e-172
+    },
+    {
+      "end" : "2023-11-14T22:56:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T22:55:20.000Z",
+      "value" : 6.9192926934206745e+198
+    },
+    {
+      "end" : "2023-11-14T22:57:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T22:56:20.000Z",
+      "value" : -4486944192542327.5
+    },
+    {
+      "end" : "2023-11-14T22:58:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T22:57:20.000Z",
+      "value" : -9.5031743943710841e+239
+    },
+    {
+      "end" : "2023-11-14T22:59:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T22:58:20.000Z",
+      "value" : -1.6018941195408879e-70
+    },
+    {
+      "end" : "2023-11-14T23:00:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T22:59:20.000Z",
+      "value" : -1.394475715604798e+161
+    },
+    {
+      "end" : "2023-11-14T23:01:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T23:00:20.000Z",
+      "value" : 5.3422868013540791e-43
+    },
+    {
+      "end" : "2023-11-14T23:02:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T23:01:20.000Z",
+      "value" : -1.1520222255465479e-159
+    },
+    {
+      "end" : "2023-11-14T23:03:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T23:02:20.000Z",
+      "value" : -1.4245856223580627e-222
+    },
+    {
+      "end" : "2023-11-14T23:04:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T23:03:20.000Z",
+      "value" : -4.6106475788363457e+109
+    },
+    {
+      "end" : "2023-11-14T23:05:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T23:04:20.000Z",
+      "value" : 1.712642696143306e-158
+    },
+    {
+      "end" : "2023-11-14T23:06:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T23:05:20.000Z",
+      "value" : 5.9795346537627521e+301
+    },
+    {
+      "end" : "2023-11-14T23:07:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T23:06:20.000Z",
+      "value" : 8.1554175273370878e+98
+    },
+    {
+      "end" : "2023-11-14T23:08:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T23:07:20.000Z",
+      "value" : 6.2056992838550919e+302
+    },
+    {
+      "end" : "2023-11-14T23:09:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T23:08:20.000Z",
+      "value" : 2.3425753588847021e+257
+    },
+    {
+      "end" : "2023-11-14T23:10:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T23:09:20.000Z",
+      "value" : 3.7692216584324203e-63
+    },
+    {
+      "end" : "2023-11-14T23:11:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T23:10:20.000Z",
+      "value" : 1.2515287637598421e-82
+    },
+    {
+      "end" : "2023-11-14T23:12:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T23:11:20.000Z",
+      "value" : -5.0707551690632135e-244
+    },
+    {
+      "end" : "2023-11-14T23:13:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T23:12:20.000Z",
+      "value" : 1.2696652971035923e+163
+    },
+    {
+      "end" : "2023-11-14T23:14:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T23:13:20.000Z",
+      "value" : 63406580528175.719
+    },
+    {
+      "end" : "2023-11-14T23:15:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T23:14:20.000Z",
+      "value" : 8.9385172268577111e+52
+    },
+    {
+      "end" : "2023-11-14T23:16:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T23:15:20.000Z",
+      "value" : 1.369294527507418e+46
+    },
+    {
+      "end" : "2023-11-14T23:17:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T23:16:20.000Z",
+      "value" : 1.9000295834380238e-224
+    },
+    {
+      "end" : "2023-11-14T23:18:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T23:17:20.000Z",
+      "value" : 1.2765293857284531e+138
+    },
+    {
+      "end" : "2023-11-14T23:19:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T23:18:20.000Z",
+      "value" : 1.3810660799746383e-180
+    },
+    {
+      "end" : "2023-11-14T23:20:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T23:19:20.000Z",
+      "value" : -8.2116097996406324e+40
+    },
+    {
+      "end" : "2023-11-14T23:21:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T23:20:20.000Z",
+      "value" : -98929246439843024
+    },
+    {
+      "end" : "2023-11-14T23:22:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T23:21:20.000Z",
+      "value" : 9.6399620004991231e-307
+    },
+    {
+      "end" : "2023-11-14T23:23:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T23:22:20.000Z",
+      "value" : 1.2969853311601499e-225
+    },
+    {
+      "end" : "2023-11-14T23:24:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T23:23:20.000Z",
+      "value" : -5.3755433016404702e-186
+    },
+    {
+      "end" : "2023-11-14T23:25:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T23:24:20.000Z",
+      "value" : -4.6862023225426276e-91
+    },
+    {
+      "end" : "2023-11-14T23:26:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T23:25:20.000Z",
+      "value" : 1.0917511356318166e-105
+    },
+    {
+      "end" : "2023-11-14T23:27:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T23:26:20.000Z",
+      "value" : -3.1117524803121344e+51
+    },
+    {
+      "end" : "2023-11-14T23:28:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T23:27:20.000Z",
+      "value" : -1.0225374528146904e-151
+    },
+    {
+      "end" : "2023-11-14T23:29:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T23:28:20.000Z",
+      "value" : 3.622975159542744e+151
+    },
+    {
+      "end" : "2023-11-14T23:30:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T23:29:20.000Z",
+      "value" : 2.1688396789850324e+27
+    },
+    {
+      "end" : "2023-11-14T23:31:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T23:30:20.000Z",
+      "value" : 3.15092834706795e-76
+    },
+    {
+      "end" : "2023-11-14T23:32:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T23:31:20.000Z",
+      "value" : 1.7397410635222614e+248
+    },
+    {
+      "end" : "2023-11-14T23:33:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T23:32:20.000Z",
+      "value" : -3.6209214609010467e-203
+    },
+    {
+      "end" : "2023-11-14T23:34:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T23:33:20.000Z",
+      "value" : 2.2560380918375817e-81
+    },
+    {
+      "end" : "2023-11-14T23:35:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T23:34:20.000Z",
+      "value" : 8.734563582733769e-21
+    },
+    {
+      "end" : "2023-11-14T23:36:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T23:35:20.000Z",
+      "value" : -2.2754696500286511e+35
+    },
+    {
+      "end" : "2023-11-14T23:37:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T23:36:20.000Z",
+      "value" : -6.5700317619789794e+208
+    },
+    {
+      "end" : "2023-11-14T23:38:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T23:37:20.000Z",
+      "value" : -2.3325365529118255e-78
+    },
+    {
+      "end" : "2023-11-14T23:39:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T23:38:20.000Z",
+      "value" : -4.0944441292542541e+119
+    },
+    {
+      "end" : "2023-11-14T23:40:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T23:39:20.000Z",
+      "value" : 9.0981799059414809e+37
+    },
+    {
+      "end" : "2023-11-14T23:41:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T23:40:20.000Z",
+      "value" : 7.0725011568154751e-213
+    },
+    {
+      "end" : "2023-11-14T23:42:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T23:41:20.000Z",
+      "value" : -3.2526686905118126e+190
+    },
+    {
+      "end" : "2023-11-14T23:43:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T23:42:20.000Z",
+      "value" : -4.9517157132983855e-08
+    },
+    {
+      "end" : "2023-11-14T23:44:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T23:43:20.000Z",
+      "value" : -1.8500951294441772e+77
+    },
+    {
+      "end" : "2023-11-14T23:45:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T23:44:20.000Z",
+      "value" : -3.1271296772730463e+190
+    },
+    {
+      "end" : "2023-11-14T23:46:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T23:45:20.000Z",
+      "value" : -7.6838082160241033e-117
+    },
+    {
+      "end" : "2023-11-14T23:47:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T23:46:20.000Z",
+      "value" : -3.0116715827487771e+270
+    },
+    {
+      "end" : "2023-11-14T23:48:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T23:47:20.000Z",
+      "value" : 0.00018852267265612272
+    },
+    {
+      "end" : "2023-11-14T23:49:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T23:48:20.000Z",
+      "value" : 6.9040090941458281e-223
+    },
+    {
+      "end" : "2023-11-14T23:50:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-14T23:49:20.000Z",
+      "value" : -4.6312078341270382e+249
+    },
+    {
+      "end" : "2023-11-14T23:51:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-14T23:50:20.000Z",
+      "value" : 2.8417730778493565e+159
+    },
+    {
+      "end" : "2023-11-14T23:52:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-14T23:51:20.000Z",
+      "value" : 2.2427486553194653e-116
+    },
+    {
+      "end" : "2023-11-14T23:53:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-14T23:52:20.000Z",
+      "value" : 8.6128378726500814e-206
+    },
+    {
+      "end" : "2023-11-14T23:54:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-14T23:53:20.000Z",
+      "value" : -2.9066018506694736e-291
+    },
+    {
+      "end" : "2023-11-14T23:55:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-14T23:54:20.000Z",
+      "value" : -1.7780207695199809e-213
+    },
+    {
+      "end" : "2023-11-14T23:56:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-14T23:55:20.000Z",
+      "value" : -3.679820834337792e-41
+    },
+    {
+      "end" : "2023-11-14T23:57:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-14T23:56:20.000Z",
+      "value" : 1.2124063077951985e-34
+    },
+    {
+      "end" : "2023-11-14T23:58:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-14T23:57:20.000Z",
+      "value" : 3.0213554893434471e-143
+    },
+    {
+      "end" : "2023-11-14T23:59:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-14T23:58:20.000Z",
+      "value" : 9.6053838979060388e-59
+    },
+    {
+      "end" : "2023-11-15T00:00:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-14T23:59:20.000Z",
+      "value" : -5.0703028677854129e-234
+    },
+    {
+      "end" : "2023-11-15T00:01:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T00:00:20.000Z",
+      "value" : 2.4822684031665689e-117
+    },
+    {
+      "end" : "2023-11-15T00:02:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T00:01:20.000Z",
+      "value" : -4.1576827592412859e-306
+    },
+    {
+      "end" : "2023-11-15T00:03:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T00:02:20.000Z",
+      "value" : 1.9731955263700422e-268
+    },
+    {
+      "end" : "2023-11-15T00:04:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T00:03:20.000Z",
+      "value" : 1.0974675502198559e+132
+    },
+    {
+      "end" : "2023-11-15T00:05:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T00:04:20.000Z",
+      "value" : -1.1428235651710611e+169
+    },
+    {
+      "end" : "2023-11-15T00:06:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T00:05:20.000Z",
+      "value" : -8.6646816094542501e+176
+    },
+    {
+      "end" : "2023-11-15T00:07:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T00:06:20.000Z",
+      "value" : -2.4795372497267788e+280
+    },
+    {
+      "end" : "2023-11-15T00:08:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T00:07:20.000Z",
+      "value" : 8.2134292833173386e+227
+    },
+    {
+      "end" : "2023-11-15T00:09:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T00:08:20.000Z",
+      "value" : -8.4602217945413007e+27
+    },
+    {
+      "end" : "2023-11-15T00:10:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T00:09:20.000Z",
+      "value" : -3.6682884187487946e+143
+    },
+    {
+      "end" : "2023-11-15T00:11:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T00:10:20.000Z",
+      "value" : -4.5925185480655987e-162
+    },
+    {
+      "end" : "2023-11-15T00:12:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T00:11:20.000Z",
+      "value" : -6.8043429941058271e-183
+    },
+    {
+      "end" : "2023-11-15T00:13:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T00:12:20.000Z",
+      "value" : 8.1988223665047733e-179
+    },
+    {
+      "end" : "2023-11-15T00:14:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T00:13:20.000Z",
+      "value" : 5.4208385327521645e+19
+    },
+    {
+      "end" : "2023-11-15T00:15:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T00:14:20.000Z",
+      "value" : 3.1638596828632837e-77
+    },
+    {
+      "end" : "2023-11-15T00:16:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T00:15:20.000Z",
+      "value" : -1.4299069267268304e+202
+    },
+    {
+      "end" : "2023-11-15T00:17:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T00:16:20.000Z",
+      "value" : -1.2713968569350224e+216
+    },
+    {
+      "end" : "2023-11-15T00:18:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T00:17:20.000Z",
+      "value" : -4.1838750711076169e+89
+    },
+    {
+      "end" : "2023-11-15T00:19:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T00:18:20.000Z",
+      "value" : 4.9230470956878118e-222
+    },
+    {
+      "end" : "2023-11-15T00:20:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T00:19:20.000Z",
+      "value" : -4.0264068373161209e-265
+    },
+    {
+      "end" : "2023-11-15T00:21:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T00:20:20.000Z",
+      "value" : -3.0304317035734343
+    },
+    {
+      "end" : "2023-11-15T00:22:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T00:21:20.000Z",
+      "value" : -212497.95788117556
+    },
+    {
+      "end" : "2023-11-15T00:23:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T00:22:20.000Z",
+      "value" : -3.4643649672720436
+    },
+    {
+      "end" : "2023-11-15T00:24:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T00:23:20.000Z",
+      "value" : -1.6796103986695932e+62
+    },
+    {
+      "end" : "2023-11-15T00:25:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T00:24:20.000Z",
+      "value" : 1.9873550928849337e-47
+    },
+    {
+      "end" : "2023-11-15T00:26:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T00:25:20.000Z",
+      "value" : -6.5073393522851741e-205
+    },
+    {
+      "end" : "2023-11-15T00:27:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T00:26:20.000Z",
+      "value" : -2.5509890770016766e+295
+    },
+    {
+      "end" : "2023-11-15T00:28:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T00:27:20.000Z",
+      "value" : -1.3417407777707275e-232
+    },
+    {
+      "end" : "2023-11-15T00:29:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T00:28:20.000Z",
+      "value" : -5.1286751228020109e-08
+    },
+    {
+      "end" : "2023-11-15T00:30:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T00:29:20.000Z",
+      "value" : -3.7961211270285238e+306
+    },
+    {
+      "end" : "2023-11-15T00:31:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T00:30:20.000Z",
+      "value" : 1.9170799627918679e-106
+    },
+    {
+      "end" : "2023-11-15T00:32:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T00:31:20.000Z",
+      "value" : 2.4769639794844303e+199
+    },
+    {
+      "end" : "2023-11-15T00:33:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T00:32:20.000Z",
+      "value" : -2.8513485355435718e+111
+    },
+    {
+      "end" : "2023-11-15T00:34:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T00:33:20.000Z",
+      "value" : 2.2375355434872911e-279
+    },
+    {
+      "end" : "2023-11-15T00:35:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T00:34:20.000Z",
+      "value" : -5.7474933533760419e-224
+    },
+    {
+      "end" : "2023-11-15T00:36:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T00:35:20.000Z",
+      "value" : -4.9234966699939149e+178
+    },
+    {
+      "end" : "2023-11-15T00:37:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T00:36:20.000Z",
+      "value" : -1.1722153785973984e-39
+    },
+    {
+      "end" : "2023-11-15T00:38:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T00:37:20.000Z",
+      "value" : 2.0654762081619882e+62
+    },
+    {
+      "end" : "2023-11-15T00:39:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T00:38:20.000Z",
+      "value" : 6.1763034007490063e-258
+    },
+    {
+      "end" : "2023-11-15T00:40:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T00:39:20.000Z",
+      "value" : -1.5269612199272742e+237
+    },
+    {
+      "end" : "2023-11-15T00:41:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T00:40:20.000Z",
+      "value" : -1.5677722669143612e+152
+    },
+    {
+      "end" : "2023-11-15T00:42:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T00:41:20.000Z",
+      "value" : 2.9833573837167559e+26
+    },
+    {
+      "end" : "2023-11-15T00:43:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T00:42:20.000Z",
+      "value" : -5.1880003386803891e-209
+    },
+    {
+      "end" : "2023-11-15T00:44:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T00:43:20.000Z",
+      "value" : 6.5547749981139866e-308
+    },
+    {
+      "end" : "2023-11-15T00:45:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T00:44:20.000Z",
+      "value" : 2.1281695513524893e+17
+    },
+    {
+      "end" : "2023-11-15T00:46:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T00:45:20.000Z",
+      "value" : -1.0683257397203376e+155
+    },
+    {
+      "end" : "2023-11-15T00:47:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T00:46:20.000Z",
+      "value" : -1.6320093802835505e-58
+    },
+    {
+      "end" : "2023-11-15T00:48:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T00:47:20.000Z",
+      "value" : -9.7579916783771059e-247
+    },
+    {
+      "end" : "2023-11-15T00:49:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T00:48:20.000Z",
+      "value" : 9.4644712883926681e-284
+    },
+    {
+      "end" : "2023-11-15T00:50:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T00:49:20.000Z",
+      "value" : -8.6466173405200997e-35
+    },
+    {
+      "end" : "2023-11-15T00:51:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T00:50:20.000Z",
+      "value" : 5.0058815994488034e-130
+    },
+    {
+      "end" : "2023-11-15T00:52:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T00:51:20.000Z",
+      "value" : -6.8493957995067897e-127
+    },
+    {
+      "end" : "2023-11-15T00:53:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T00:52:20.000Z",
+      "value" : -4.5931581868850619e-155
+    },
+    {
+      "end" : "2023-11-15T00:54:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T00:53:20.000Z",
+      "value" : 272251000000
+    },
+    {
+      "end" : "2023-11-15T00:55:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T00:54:20.000Z",
+      "value" : 0.94747999999999999
+    },
+    {
+      "end" : "2023-11-15T00:56:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T00:55:20.000Z",
+      "value" : -960809000000
+    },
+    {
+      "end" : "2023-11-15T00:57:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T00:56:20.000Z",
+      "value" : 5346.6899999999996
+    },
+    {
+      "end" : "2023-11-15T00:58:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T00:57:20.000Z",
+      "value" : 60835000000000000
+    },
+    {
+      "end" : "2023-11-15T00:59:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T00:58:20.000Z",
+      "value" : -746352000000000
+    },
+    {
+      "end" : "2023-11-15T01:00:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T00:59:20.000Z",
+      "value" : -8.0812099999999997e+20
+    },
+    {
+      "end" : "2023-11-15T01:01:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T01:00:20.000Z",
+      "value" : -0.00028837699999999998
+    },
+    {
+      "end" : "2023-11-15T01:02:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T01:01:20.000Z",
+      "value" : -7.89757e+18
+    },
+    {
+      "end" : "2023-11-15T01:03:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T01:02:20.000Z",
+      "value" : 0.033064799999999998
+    },
+    {
+      "end" : "2023-11-15T01:04:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T01:03:20.000Z",
+      "value" : 640.94799999999998
+    },
+    {
+      "end" : "2023-11-15T01:05:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T01:04:20.000Z",
+      "value" : -5.4958400000000003
+    },
+    {
+      "end" : "2023-11-15T01:06:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T01:05:20.000Z",
+      "value" : -132215
+    },
+    {
+      "end" : "2023-11-15T01:07:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T01:06:20.000Z",
+      "value" : -9.3463899999999995
+    },
+    {
+      "end" : "2023-11-15T01:08:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T01:07:20.000Z",
+      "value" : 87482.600000000006
+    },
+    {
+      "end" : "2023-11-15T01:09:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T01:08:20.000Z",
+      "value" : 50648200000000
+    },
+    {
+      "end" : "2023-11-15T01:10:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T01:09:20.000Z",
+      "value" : -3020140000
+    },
+    {
+      "end" : "2023-11-15T01:11:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T01:10:20.000Z",
+      "value" : 2.9059800000000004e-10
+    },
+    {
+      "end" : "2023-11-15T01:12:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T01:11:20.000Z",
+      "value" : -55516600000000000
+    },
+    {
+      "end" : "2023-11-15T01:13:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T01:12:20.000Z",
+      "value" : -32192.599999999999
+    },
+    {
+      "end" : "2023-11-15T01:14:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T01:13:20.000Z",
+      "value" : 3757500000
+    },
+    {
+      "end" : "2023-11-15T01:15:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T01:14:20.000Z",
+      "value" : 4559750
+    },
+    {
+      "end" : "2023-11-15T01:16:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T01:15:20.000Z",
+      "value" : -0.59645400000000004
+    },
+    {
+      "end" : "2023-11-15T01:17:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T01:16:20.000Z",
+      "value" : -0.0042907500000000003
+    },
+    {
+      "end" : "2023-11-15T01:18:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T01:17:20.000Z",
+      "value" : -987606000
+    },
+    {
+      "end" : "2023-11-15T01:19:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T01:18:20.000Z",
+      "value" : 7.1943999999999999e-08
+    },
+    {
+      "end" : "2023-11-15T01:20:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T01:19:20.000Z",
+      "value" : -8.2954e+18
+    },
+    {
+      "end" : "2023-11-15T01:21:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T01:20:20.000Z",
+      "value" : -1981550000
+    },
+    {
+      "end" : "2023-11-15T01:22:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T01:21:20.000Z",
+      "value" : 9995.2299999999996
+    },
+    {
+      "end" : "2023-11-15T01:23:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T01:22:20.000Z",
+      "value" : -949360
+    },
+    {
+      "end" : "2023-11-15T01:24:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T01:23:20.000Z",
+      "value" : -814526000
+    },
+    {
+      "end" : "2023-11-15T01:25:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T01:24:20.000Z",
+      "value" : -6.2040299999999997e-10
+    },
+    {
+      "end" : "2023-11-15T01:26:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T01:25:20.000Z",
+      "value" : -0.0093130000000000001
+    },
+    {
+      "end" : "2023-11-15T01:27:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T01:26:20.000Z",
+      "value" : -498.99099999999999
+    },
+    {
+      "end" : "2023-11-15T01:28:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T01:27:20.000Z",
+      "value" : -1.03691e+17
+    },
+    {
+      "end" : "2023-11-15T01:29:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T01:28:20.000Z",
+      "value" : -385.18099999999998
+    },
+    {
+      "end" : "2023-11-15T01:30:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T01:29:20.000Z",
+      "value" : 7.30252e-05
+    },
+    {
+      "end" : "2023-11-15T01:31:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T01:30:20.000Z",
+      "value" : 9820.9500000000007
+    },
+    {
+      "end" : "2023-11-15T01:32:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T01:31:20.000Z",
+      "value" : 2.89978e-10
+    },
+    {
+      "end" : "2023-11-15T01:33:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T01:32:20.000Z",
+      "value" : -7.9925700000000006
+    },
+    {
+      "end" : "2023-11-15T01:34:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T01:33:20.000Z",
+      "value" : -76058000000000
+    },
+    {
+      "end" : "2023-11-15T01:35:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T01:34:20.000Z",
+      "value" : 82294.699999999997
+    },
+    {
+      "end" : "2023-11-15T01:36:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T01:35:20.000Z",
+      "value" : -898200000
+    },
+    {
+      "end" : "2023-11-15T01:37:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T01:36:20.000Z",
+      "value" : -6.48265e+18
+    },
+    {
+      "end" : "2023-11-15T01:38:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T01:37:20.000Z",
+      "value" : -63437.900000000001
+    },
+    {
+      "end" : "2023-11-15T01:39:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T01:38:20.000Z",
+      "value" : 1.4988399999999999e-07
+    },
+    {
+      "end" : "2023-11-15T01:40:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T01:39:20.000Z",
+      "value" : -6281.29
+    },
+    {
+      "end" : "2023-11-15T01:41:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T01:40:20.000Z",
+      "value" : -8939090000
+    },
+    {
+      "end" : "2023-11-15T01:42:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T01:41:20.000Z",
+      "value" : 1029.8800000000001
+    },
+    {
+      "end" : "2023-11-15T01:43:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T01:42:20.000Z",
+      "value" : -1.5077e+17
+    },
+    {
+      "end" : "2023-11-15T01:44:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T01:43:20.000Z",
+      "value" : 0.000913064
+    },
+    {
+      "end" : "2023-11-15T01:45:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T01:44:20.000Z",
+      "value" : -68070200000000000
+    },
+    {
+      "end" : "2023-11-15T01:46:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T01:45:20.000Z",
+      "value" : 0.0064407500000000003
+    },
+    {
+      "end" : "2023-11-15T01:47:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T01:46:20.000Z",
+      "value" : -0.094457800000000008
+    },
+    {
+      "end" : "2023-11-15T01:48:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T01:47:20.000Z",
+      "value" : -54635.699999999997
+    },
+    {
+      "end" : "2023-11-15T01:49:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T01:48:20.000Z",
+      "value" : -54439700000000
+    },
+    {
+      "end" : "2023-11-15T01:50:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T01:49:20.000Z",
+      "value" : 2084140000000
+    },
+    {
+      "end" : "2023-11-15T01:51:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T01:50:20.000Z",
+      "value" : 8.06683e+17
+    },
+    {
+      "end" : "2023-11-15T01:52:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T01:51:20.000Z",
+      "value" : -526903000
+    },
+    {
+      "end" : "2023-11-15T01:53:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T01:52:20.000Z",
+      "value" : -3.88694e+18
+    },
+    {
+      "end" : "2023-11-15T01:54:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T01:53:20.000Z",
+      "value" : -5037070000000
+    },
+    {
+      "end" : "2023-11-15T01:55:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T01:54:20.000Z",
+      "value" : 0.0047385100000000005
+    },
+    {
+      "end" : "2023-11-15T01:56:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T01:55:20.000Z",
+      "value" : 0.0094885899999999999
+    },
+    {
+      "end" : "2023-11-15T01:57:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T01:56:20.000Z",
+      "value" : -8.5155299999999987e-05
+    },
+    {
+      "end" : "2023-11-15T01:58:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T01:57:20.000Z",
+      "value" : -8.19483e+17
+    },
+    {
+      "end" : "2023-11-15T01:59:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T01:58:20.000Z",
+      "value" : 3861350000000
+    },
+    {
+      "end" : "2023-11-15T02:00:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T01:59:20.000Z",
+      "value" : 0.00026631299999999996
+    },
+    {
+      "end" : "2023-11-15T02:01:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T02:00:20.000Z",
+      "value" : -0.0095394599999999996
+    },
+    {
+      "end" : "2023-11-15T02:02:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T02:01:20.000Z",
+      "value" : 42617800
+    },
+    {
+      "end" : "2023-11-15T02:03:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T02:02:20.000Z",
+      "value" : 738.447
+    },
+    {
+      "end" : "2023-11-15T02:04:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T02:03:20.000Z",
+      "value" : 5.38944e+18
+    },
+    {
+      "end" : "2023-11-15T02:05:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T02:04:20.000Z",
+      "value" : -58198200000000000
+    },
+    {
+      "end" : "2023-11-15T02:06:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T02:05:20.000Z",
+      "value" : 6.9793200000000003e-09
+    },
+    {
+      "end" : "2023-11-15T02:07:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T02:06:20.000Z",
+      "value" : 7372.1599999999999
+    },
+    {
+      "end" : "2023-11-15T02:08:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T02:07:20.000Z",
+      "value" : -0.00057156000000000004
+    },
+    {
+      "end" : "2023-11-15T02:09:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T02:08:20.000Z",
+      "value" : 4.01981e+18
+    },
+    {
+      "end" : "2023-11-15T02:10:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T02:09:20.000Z",
+      "value" : -8440580000000000
+    },
+    {
+      "end" : "2023-11-15T02:11:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T02:10:20.000Z",
+      "value" : 0.0056513000000000006
+    },
+    {
+      "end" : "2023-11-15T02:12:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T02:11:20.000Z",
+      "value" : 4726160000000000
+    },
+    {
+      "end" : "2023-11-15T02:13:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T02:12:20.000Z",
+      "value" : 6.8114800000000002e-06
+    },
+    {
+      "end" : "2023-11-15T02:14:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T02:13:20.000Z",
+      "value" : -5870870000000
+    },
+    {
+      "end" : "2023-11-15T02:15:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T02:14:20.000Z",
+      "value" : 6.41515e+19
+    },
+    {
+      "end" : "2023-11-15T02:16:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T02:15:20.000Z",
+      "value" : 753383000
+    },
+    {
+      "end" : "2023-11-15T02:17:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T02:16:20.000Z",
+      "value" : -0.045675000000000007
+    },
+    {
+      "end" : "2023-11-15T02:18:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T02:17:20.000Z",
+      "value" : 0.00043300199999999999
+    },
+    {
+      "end" : "2023-11-15T02:19:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T02:18:20.000Z",
+      "value" : 5.1855299999999992e-09
+    },
+    {
+      "end" : "2023-11-15T02:20:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T02:19:20.000Z",
+      "value" : -9901380
+    },
+    {
+      "end" : "2023-11-15T02:21:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T02:20:20.000Z",
+      "value" : 246168000000
+    },
+    {
+      "end" : "2023-11-15T02:22:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T02:21:20.000Z",
+      "value" : 7358130
+    },
+    {
+      "end" : "2023-11-15T02:23:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T02:22:20.000Z",
+      "value" : 0.085992900000000011
+    },
+    {
+      "end" : "2023-11-15T02:24:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T02:23:20.000Z",
+      "value" : 7.2950999999999989e-10
+    },
+    {
+      "end" : "2023-11-15T02:25:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T02:24:20.000Z",
+      "value" : 14263700000000
+    },
+    {
+      "end" : "2023-11-15T02:26:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T02:25:20.000Z",
+      "value" : 0.00047914000000000008
+    },
+    {
+      "end" : "2023-11-15T02:27:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T02:26:20.000Z",
+      "value" : -1.9910199999999998e-05
+    },
+    {
+      "end" : "2023-11-15T02:28:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T02:27:20.000Z",
+      "value" : 7739840000000000
+    },
+    {
+      "end" : "2023-11-15T02:29:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T02:28:20.000Z",
+      "value" : -682400
+    },
+    {
+      "end" : "2023-11-15T02:30:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T02:29:20.000Z",
+      "value" : 4210120000
+    },
+    {
+      "end" : "2023-11-15T02:31:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T02:30:20.000Z",
+      "value" : 483453
+    },
+    {
+      "end" : "2023-11-15T02:32:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T02:31:20.000Z",
+      "value" : -90715200
+    },
+    {
+      "end" : "2023-11-15T02:33:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T02:32:20.000Z",
+      "value" : 79.875500000000002
+    },
+    {
+      "end" : "2023-11-15T02:34:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T02:33:20.000Z",
+      "value" : 5.63612e-10
+    },
+    {
+      "end" : "2023-11-15T02:35:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T02:34:20.000Z",
+      "value" : 777.16499999999996
+    },
+    {
+      "end" : "2023-11-15T02:36:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T02:35:20.000Z",
+      "value" : -1.17279e+19
+    },
+    {
+      "end" : "2023-11-15T02:37:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T02:36:20.000Z",
+      "value" : -4.2976999999999995e-06
+    },
+    {
+      "end" : "2023-11-15T02:38:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T02:37:20.000Z",
+      "value" : -508199
+    },
+    {
+      "end" : "2023-11-15T02:39:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T02:38:20.000Z",
+      "value" : 3870.3000000000002
+    },
+    {
+      "end" : "2023-11-15T02:40:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T02:39:20.000Z",
+      "value" : -916919
+    },
+    {
+      "end" : "2023-11-15T02:41:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T02:40:20.000Z",
+      "value" : -5012360000000
+    },
+    {
+      "end" : "2023-11-15T02:42:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T02:41:20.000Z",
+      "value" : -2.2862499999999999e-06
+    },
+    {
+      "end" : "2023-11-15T02:43:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T02:42:20.000Z",
+      "value" : -1069490000000
+    },
+    {
+      "end" : "2023-11-15T02:44:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T02:43:20.000Z",
+      "value" : 46935000000
+    },
+    {
+      "end" : "2023-11-15T02:45:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T02:44:20.000Z",
+      "value" : -0.00091492000000000006
+    },
+    {
+      "end" : "2023-11-15T02:46:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T02:45:20.000Z",
+      "value" : -6757100000
+    },
+    {
+      "end" : "2023-11-15T02:47:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T02:46:20.000Z",
+      "value" : 4.6247900000000003e-06
+    },
+    {
+      "end" : "2023-11-15T02:48:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T02:47:20.000Z",
+      "value" : 0.0059151200000000011
+    },
+    {
+      "end" : "2023-11-15T02:49:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T02:48:20.000Z",
+      "value" : -70599
+    },
+    {
+      "end" : "2023-11-15T02:50:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T02:49:20.000Z",
+      "value" : 1.02567e+20
+    },
+    {
+      "end" : "2023-11-15T02:51:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T02:50:20.000Z",
+      "value" : -0.00040627000000000003
+    },
+    {
+      "end" : "2023-11-15T02:52:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T02:51:20.000Z",
+      "value" : 0.86894900000000008
+    },
+    {
+      "end" : "2023-11-15T02:53:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T02:52:20.000Z",
+      "value" : -0.31428800000000001
+    },
+    {
+      "end" : "2023-11-15T02:54:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T02:53:20.000Z",
+      "value" : 4.6644000000000004e-08
+    },
+    {
+      "end" : "2023-11-15T02:55:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T02:54:20.000Z",
+      "value" : -0.00036164900000000002
+    },
+    {
+      "end" : "2023-11-15T02:56:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T02:55:20.000Z",
+      "value" : -6.1963799999999993e+20
+    },
+    {
+      "end" : "2023-11-15T02:57:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T02:56:20.000Z",
+      "value" : -4368290
+    },
+    {
+      "end" : "2023-11-15T02:58:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T02:57:20.000Z",
+      "value" : 1.6651600000000001e-07
+    },
+    {
+      "end" : "2023-11-15T02:59:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T02:58:20.000Z",
+      "value" : 8900570
+    },
+    {
+      "end" : "2023-11-15T03:00:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T02:59:20.000Z",
+      "value" : 0.66496299999999997
+    },
+    {
+      "end" : "2023-11-15T03:01:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T03:00:20.000Z",
+      "value" : -4424650
+    },
+    {
+      "end" : "2023-11-15T03:02:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T03:01:20.000Z",
+      "value" : -0.00014353000000000003
+    },
+    {
+      "end" : "2023-11-15T03:03:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T03:02:20.000Z",
+      "value" : -3915190000000000
+    },
+    {
+      "end" : "2023-11-15T03:04:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T03:03:20.000Z",
+      "value" : -0.0056149400000000006
+    },
+    {
+      "end" : "2023-11-15T03:05:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T03:04:20.000Z",
+      "value" : 65040800000
+    },
+    {
+      "end" : "2023-11-15T03:06:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T03:05:20.000Z",
+      "value" : -0.56227499999999997
+    },
+    {
+      "end" : "2023-11-15T03:07:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T03:06:20.000Z",
+      "value" : -6438360000
+    },
+    {
+      "end" : "2023-11-15T03:08:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T03:07:20.000Z",
+      "value" : -42552600000000
+    },
+    {
+      "end" : "2023-11-15T03:09:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T03:08:20.000Z",
+      "value" : 6.8178199999999997e-05
+    },
+    {
+      "end" : "2023-11-15T03:10:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T03:09:20.000Z",
+      "value" : 5.7321999999999997e-09
+    },
+    {
+      "end" : "2023-11-15T03:11:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T03:10:20.000Z",
+      "value" : 7598690000
+    },
+    {
+      "end" : "2023-11-15T03:12:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T03:11:20.000Z",
+      "value" : 5.0863300000000003e+20
+    },
+    {
+      "end" : "2023-11-15T03:13:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T03:12:20.000Z",
+      "value" : -9.07573e+19
+    },
+    {
+      "end" : "2023-11-15T03:14:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T03:13:20.000Z",
+      "value" : -4.6656399999999999e-08
+    },
+    {
+      "end" : "2023-11-15T03:15:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T03:14:20.000Z",
+      "value" : -6378400000000
+    },
+    {
+      "end" : "2023-11-15T03:16:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T03:15:20.000Z",
+      "value" : -317894000000
+    },
+    {
+      "end" : "2023-11-15T03:17:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T03:16:20.000Z",
+      "value" : 1.9172699999999999e-06
+    },
+    {
+      "end" : "2023-11-15T03:18:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T03:17:20.000Z",
+      "value" : -58837000000000000
+    },
+    {
+      "end" : "2023-11-15T03:19:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T03:18:20.000Z",
+      "value" : -8.4248800000000007e-07
+    },
+    {
+      "end" : "2023-11-15T03:20:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T03:19:20.000Z",
+      "value" : -9.2480999999999983e-09
+    },
+    {
+      "end" : "2023-11-15T03:21:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T03:20:20.000Z",
+      "value" : -1397630000
+    },
+    {
+      "end" : "2023-11-15T03:22:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T03:21:20.000Z",
+      "value" : -5.60334e+19
+    },
+    {
+      "end" : "2023-11-15T03:23:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T03:22:20.000Z",
+      "value" : 5325480000
+    },
+    {
+      "end" : "2023-11-15T03:24:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T03:23:20.000Z",
+      "value" : -8.4347600000000003e-07
+    },
+    {
+      "end" : "2023-11-15T03:25:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T03:24:20.000Z",
+      "value" : 0.00087264099999999995
+    },
+    {
+      "end" : "2023-11-15T03:26:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T03:25:20.000Z",
+      "value" : 62.778700000000008
+    },
+    {
+      "end" : "2023-11-15T03:27:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T03:26:20.000Z",
+      "value" : -57905.300000000003
+    },
+    {
+      "end" : "2023-11-15T03:28:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T03:27:20.000Z",
+      "value" : 817.78300000000002
+    },
+    {
+      "end" : "2023-11-15T03:29:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T03:28:20.000Z",
+      "value" : -37231000000000000
+    },
+    {
+      "end" : "2023-11-15T03:30:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T03:29:20.000Z",
+      "value" : -583917000000
+    },
+    {
+      "end" : "2023-11-15T03:31:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T03:30:20.000Z",
+      "value" : 7.2794000000000008
+    },
+    {
+      "end" : "2023-11-15T03:32:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T03:31:20.000Z",
+      "value" : -6.9201600000000002e-10
+    },
+    {
+      "end" : "2023-11-15T03:33:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T03:32:20.000Z",
+      "value" : -986491
+    },
+    {
+      "end" : "2023-11-15T03:34:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T03:33:20.000Z",
+      "value" : -1412788387840
+    },
+    {
+      "end" : "2023-11-15T03:35:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T03:34:20.000Z",
+      "value" : -1791259312128
+    },
+    {
+      "end" : "2023-11-15T03:36:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T03:35:20.000Z",
+      "value" : -1022139301888
+    },
+    {
+      "end" : "2023-11-15T03:37:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T03:36:20.000Z",
+      "value" : -7492624384
+    },
+    {
+      "end" : "2023-11-15T03:38:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T03:37:20.000Z",
+      "value" : 709798920192
+    },
+    {
+      "end" : "2023-11-15T03:39:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T03:38:20.000Z",
+      "value" : -5171953664
+    },
+    {
+      "end" : "2023-11-15T03:40:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T03:39:20.000Z",
+      "value" : 1909084160
+    },
+    {
+      "end" : "2023-11-15T03:41:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T03:40:20.000Z",
+      "value" : 476410388938752
+    },
+    {
+      "end" : "2023-11-15T03:42:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T03:41:20.000Z",
+      "value" : 38078643175424
+    },
+    {
+      "end" : "2023-11-15T03:43:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T03:42:20.000Z",
+      "value" : -386467062874112
+    },
+    {
+      "end" : "2023-11-15T03:44:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T03:43:20.000Z",
+      "value" : -16634580136099840
+    },
+    {
+      "end" : "2023-11-15T03:45:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T03:44:20.000Z",
+      "value" : -721249370112
+    },
+    {
+      "end" : "2023-11-15T03:46:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T03:45:20.000Z",
+      "value" : -3911815168
+    },
+    {
+      "end" : "2023-11-15T03:47:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T03:46:20.000Z",
+      "value" : -12261216
+    },
+    {
+      "end" : "2023-11-15T03:48:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T03:47:20.000Z",
+      "value" : 34173440
+    },
+    {
+      "end" : "2023-11-15T03:49:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T03:48:20.000Z",
+      "value" : 70865059840
+    },
+    {
+      "end" : "2023-11-15T03:50:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T03:49:20.000Z",
+      "value" : 84988657664
+    },
+    {
+      "end" : "2023-11-15T03:51:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T03:50:20.000Z",
+      "value" : 48857920
+    },
+    {
+      "end" : "2023-11-15T03:52:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T03:51:20.000Z",
+      "value" : -17957912576
+    },
+    {
+      "end" : "2023-11-15T03:53:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T03:52:20.000Z",
+      "value" : 49739
+    },
+    {
+      "end" : "2023-11-15T03:54:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T03:53:20.000Z",
+      "value" : 29261594624
+    },
+    {
+      "end" : "2023-11-15T03:55:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T03:54:20.000Z",
+      "value" : 12094554112
+    },
+    {
+      "end" : "2023-11-15T03:56:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T03:55:20.000Z",
+      "value" : -2817511431077888
+    },
+    {
+      "end" : "2023-11-15T03:57:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T03:56:20.000Z",
+      "value" : -1306572800
+    },
+    {
+      "end" : "2023-11-15T03:58:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T03:57:20.000Z",
+      "value" : 696067817472
+    },
+    {
+      "end" : "2023-11-15T03:59:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T03:58:20.000Z",
+      "value" : -361731540910080
+    },
+    {
+      "end" : "2023-11-15T04:00:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T03:59:20.000Z",
+      "value" : 1811832832
+    },
+    {
+      "end" : "2023-11-15T04:01:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T04:00:20.000Z",
+      "value" : -81127744
+    },
+    {
+      "end" : "2023-11-15T04:02:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T04:01:20.000Z",
+      "value" : -568320
+    },
+    {
+      "end" : "2023-11-15T04:03:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T04:02:20.000Z",
+      "value" : -40060156402204672
+    },
+    {
+      "end" : "2023-11-15T04:04:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T04:03:20.000Z",
+      "value" : 77252503011328
+    },
+    {
+      "end" : "2023-11-15T04:05:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T04:04:20.000Z",
+      "value" : 2.0745928990261248e+17
+    },
+    {
+      "end" : "2023-11-15T04:06:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T04:05:20.000Z",
+      "value" : 9684295680
+    },
+    {
+      "end" : "2023-11-15T04:07:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T04:06:20.000Z",
+      "value" : 1934727
+    },
+    {
+      "end" : "2023-11-15T04:08:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T04:07:20.000Z",
+      "value" : -17804176
+    },
+    {
+      "end" : "2023-11-15T04:09:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T04:08:20.000Z",
+      "value" : 12616184
+    },
+    {
+      "end" : "2023-11-15T04:10:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T04:09:20.000Z",
+      "value" : -141278464
+    },
+    {
+      "end" : "2023-11-15T04:11:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T04:10:20.000Z",
+      "value" : -265912162713600
+    },
+    {
+      "end" : "2023-11-15T04:12:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T04:11:20.000Z",
+      "value" : -40960633339904
+    },
+    {
+      "end" : "2023-11-15T04:13:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T04:12:20.000Z",
+      "value" : -57227902976
+    },
+    {
+      "end" : "2023-11-15T04:14:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T04:13:20.000Z",
+      "value" : -30000531111936
+    },
+    {
+      "end" : "2023-11-15T04:15:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T04:14:20.000Z",
+      "value" : -1605402940669952
+    },
+    {
+      "end" : "2023-11-15T04:16:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T04:15:20.000Z",
+      "value" : -359074365440
+    },
+    {
+      "end" : "2023-11-15T04:17:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T04:16:20.000Z",
+      "value" : -181539140796416
+    },
+    {
+      "end" : "2023-11-15T04:18:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T04:17:20.000Z",
+      "value" : 17809769758720
+    },
+    {
+      "end" : "2023-11-15T04:19:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T04:18:20.000Z",
+      "value" : -28751885468958720
+    },
+    {
+      "end" : "2023-11-15T04:20:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T04:19:20.000Z",
+      "value" : -92384198656
+    },
+    {
+      "end" : "2023-11-15T04:21:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T04:20:20.000Z",
+      "value" : -567391
+    },
+    {
+      "end" : "2023-11-15T04:22:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T04:21:20.000Z",
+      "value" : 11344881234477056
+    },
+    {
+      "end" : "2023-11-15T04:23:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T04:22:20.000Z",
+      "value" : -14737218203549696
+    },
+    {
+      "end" : "2023-11-15T04:24:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T04:23:20.000Z",
+      "value" : -749000
+    },
+    {
+      "end" : "2023-11-15T04:25:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T04:24:20.000Z",
+      "value" : -6094840
+    },
+    {
+      "end" : "2023-11-15T04:26:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T04:25:20.000Z",
+      "value" : 809172
+    },
+    {
+      "end" : "2023-11-15T04:27:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T04:26:20.000Z",
+      "value" : 8969720
+    },
+    {
+      "end" : "2023-11-15T04:28:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T04:27:20.000Z",
+      "value" : -9716992
+    },
+    {
+      "end" : "2023-11-15T04:29:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T04:28:20.000Z",
+      "value" : -3394651956445184
+    },
+    {
+      "end" : "2023-11-15T04:30:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T04:29:20.000Z",
+      "value" : 244877492224
+    },
+    {
+      "end" : "2023-11-15T04:31:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T04:30:20.000Z",
+      "value" : -6219381080064
+    },
+    {
+      "end" : "2023-11-15T04:32:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T04:31:20.000Z",
+      "value" : -822666625810432
+    },
+    {
+      "end" : "2023-11-15T04:33:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T04:32:20.000Z",
+      "value" : 382242
+    },
+    {
+      "end" : "2023-11-15T04:34:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T04:33:20.000Z",
+      "value" : 0.00010000000000000002
+    },
+    {
+      "end" : "2023-11-15T04:35:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T04:34:20.000Z",
+      "value" : 9.9999999999999991e-05
+    },
+    {
+      "end" : "2023-11-15T04:36:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T04:35:20.000Z",
+      "value" : 0.00010000000000000003
+    },
+    {
+      "end" : "2023-11-15T04:37:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T04:36:20.000Z",
+      "value" : 9.9999999999999978e-05
+    },
+    {
+      "end" : "2023-11-15T04:38:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T04:37:20.000Z",
+      "value" : 0.00010000000000000005
+    },
+    {
+      "end" : "2023-11-15T04:39:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T04:38:20.000Z",
+      "value" : 9.9999999999999964e-05
+    },
+    {
+      "end" : "2023-11-15T04:40:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T04:39:20.000Z",
+      "value" : 0.00010000000000000006
+    },
+    {
+      "end" : "2023-11-15T04:41:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T04:40:20.000Z",
+      "value" : 9.9999999999999951e-05
+    },
+    {
+      "end" : "2023-11-15T04:42:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T04:41:20.000Z",
+      "value" : 9007199254740994
+    },
+    {
+      "end" : "2023-11-15T04:43:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T04:42:20.000Z",
+      "value" : 9007199254740991
+    },
+    {
+      "end" : "2023-11-15T04:44:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T04:43:20.000Z",
+      "value" : 9007199254740996
+    },
+    {
+      "end" : "2023-11-15T04:45:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T04:44:20.000Z",
+      "value" : 9007199254740990
+    },
+    {
+      "end" : "2023-11-15T04:46:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T04:45:20.000Z",
+      "value" : 9007199254740998
+    },
+    {
+      "end" : "2023-11-15T04:47:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T04:46:20.000Z",
+      "value" : 9007199254740989
+    },
+    {
+      "end" : "2023-11-15T04:48:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T04:47:20.000Z",
+      "value" : 9007199254741000
+    },
+    {
+      "end" : "2023-11-15T04:49:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T04:48:20.000Z",
+      "value" : 9007199254740988
+    },
+    {
+      "end" : "2023-11-15T04:50:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T04:49:20.000Z",
+      "value" : 10000000000000002
+    },
+    {
+      "end" : "2023-11-15T04:51:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T04:50:20.000Z",
+      "value" : 9999999999999998
+    },
+    {
+      "end" : "2023-11-15T04:52:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T04:51:20.000Z",
+      "value" : 10000000000000004
+    },
+    {
+      "end" : "2023-11-15T04:53:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T04:52:20.000Z",
+      "value" : 9999999999999996
+    },
+    {
+      "end" : "2023-11-15T04:54:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T04:53:20.000Z",
+      "value" : 10000000000000006
+    },
+    {
+      "end" : "2023-11-15T04:55:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T04:54:20.000Z",
+      "value" : 9999999999999994
+    },
+    {
+      "end" : "2023-11-15T04:56:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T04:55:20.000Z",
+      "value" : 10000000000000008
+    },
+    {
+      "end" : "2023-11-15T04:57:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T04:56:20.000Z",
+      "value" : 9999999999999992
+    },
+    {
+      "end" : "2023-11-15T04:58:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T04:57:20.000Z",
+      "value" : 1.0000000000000002e+17
+    },
+    {
+      "end" : "2023-11-15T04:59:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T04:58:20.000Z",
+      "value" : 99999999999999984
+    },
+    {
+      "end" : "2023-11-15T05:00:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T04:59:20.000Z",
+      "value" : 1.0000000000000003e+17
+    },
+    {
+      "end" : "2023-11-15T05:01:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T05:00:20.000Z",
+      "value" : 99999999999999968
+    },
+    {
+      "end" : "2023-11-15T05:02:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T05:01:20.000Z",
+      "value" : 1.0000000000000005e+17
+    },
+    {
+      "end" : "2023-11-15T05:03:20.000Z",
+      "kind" : "hrvSDNN",
+      "start" : "2023-11-15T05:02:20.000Z",
+      "value" : 99999999999999952
+    },
+    {
+      "end" : "2023-11-15T05:04:20.000Z",
+      "kind" : "spo2",
+      "start" : "2023-11-15T05:03:20.000Z",
+      "value" : 1.0000000000000006e+17
+    },
+    {
+      "end" : "2023-11-15T05:05:20.000Z",
+      "kind" : "temperature",
+      "start" : "2023-11-15T05:04:20.000Z",
+      "value" : 99999999999999936
+    },
+    {
+      "end" : "2023-11-15T05:06:20.000Z",
+      "kind" : "respiratoryRate",
+      "start" : "2023-11-15T05:05:20.000Z",
+      "value" : 1.0000000000000002
+    },
+    {
+      "end" : "2023-11-15T05:07:20.000Z",
+      "kind" : "steps",
+      "start" : "2023-11-15T05:06:20.000Z",
+      "value" : 0.99999999999999989
+    },
+    {
+      "end" : "2023-11-15T05:08:20.000Z",
+      "kind" : "activeEnergy",
+      "start" : "2023-11-15T05:07:20.000Z",
+      "value" : 1.0000000000000004
+    },
+    {
+      "end" : "2023-11-15T05:09:20.000Z",
+      "kind" : "sleep",
+      "start" : "2023-11-15T05:08:20.000Z",
+      "value" : 0.99999999999999978
+    },
+    {
+      "end" : "2023-11-15T05:10:20.000Z",
+      "kind" : "distance",
+      "start" : "2023-11-15T05:09:20.000Z",
+      "value" : 1.0000000000000007
+    },
+    {
+      "end" : "2023-11-15T05:11:20.000Z",
+      "kind" : "exerciseMinutes",
+      "start" : "2023-11-15T05:10:20.000Z",
+      "value" : 0.99999999999999967
+    },
+    {
+      "end" : "2023-11-15T05:12:20.000Z",
+      "kind" : "heartRate",
+      "start" : "2023-11-15T05:11:20.000Z",
+      "value" : 1.0000000000000009
+    },
+    {
+      "end" : "2023-11-15T05:13:20.000Z",
+      "kind" : "restingHeartRate",
+      "start" : "2023-11-15T05:12:20.000Z",
+      "value" : 0.99999999999999956
+    }
+  ],
+  "schemaVersion" : 3,
+  "sleep" : [
+
+  ],
+  "stepSamples" : [
+
+  ],
+  "units" : {
+    "activeEnergy" : "kcal",
+    "asleepMin" : "min",
+    "avgSpO2" : "percent",
+    "awakeMin" : "min",
+    "bedtimeGapSeconds" : "s",
+    "beyondReportedEndSeconds" : "s",
+    "celsius" : "degC",
+    "coverageFraction" : "fraction",
+    "coverageToReference" : "fraction",
+    "coverageToReferenceWake" : "fraction",
+    "coverageWithinReportedWindow" : "fraction",
+    "deepMin" : "min",
+    "delta" : "count",
+    "distance" : "m",
+    "durationSec" : "s",
+    "efficiency" : "fraction",
+    "exerciseMinutes" : "min",
+    "feelScore" : "score (unitless)",
+    "heartRate" : "count\/min",
+    "hrAwake" : "count\/min",
+    "hrDeep" : "count\/min",
+    "hrLight" : "count\/min",
+    "hrRem" : "count\/min",
+    "hrvSDNN" : "ms",
+    "lightMin" : "min",
+    "longestGapSeconds" : "s",
+    "materialGapSeconds" : "s",
+    "minSpO2" : "percent",
+    "movementLevels" : "level (ring motion index, no physical unit)",
+    "odi" : "events\/hour",
+    "osaAvgSpO2" : "percent",
+    "osaMinSpO2" : "percent",
+    "osaODI" : "events\/hour",
+    "osaTimeBelow90Sec" : "s",
+    "remMin" : "min",
+    "respiratoryRate" : "count\/min",
+    "restingHeartRate" : "count\/min",
+    "seconds" : "s",
+    "skinTempC" : "degC",
+    "sleep" : "category",
+    "sleepScore" : "score (unitless)",
+    "spo2" : "fraction",
+    "steps" : "count",
+    "stressScore" : "score (unitless)",
+    "temperature" : "degC",
+    "timeBelow90Sec" : "s",
+    "timeZoneOffsetSeconds" : "s",
+    "wakeGapSeconds" : "s"
+  }
+}

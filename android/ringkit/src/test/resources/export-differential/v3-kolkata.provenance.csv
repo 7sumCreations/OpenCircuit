@@ -1,0 +1,15 @@
+section,provenance
+daily,derived
+daytimeTemperatures,measured
+historySyncEvidence,diagnostic
+naps,derived
+samples,measured
+sleep,derived
+sleepSessions,derived
+sleepSessions.coverage,measured
+sleepSessions.edgeProvenance,derived
+sleepSessions.hypnogram,derived
+sleepSessions.osa,derived
+sleepSessions.referenceCoverage,derived
+sleepSessions.summary,derived
+stepSamples,measured

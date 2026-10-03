@@ -79,6 +79,52 @@ class ExportCoverageHazardTest {
         assertEquals(1e16, far.longestGapSeconds)
     }
 
+    /**
+     * Upstream's `end.timeIntervalSince(start)` subtracts the two dates' doubles (seconds since 2001),
+     * so a millisecond-stamped gap is not the exact duration in its last digits — and the export
+     * prints both numbers with 17 significant digits. Measured at the pin: `1000.3330001831055`.
+     */
+    @Test
+    fun gapSecondsAreTheDifferenceOfTheTwoDateDoubles() {
+        val a = ExportCoverage.assess(
+            listOf(FoundationDate.unix(1_755_000_000.580), FoundationDate.unix(1_755_001_000.913)),
+            FoundationDate.unix(1_755_000_000.0), FoundationDate.unix(1_755_001_000.913),
+        )
+        assertEquals(1, a.gaps.size)
+        assertEquals(4_652_010_237_941_776_384L, a.gaps[0].seconds.toRawBits(), "gap: ${a.gaps[0].seconds}")
+        assertEquals(4_652_010_237_941_776_384L, a.longestGapSeconds.toRawBits(), "longest: ${a.longestGapSeconds}")
+        assertEquals(1000.3330001831055, a.longestGapSeconds)
+        assertEquals(6L, a.expectedSamples)
+        assertEquals(2, a.observedSamples)
+    }
+
+    @Test
+    fun assessmentsEqualUnderIeeeEqualityHashAlike() {
+        // `equals` compares the doubles by IEEE `==`, so 0.0 and -0.0 are equal there; equal values
+        // must hash alike or a hashed collection holds both.
+        fun assessment(fraction: Double, longest: Double) =
+            ExportCoverage.Assessment(t0, at(750), 5L, 0, fraction, emptyList(), longest)
+        // Each double on its own: two sign flips can cancel out in a list hash and hide a third.
+        val plus = assessment(0.0, 0.0)
+        for (minus in listOf(assessment(-0.0, 0.0), assessment(0.0, -0.0))) {
+            assertEquals(plus, minus)
+            assertEquals(plus.hashCode(), minus.hashCode(), "$minus")
+            assertEquals(1, setOf(plus, minus).size)
+        }
+    }
+
+    @Test
+    fun aTrailingSilenceExactlyAtTheMinimumIsNotAGap() {
+        // Upstream `if to.timeIntervalSince(cursor) > minGap` — strictly longer, for the trailing hole
+        // as for the interior ones. Whole seconds, so the Date-double difference is exact.
+        val atMinimum = ExportCoverage.assess(five, t0, at(900))
+        assertEquals(emptyList(), gaps(atMinimum), "600 → 900 is exactly two epochs: jitter, not a hole")
+        assertEquals(0.0, atMinimum.longestGapSeconds)
+        val oneSecondMore = ExportCoverage.assess(five, t0, at(901))
+        assertEquals(listOf(600L to 901L), gaps(oneSecondMore))
+        assertEquals(301.0, oneSecondMore.longestGapSeconds)
+    }
+
     @Test
     fun anExpectedCountBeyondSixtyFourBitsSaturatesInsteadOfTrapping() {
         // Upstream TRAPS here ("Double value cannot be converted to Int … greater than Int.max",

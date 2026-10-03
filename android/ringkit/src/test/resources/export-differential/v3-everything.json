@@ -1,0 +1,1500 @@
+{
+  "daily" : [
+    {
+      "day" : "2024-11-02",
+      "steps" : 0
+    },
+    {
+      "day" : "2024-11-03",
+      "steps" : 8000
+    },
+    {
+      "day" : "2024-11-04",
+      "steps" : 123456
+    }
+  ],
+  "daytimeTemperatures" : [
+    {
+      "celsius" : 36.125,
+      "time" : "2024-11-02T13:00:00.000Z"
+    },
+    {
+      "celsius" : 36.375,
+      "time" : "2024-11-03T13:01:00.002Z"
+    },
+    {
+      "celsius" : 36.625,
+      "time" : "2024-11-04T14:02:00.003Z"
+    },
+    {
+      "celsius" : 36.875,
+      "time" : "2024-11-02T13:03:00.005Z"
+    },
+    {
+      "celsius" : 0.125,
+      "time" : "2024-11-03T13:04:00.006Z"
+    },
+    {
+      "celsius" : -0.125,
+      "time" : "2024-11-04T14:05:00.008Z"
+    },
+    {
+      "celsius" : -0.001,
+      "time" : "2024-11-02T13:06:00.009Z"
+    },
+    {
+      "celsius" : 34.200000000000003,
+      "time" : "2024-11-03T13:07:00.011Z"
+    },
+    {
+      "celsius" : 36.005000000000003,
+      "time" : "2024-11-04T14:08:00.012Z"
+    },
+    {
+      "celsius" : 36.015000000000001,
+      "time" : "2024-11-02T13:09:00.014Z"
+    },
+    {
+      "celsius" : 99.995000000000005,
+      "time" : "2024-11-03T13:10:00.015Z"
+    },
+    {
+      "celsius" : 1e+20,
+      "time" : "2024-11-04T14:11:00.017Z"
+    },
+    {
+      "celsius" : 36.5,
+      "time" : "2024-11-02T13:12:00.018Z"
+    },
+    {
+      "celsius" : 0,
+      "time" : "2024-11-03T13:13:00.020Z"
+    },
+    {
+      "celsius" : -0,
+      "time" : "2024-11-04T14:14:00.021Z"
+    }
+  ],
+  "epochArchive" : [
+    {
+      "evidenceBlobCoverage" : {
+        "archiveRecordCount" : 900,
+        "evidenceRecordCount" : 896,
+        "isComplete" : false,
+        "longestMissingRunSeconds" : 450,
+        "missingFromEvidenceCount" : 4
+      },
+      "firstEpoch" : "2024-11-04T02:29:59.362Z",
+      "lastEpoch" : "2024-11-05T15:57:29.778Z",
+      "recordCount" : 900,
+      "recordsBase64" : "AidMcZa74AUqT3SZvuMILVJ3nMHmCzBVep\/E6Q4zWH2ix+wRNluApcrvFDleg6jN8hc8YYar0PUaP2SJrtP4HUJnjLHW",
+      "ringID" : "ring-a"
+    },
+    {
+      "evidenceBlobCoverage" : {
+        "archiveRecordCount" : 64,
+        "evidenceRecordCount" : 64,
+        "isComplete" : true,
+        "longestMissingRunSeconds" : 0,
+        "missingFromEvidenceCount" : 0
+      },
+      "firstEpoch" : "2024-11-04T04:30:00.822Z",
+      "lastEpoch" : "2024-11-04T07:07:30.802Z",
+      "recordCount" : 64,
+      "recordsBase64" : "BitQdZq\/5AkuU3idwucMMVZ7oMXqDzRZfqPI7RI3XIGmy\/AVOl+Eqc7zGD1ih6zR9htAZYqv1PkeQ2iNstf8IUZrkLXa",
+      "ringID" : "ring-b"
+    },
+    {
+      "evidenceBlobCoverage" : {
+        "archiveRecordCount" : 0,
+        "evidenceRecordCount" : 0,
+        "isComplete" : true,
+        "longestMissingRunSeconds" : 0,
+        "missingFromEvidenceCount" : 0
+      },
+      "firstEpoch" : null,
+      "lastEpoch" : null,
+      "recordCount" : 9223372036854775807,
+      "recordsBase64" : "",
+      "ringID" : ""
+    }
+  ],
+  "exportedAt" : "2024-11-05T15:16:40.457Z",
+  "historySyncEvidence" : [
+    {
+      "capturedAt" : "2024-11-02T11:00:01.000Z",
+      "channels" : [
+        {
+          "channel" : 0,
+          "endMarkerCount" : 1,
+          "exitReason" : "endMarker",
+          "finishedAt" : "2024-11-02T10:57:22.125Z",
+          "firstOpcode" : 76,
+          "label" : "sleep",
+          "lastOpcode" : 80,
+          "outcome" : "complete",
+          "page4CCount" : 12,
+          "page4DCount" : 0,
+          "page47Count" : 3,
+          "recordsAdded" : 12,
+          "recordsAtEnd" : 112,
+          "recordsAtStart" : 100,
+          "sawSyncAck" : true,
+          "sportSampleCount" : 0,
+          "startedAt" : "2024-11-02T10:56:40.000Z",
+          "syncAckFlag" : 1
+        },
+        {
+          "channel" : 0,
+          "endMarkerCount" : 0,
+          "exitReason" : "hardTimeout",
+          "finishedAt" : "2024-11-02T10:57:22.125Z",
+          "firstOpcode" : 76,
+          "label" : "sleep",
+          "lastOpcode" : 76,
+          "outcome" : "partial",
+          "page4CCount" : 5,
+          "page4DCount" : null,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 4,
+          "recordsAtStart" : 10,
+          "sawSyncAck" : true,
+          "sportSampleCount" : null,
+          "startedAt" : "2024-11-02T10:56:40.000Z",
+          "syncAckFlag" : 0
+        },
+        {
+          "channel" : 1,
+          "endMarkerCount" : 1,
+          "exitReason" : "hardTimeout",
+          "finishedAt" : "2024-11-02T10:57:22.125Z",
+          "firstOpcode" : 71,
+          "label" : "ppg",
+          "lastOpcode" : 80,
+          "outcome" : "ppgOnly",
+          "page4CCount" : 0,
+          "page4DCount" : 2,
+          "page47Count" : 7,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 0,
+          "recordsAtStart" : 0,
+          "sawSyncAck" : true,
+          "sportSampleCount" : null,
+          "startedAt" : "2024-11-02T10:56:40.000Z",
+          "syncAckFlag" : null
+        },
+        {
+          "channel" : 2,
+          "endMarkerCount" : 1,
+          "exitReason" : "endMarker",
+          "finishedAt" : "2024-11-02T10:57:22.125Z",
+          "firstOpcode" : 77,
+          "label" : "sport",
+          "lastOpcode" : 80,
+          "outcome" : "sportOnly",
+          "page4CCount" : 0,
+          "page4DCount" : 7,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 0,
+          "recordsAtStart" : 0,
+          "sawSyncAck" : true,
+          "sportSampleCount" : 210,
+          "startedAt" : "2024-11-02T10:56:40.000Z",
+          "syncAckFlag" : 2
+        },
+        {
+          "channel" : 2,
+          "endMarkerCount" : 1,
+          "exitReason" : "quietNoPages",
+          "finishedAt" : "2024-11-02T10:57:22.125Z",
+          "firstOpcode" : 80,
+          "label" : "sport",
+          "lastOpcode" : 80,
+          "outcome" : "empty",
+          "page4CCount" : 0,
+          "page4DCount" : null,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 3,
+          "recordsAtStart" : 3,
+          "sawSyncAck" : true,
+          "sportSampleCount" : 5,
+          "startedAt" : "2024-11-02T10:56:40.000Z",
+          "syncAckFlag" : 0
+        },
+        {
+          "channel" : 0,
+          "endMarkerCount" : 0,
+          "exitReason" : "linkUnusable",
+          "finishedAt" : "2024-11-02T10:57:22.125Z",
+          "firstOpcode" : null,
+          "label" : "sleep",
+          "lastOpcode" : null,
+          "outcome" : "linkDown",
+          "page4CCount" : 0,
+          "page4DCount" : 0,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 0,
+          "recordsAtStart" : 0,
+          "sawSyncAck" : false,
+          "sportSampleCount" : null,
+          "startedAt" : "2024-11-02T10:56:40.000Z",
+          "syncAckFlag" : null
+        },
+        {
+          "channel" : 0,
+          "endMarkerCount" : 0,
+          "exitReason" : "cancelled",
+          "finishedAt" : "2024-11-02T10:57:22.125Z",
+          "firstOpcode" : null,
+          "label" : "sleep",
+          "lastOpcode" : null,
+          "outcome" : "cancelled",
+          "page4CCount" : 0,
+          "page4DCount" : 0,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 0,
+          "recordsAtStart" : 0,
+          "sawSyncAck" : false,
+          "sportSampleCount" : 0,
+          "startedAt" : "2024-11-02T10:56:40.000Z",
+          "syncAckFlag" : null
+        },
+        {
+          "channel" : 0,
+          "endMarkerCount" : 0,
+          "exitReason" : null,
+          "finishedAt" : null,
+          "firstOpcode" : null,
+          "label" : "sleep",
+          "lastOpcode" : null,
+          "outcome" : "noAck",
+          "page4CCount" : 0,
+          "page4DCount" : 0,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 7,
+          "recordsAtStart" : 7,
+          "sawSyncAck" : false,
+          "sportSampleCount" : 0,
+          "startedAt" : "2024-11-02T10:56:40.000Z",
+          "syncAckFlag" : null
+        }
+      ],
+      "historySampleCount" : 0,
+      "mergedRecordCount" : 8,
+      "nightRowOutcome" : "inserted",
+      "rawRecordBlobBase64" : "AQID",
+      "ringID" : "ring-0",
+      "sleepCommitted" : true,
+      "stagedSleepSegments" : 0,
+      "trigger" : "manual"
+    },
+    {
+      "capturedAt" : "2024-11-03T11:00:01.000Z",
+      "channels" : [
+
+      ],
+      "historySampleCount" : 10,
+      "mergedRecordCount" : 9,
+      "nightRowOutcome" : null,
+      "rawRecordBlobBase64" : "AQID",
+      "ringID" : "ring-1",
+      "sleepCommitted" : false,
+      "stagedSleepSegments" : 4,
+      "trigger" : "auto"
+    },
+    {
+      "capturedAt" : "2024-11-04T12:00:01.000Z",
+      "channels" : [
+        {
+          "channel" : 0,
+          "endMarkerCount" : 1,
+          "exitReason" : "endMarker",
+          "finishedAt" : "2024-11-04T11:57:22.125Z",
+          "firstOpcode" : 76,
+          "label" : "sleep",
+          "lastOpcode" : 80,
+          "outcome" : "complete",
+          "page4CCount" : 12,
+          "page4DCount" : 0,
+          "page47Count" : 3,
+          "recordsAdded" : 12,
+          "recordsAtEnd" : 112,
+          "recordsAtStart" : 100,
+          "sawSyncAck" : true,
+          "sportSampleCount" : 0,
+          "startedAt" : "2024-11-04T11:56:40.000Z",
+          "syncAckFlag" : 1
+        },
+        {
+          "channel" : 0,
+          "endMarkerCount" : 0,
+          "exitReason" : "hardTimeout",
+          "finishedAt" : "2024-11-04T11:57:22.125Z",
+          "firstOpcode" : 76,
+          "label" : "sleep",
+          "lastOpcode" : 76,
+          "outcome" : "partial",
+          "page4CCount" : 5,
+          "page4DCount" : null,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 4,
+          "recordsAtStart" : 10,
+          "sawSyncAck" : true,
+          "sportSampleCount" : null,
+          "startedAt" : "2024-11-04T11:56:40.000Z",
+          "syncAckFlag" : 0
+        },
+        {
+          "channel" : 1,
+          "endMarkerCount" : 1,
+          "exitReason" : "hardTimeout",
+          "finishedAt" : "2024-11-04T11:57:22.125Z",
+          "firstOpcode" : 71,
+          "label" : "ppg",
+          "lastOpcode" : 80,
+          "outcome" : "ppgOnly",
+          "page4CCount" : 0,
+          "page4DCount" : 2,
+          "page47Count" : 7,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 0,
+          "recordsAtStart" : 0,
+          "sawSyncAck" : true,
+          "sportSampleCount" : null,
+          "startedAt" : "2024-11-04T11:56:40.000Z",
+          "syncAckFlag" : null
+        },
+        {
+          "channel" : 2,
+          "endMarkerCount" : 1,
+          "exitReason" : "endMarker",
+          "finishedAt" : "2024-11-04T11:57:22.125Z",
+          "firstOpcode" : 77,
+          "label" : "sport",
+          "lastOpcode" : 80,
+          "outcome" : "sportOnly",
+          "page4CCount" : 0,
+          "page4DCount" : 7,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 0,
+          "recordsAtStart" : 0,
+          "sawSyncAck" : true,
+          "sportSampleCount" : 210,
+          "startedAt" : "2024-11-04T11:56:40.000Z",
+          "syncAckFlag" : 2
+        },
+        {
+          "channel" : 2,
+          "endMarkerCount" : 1,
+          "exitReason" : "quietNoPages",
+          "finishedAt" : "2024-11-04T11:57:22.125Z",
+          "firstOpcode" : 80,
+          "label" : "sport",
+          "lastOpcode" : 80,
+          "outcome" : "empty",
+          "page4CCount" : 0,
+          "page4DCount" : null,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 3,
+          "recordsAtStart" : 3,
+          "sawSyncAck" : true,
+          "sportSampleCount" : 5,
+          "startedAt" : "2024-11-04T11:56:40.000Z",
+          "syncAckFlag" : 0
+        },
+        {
+          "channel" : 0,
+          "endMarkerCount" : 0,
+          "exitReason" : "linkUnusable",
+          "finishedAt" : "2024-11-04T11:57:22.125Z",
+          "firstOpcode" : null,
+          "label" : "sleep",
+          "lastOpcode" : null,
+          "outcome" : "linkDown",
+          "page4CCount" : 0,
+          "page4DCount" : 0,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 0,
+          "recordsAtStart" : 0,
+          "sawSyncAck" : false,
+          "sportSampleCount" : null,
+          "startedAt" : "2024-11-04T11:56:40.000Z",
+          "syncAckFlag" : null
+        },
+        {
+          "channel" : 0,
+          "endMarkerCount" : 0,
+          "exitReason" : "cancelled",
+          "finishedAt" : "2024-11-04T11:57:22.125Z",
+          "firstOpcode" : null,
+          "label" : "sleep",
+          "lastOpcode" : null,
+          "outcome" : "cancelled",
+          "page4CCount" : 0,
+          "page4DCount" : 0,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 0,
+          "recordsAtStart" : 0,
+          "sawSyncAck" : false,
+          "sportSampleCount" : 0,
+          "startedAt" : "2024-11-04T11:56:40.000Z",
+          "syncAckFlag" : null
+        },
+        {
+          "channel" : 0,
+          "endMarkerCount" : 0,
+          "exitReason" : null,
+          "finishedAt" : null,
+          "firstOpcode" : null,
+          "label" : "sleep",
+          "lastOpcode" : null,
+          "outcome" : "noAck",
+          "page4CCount" : 0,
+          "page4DCount" : 0,
+          "page47Count" : 0,
+          "recordsAdded" : 0,
+          "recordsAtEnd" : 7,
+          "recordsAtStart" : 7,
+          "sawSyncAck" : false,
+          "sportSampleCount" : 0,
+          "startedAt" : "2024-11-04T11:56:40.000Z",
+          "syncAckFlag" : null
+        }
+      ],
+      "historySampleCount" : 20,
+      "mergedRecordCount" : 10,
+      "nightRowOutcome" : "keptFullerStoredNight",
+      "rawRecordBlobBase64" : "",
+      "ringID" : "ring-2",
+      "sleepCommitted" : true,
+      "stagedSleepSegments" : 8,
+      "trigger" : "background"
+    }
+  ],
+  "meta" : {
+    "appBuild" : "37",
+    "appVersion" : "1.0",
+    "deviceModel" : "iPhone15,2",
+    "exportedAt" : "2024-11-05T10:16:40.457-05:00",
+    "osVersion" : "18.5",
+    "rangeEnd" : "2024-11-05T10:16:40.457-05:00",
+    "rangeStart" : "2024-10-31T23:59:59.750-04:00",
+    "ringFirmware" : "FR02.018",
+    "ringGeneration" : "Gen 2",
+    "ringIdentifier" : "1E2E3E4E-0000-0000-0000-000000000001",
+    "ringModel" : "RingConn Gen2",
+    "schemaVersion" : 3,
+    "timestampPolicy" : "Timestamps in the schema-2 sections (samples, sleep, daily, stepSamples, naps, daytimeTemperatures, historySyncEvidence) are ISO-8601 in UTC and end in 'Z'. Timestamps in the schema-3 sections (meta, sleepSessions and its hypnogram\/coverage) are ISO-8601 with the exporting device's UTC offset. Date-only labels (night, day) are yyyy-MM-dd in the device's local calendar in BOTH, which is the calendar the night\/day buckets were formed with.",
+    "timeZoneIdentifier" : "America\/New_York",
+    "timeZoneOffsetSeconds" : -18000
+  },
+  "naps" : [
+    {
+      "asleepMin" : 20,
+      "end" : "2024-11-02T17:25:00.000Z",
+      "isLongNap" : false,
+      "start" : "2024-11-02T17:00:00.001Z"
+    },
+    {
+      "asleepMin" : 50,
+      "end" : "2024-11-03T17:55:00.000Z",
+      "isLongNap" : true,
+      "start" : "2024-11-03T17:00:00.001Z"
+    },
+    {
+      "asleepMin" : 80,
+      "end" : "2024-11-04T19:25:00.000Z",
+      "isLongNap" : false,
+      "start" : "2024-11-04T18:00:00.001Z"
+    }
+  ],
+  "notes" : {
+    "coverage" : "coverageFraction measures what THIS APP holds for the window, not what the ring recorded. A low value can mean the ring was not worn, was not drained yet, or that epochs were lost — the export cannot tell those apart. The coverage fields are left EMPTY for a night older than the app's raw-sample retention window: those epochs were deleted by local housekeeping, so a number there would report routine housekeeping as missing data. It is assessed over TWO witnesses unioned: the raw 0x4c epoch archive (~30 h, per ring) and the persisted heart-rate rows. The archive witness exists because the persisted rows are filtered by a strictly forward-only sync cursor, so a single late-stamped live sample can strand every earlier epoch delivered after it and make a fully-recorded night read as a gap — that reports our own cursor, not the ring. Neither witness can invent data: every counted instant is a record or a sample actually on disk. Nights older than the archive's retention are carried by the store witness alone, exactly as before. READ ITS NAME AS coverageWithinReportedWindow, which is emitted beside it in JSON and is the same number: the window is the night's REPORTED in-bed window (windowStart\/windowEnd say which). On a night the wearer never corrected, that window's right edge IS the last record, so no amount of missing data at the wake can lower this fraction: a night whose recording stopped four hours before the wearer got up reports 1.0000 with an empty gaps list, and that is the arithmetic working as written, not a clean night. On a night the wearer DID correct (isManuallyEdited true) the right edge is her own wake instead, so a trailing hole is inside the window and this fraction does fall — a low value there is real. referenceCoverage is the falsifiable companion for the nights nobody corrected; the old key is kept because this file's schema version is unchanged.",
+    "edgeProvenance" : "edgeProvenance says whether the record stream ran INTO the printed bedtime and CONTINUED past the printed wake — the question coverageFraction structurally cannot answer, because the detected window is defined by the records inside it (it measures 0.976-1.049 on all 21 nights of the development corpus, including two understated by 246 minutes, whose ~4 h hole starts exactly AT the in-bed end). The gaps are measured; the verdicts and reasons are a classifier's output at materialGapSeconds, a threshold the evidence does not pin down (gap sizes are bimodal with an empty interval from 33 to 242 minutes, so every cut in there scores identically). A gap BOUNDS the error in the reported duration, it does NOT estimate it. 'unknown' means there was no measurement on that side at all — which is equally consistent with the ring having stopped and with the app not having drained that far yet, so it carries no claim. Measured against the RECORDED (detector) window, which on an edited night is NOT the window inBedStart\/inBedEnd report: the edit changes what the app shows, not what was recorded. reasons[] is the classifier's own list, NOT a record of what the app displayed: no coverage caveat is shown to the wearer in this build, and any future card would apply its own render guards on top, so treat reasons[] as an upper bound on what anyone actually saw. durationBasis says which night's totals fed the durationLikelyHigh half of reasons[]: 'recorded' is the recorded night's own totals, which is the same frame of reference as the edges, and 'edited' means the night was corrected AND predates the stored recorded timeline, so only the post-edit totals were available. Before durationBasis existed the block always used the post-edit totals against a recorded-window coverage, so an edit could add or remove a caveat about a window it had never touched.",
+    "exportRange" : "meta.rangeStart and meta.rangeEnd are the window this file ACTUALLY covers, which can be narrower than the one that was requested: the app caps how much it assembles in a single pass and says so on screen. Trust these two fields over the filename or the range you asked for.",
+    "hrvSDNN" : "The hrvSDNN sample kind carries RMSSD, not SDNN. The ring reports RMSSD and HealthKit offers only an SDNN field; no fixed RMSSD→SDNN conversion exists, so the RMSSD value is stored in the SDNN field and tagged in sample metadata rather than converted (HealthKitWriter.swift:881-887, BulkSleep.swift:107).",
+    "hypnogram" : "The hypnogram rows for a session are a PARTITION of its sleep window: they never overlap, so durationSec can be summed. The surrounding time in bed is carried by inBedStart\/inBedEnd on the session row, NOT as an extra all-night segment — a night with no rows means no timeline was recorded, not a night with no stages. That distinction is explicit: hypnogramSegments is EMPTY (and the JSON hypnogram key is absent) when no timeline was recorded, and 0 only when one was recorded and contained no stage blocks.",
+    "hypnogramProvenance" : "Every hypnogram segment carries a provenance: measured = the ring recorded epochs across this span; asserted = the wearer edited their sleep window over ground holding NO ring data, so this block is their claim and not a measurement; assertedOverMeasured = the wearer's label sits on ground the ring did record, and the two disagree (the ring's own reading is kept separately); assertedCoverageUnknown = the wearer's claim over ground this app no longer retains records for, so neither reading is available. Only 'measured' is a device observation. In CSV the column is always present; in JSON the key is omitted when the value is 'measured'.",
+    "osa" : "osaAvgSpO2 is validated to ±1% against the RingConn app. osaMinSpO2, osaTimeBelow90Sec and osaODI are EXPERIMENTAL estimates — reproducing the app's numbers needs its proprietary artifact rejection and event scoring (OSASpO2.swift header, docs\/RUNBOOK_OSA_APNEA.md).",
+    "provenanceSummary" : "In provenanceSummary, 'measured' means OVER GROUND THE RING RECORDED ACROSS — not 'the stage the ring reported'. measuredAsleepSec is the efficiency numerator and therefore includes spans the wearer relabelled asleep over recorded ground; assertedOverMeasuredAsleepSec states how much of it that is and is a SUBSET of it, never a separate bucket to add in. measuredAwakeSec is the one exception: it counts only what the ring's own staging called awake, and the wearer's awake paint over recorded ground is reported separately as assertedOverMeasuredAwakeSec, because nothing derived depends on that total and a reader takes it as the ring's word. So asleep sums as measured + asserted + coverageUnknown, and awake as measured + assertedOverMeasured + asserted + coverageUnknown.",
+    "referenceCoverage" : "referenceCoverage measures the SAME records over a window whose right edge came from somewhere the recording had no vote in — today the wake time in the wearer's own manual sleep schedule (reference = manualScheduleWake). That is the only kind of denominator a trailing data hole can actually show up in. It is a REFERENCE and not a truth: a scheduled wake is when the wearer intends to get up, so a night they slept in or rose early scores low for a reason that is about the schedule, not the ring — compare beyondReportedEndSeconds (signed: negative means the reference closed EARLIER than the reported window, so coverageToReference is over a shorter span and is not comparable with coverageFraction). Nothing in the app is gated on it. It never reaches past the moment the file was written: when the schedule wake has not arrived yet the window is closed at exportedAt instead and reference says manualScheduleWakeSoFar, because measuring to a wake in the future would report the future as a hole. When the wearer has set no schedule the block is still emitted, with reference = null and an unavailableReason, because no denominator is invented in its place and a missing key would be indistinguishable from an older export. Only the right edge is moved: a schedule also names a bedtime, but a wearer who went to bed late would then be reported as a hole on a night nothing was wrong with.",
+    "ringIdentity" : "The meta.ring* fields describe the LAST RING THIS APP CONNECTED TO, which is not necessarily the ring that produced every night in this file. Rings are used one at a time and their data merges into a single shared timeline with no per-ring attribution (RingScanner.swift:72-74), so on an install that has paired more than one ring an older night may have come from a different ring than the one named here. historySyncEvidence[].ringID is the only per-capture ring attribution in this file.",
+    "skinTemperature" : "Skin temperature is LIVE-only: it is not part of the drainable 0x4c history, so a window the app did not observe cannot be back-filled. Overnight coverage is NOT predictable from the app's sleep-window quiet gate: a night recorded under that gate has carried hundreds of overnight readings, so a quiet night is not an empty one. Read the timestamps in this file rather than inferring coverage from the gate.",
+    "sleepStages" : "Sleep stages are an ON-DEVICE ESTIMATE. The ring transmits no hypnogram; stages are computed here from the same per-epoch vitals the RingConn app uses. Stage TOTALS approximate the app's, but per-epoch cycle placement is NOT validated against any reference (SleepStaging.swift header: \"APPROXIMATION, NOT GROUND TRUTH\")."
+  },
+  "provenance" : {
+    "daily" : "derived",
+    "daytimeTemperatures" : "measured",
+    "epochArchive" : "measured",
+    "epochArchive.evidenceBlobCoverage" : "diagnostic",
+    "historySyncEvidence" : "diagnostic",
+    "naps" : "derived",
+    "samples" : "measured",
+    "sleep" : "derived",
+    "sleepSessions" : "derived",
+    "sleepSessions.coverage" : "measured",
+    "sleepSessions.edgeProvenance" : "derived",
+    "sleepSessions.hypnogram" : "derived",
+    "sleepSessions.osa" : "derived",
+    "sleepSessions.referenceCoverage" : "derived",
+    "sleepSessions.summary" : "derived",
+    "stepSamples" : "measured"
+  },
+  "samples" : [
+    {
+      "end" : "2024-11-03T04:31:00.337Z",
+      "kind" : "heartRate",
+      "start" : "2024-11-03T04:30:00.337Z",
+      "value" : 72
+    },
+    {
+      "end" : "2024-11-03T04:32:00.337Z",
+      "kind" : "restingHeartRate",
+      "start" : "2024-11-03T04:31:00.337Z",
+      "value" : 0.97999999999999998
+    },
+    {
+      "end" : "2024-11-03T04:33:00.337Z",
+      "kind" : "hrvSDNN",
+      "start" : "2024-11-03T04:32:00.337Z",
+      "value" : 14.5
+    },
+    {
+      "end" : "2024-11-03T04:34:00.337Z",
+      "kind" : "spo2",
+      "start" : "2024-11-03T04:33:00.337Z",
+      "value" : 36.25
+    },
+    {
+      "end" : "2024-11-03T04:35:00.337Z",
+      "kind" : "temperature",
+      "start" : "2024-11-03T04:34:00.337Z",
+      "value" : 9.9999999999999995e-08
+    },
+    {
+      "end" : "2024-11-03T04:36:00.337Z",
+      "kind" : "respiratoryRate",
+      "start" : "2024-11-03T04:35:00.337Z",
+      "value" : 34.200000000000003
+    },
+    {
+      "end" : "2024-11-03T04:37:00.337Z",
+      "kind" : "steps",
+      "start" : "2024-11-03T04:36:00.337Z",
+      "value" : 0.10000000000000001
+    },
+    {
+      "end" : "2024-11-03T04:38:00.337Z",
+      "kind" : "activeEnergy",
+      "start" : "2024-11-03T04:37:00.337Z",
+      "value" : 2.5
+    }
+  ],
+  "schemaVersion" : 3,
+  "sleep" : [
+    {
+      "asleepMin" : 400,
+      "awakeMin" : 20,
+      "deepMin" : 80,
+      "efficiency" : 0.03125,
+      "feelScore" : 0,
+      "hrAwake" : 70,
+      "hrDeep" : 50,
+      "hrLight" : 58,
+      "hrRem" : 62,
+      "inBedEnd" : "2024-11-02T10:30:00.250Z",
+      "inBedStart" : "2024-11-02T02:00:00.000Z",
+      "lightMin" : 190,
+      "movementLevels" : [
+
+      ],
+      "night" : "2024-11-02",
+      "remMin" : 100,
+      "skinTempC" : 36.125,
+      "sleepScore" : 60,
+      "stressScore" : 45
+    },
+    {
+      "asleepMin" : 401,
+      "awakeMin" : 21,
+      "deepMin" : 81,
+      "efficiency" : 0.09375,
+      "feelScore" : 1,
+      "hrAwake" : 71,
+      "hrDeep" : 51,
+      "hrLight" : 59,
+      "hrRem" : 63,
+      "inBedEnd" : "2024-11-03T10:30:00.250Z",
+      "inBedStart" : "2024-11-03T02:00:00.000Z",
+      "lightMin" : 189,
+      "movementLevels" : [
+        0,
+        1,
+        1,
+        2,
+        -1
+      ],
+      "night" : "2024-11-03",
+      "remMin" : 102,
+      "skinTempC" : 36.375,
+      "sleepScore" : 61,
+      "stressScore" : 44
+    },
+    {
+      "asleepMin" : 402,
+      "awakeMin" : 22,
+      "deepMin" : 82,
+      "efficiency" : 0.15625,
+      "feelScore" : 2,
+      "hrAwake" : 72,
+      "hrDeep" : 52,
+      "hrLight" : 60,
+      "hrRem" : 64,
+      "inBedEnd" : "2024-11-04T11:30:00.250Z",
+      "inBedStart" : "2024-11-04T03:00:00.000Z",
+      "lightMin" : 188,
+      "movementLevels" : [
+        0,
+        1,
+        2,
+        2,
+        -2
+      ],
+      "night" : "2024-11-04",
+      "remMin" : 104,
+      "skinTempC" : 36.625,
+      "sleepScore" : 62,
+      "stressScore" : 43
+    },
+    {
+      "asleepMin" : 403,
+      "awakeMin" : 23,
+      "deepMin" : 83,
+      "efficiency" : 0.96875,
+      "feelScore" : 3,
+      "hrAwake" : 73,
+      "hrDeep" : 53,
+      "hrLight" : 61,
+      "hrRem" : 65,
+      "inBedEnd" : null,
+      "inBedStart" : "2024-11-02T02:00:00.000Z",
+      "lightMin" : 187,
+      "movementLevels" : [
+        0,
+        1,
+        3,
+        2,
+        -3
+      ],
+      "night" : "2024-11-02",
+      "remMin" : 106,
+      "skinTempC" : 36.875,
+      "sleepScore" : 63,
+      "stressScore" : 42
+    },
+    {
+      "asleepMin" : 404,
+      "awakeMin" : 24,
+      "deepMin" : 84,
+      "efficiency" : 5.0000000000000002e-05,
+      "feelScore" : 0,
+      "hrAwake" : 74,
+      "hrDeep" : 54,
+      "hrLight" : 62,
+      "hrRem" : 66,
+      "inBedEnd" : null,
+      "inBedStart" : null,
+      "lightMin" : 186,
+      "movementLevels" : [
+        0,
+        1,
+        4,
+        2,
+        -4
+      ],
+      "night" : "2024-11-03",
+      "remMin" : 108,
+      "skinTempC" : 0.125,
+      "sleepScore" : 64,
+      "stressScore" : 41
+    },
+    {
+      "asleepMin" : 405,
+      "awakeMin" : 25,
+      "deepMin" : 85,
+      "efficiency" : 0.93754999999999999,
+      "feelScore" : 1,
+      "hrAwake" : 75,
+      "hrDeep" : 55,
+      "hrLight" : 63,
+      "hrRem" : 67,
+      "inBedEnd" : "2024-11-04T11:30:00.250Z",
+      "inBedStart" : "2024-11-04T03:00:00.000Z",
+      "lightMin" : 185,
+      "movementLevels" : [
+        0,
+        1,
+        5,
+        2,
+        -5
+      ],
+      "night" : "2024-11-04",
+      "remMin" : 110,
+      "skinTempC" : -0.125,
+      "sleepScore" : 65,
+      "stressScore" : 40
+    },
+    {
+      "asleepMin" : 306,
+      "awakeMin" : 25,
+      "deepMin" : 60,
+      "efficiency" : 0.99995000000000001,
+      "feelScore" : 0,
+      "hrAwake" : 0,
+      "hrDeep" : 0,
+      "hrLight" : 0,
+      "hrRem" : 0,
+      "inBedEnd" : "2024-11-02T10:30:00.250Z",
+      "inBedStart" : "2024-11-02T02:00:00.000Z",
+      "lightMin" : 170,
+      "movementLevels" : [
+
+      ],
+      "night" : "2024-11-02",
+      "remMin" : 70,
+      "skinTempC" : -0.001,
+      "sleepScore" : 76,
+      "stressScore" : 30
+    },
+    {
+      "asleepMin" : 407,
+      "awakeMin" : 27,
+      "deepMin" : 87,
+      "efficiency" : 1,
+      "feelScore" : 3,
+      "hrAwake" : 77,
+      "hrDeep" : 57,
+      "hrLight" : 65,
+      "hrRem" : 69,
+      "inBedEnd" : "2024-11-03T10:30:00.250Z",
+      "inBedStart" : "2024-11-03T02:00:00.000Z",
+      "lightMin" : 183,
+      "movementLevels" : [
+        0,
+        1,
+        7,
+        2,
+        -7
+      ],
+      "night" : "2024-11-03",
+      "remMin" : 114,
+      "skinTempC" : 34.200000000000003,
+      "sleepScore" : 67,
+      "stressScore" : 38
+    },
+    {
+      "asleepMin" : 408,
+      "awakeMin" : 28,
+      "deepMin" : 88,
+      "efficiency" : -0.03125,
+      "feelScore" : 0,
+      "hrAwake" : 78,
+      "hrDeep" : 58,
+      "hrLight" : 66,
+      "hrRem" : 70,
+      "inBedEnd" : null,
+      "inBedStart" : "2024-11-04T03:00:00.000Z",
+      "lightMin" : 182,
+      "movementLevels" : [
+        0,
+        1,
+        8,
+        2,
+        -8
+      ],
+      "night" : "2024-11-04",
+      "remMin" : 116,
+      "skinTempC" : 36.005000000000003,
+      "sleepScore" : 68,
+      "stressScore" : 37
+    },
+    {
+      "asleepMin" : 409,
+      "awakeMin" : 29,
+      "deepMin" : 89,
+      "efficiency" : -0,
+      "feelScore" : 1,
+      "hrAwake" : 79,
+      "hrDeep" : 59,
+      "hrLight" : 67,
+      "hrRem" : 71,
+      "inBedEnd" : null,
+      "inBedStart" : null,
+      "lightMin" : 181,
+      "movementLevels" : [
+        0,
+        1,
+        9,
+        2,
+        -9
+      ],
+      "night" : "2024-11-02",
+      "remMin" : 118,
+      "skinTempC" : 36.015000000000001,
+      "sleepScore" : 69,
+      "stressScore" : 36
+    },
+    {
+      "asleepMin" : 410,
+      "awakeMin" : 30,
+      "deepMin" : 90,
+      "efficiency" : -1.0000000000000001e-05,
+      "feelScore" : 2,
+      "hrAwake" : 80,
+      "hrDeep" : 60,
+      "hrLight" : 68,
+      "hrRem" : 72,
+      "inBedEnd" : "2024-11-03T10:30:00.250Z",
+      "inBedStart" : "2024-11-03T02:00:00.000Z",
+      "lightMin" : 180,
+      "movementLevels" : [
+        0,
+        1,
+        10,
+        2,
+        -10
+      ],
+      "night" : "2024-11-03",
+      "remMin" : 120,
+      "skinTempC" : 99.995000000000005,
+      "sleepScore" : 70,
+      "stressScore" : 35
+    },
+    {
+      "asleepMin" : 411,
+      "awakeMin" : 31,
+      "deepMin" : 91,
+      "efficiency" : 4.9406564584124654e-324,
+      "feelScore" : 3,
+      "hrAwake" : 81,
+      "hrDeep" : 61,
+      "hrLight" : 69,
+      "hrRem" : 73,
+      "inBedEnd" : "2024-11-04T11:30:00.250Z",
+      "inBedStart" : "2024-11-04T03:00:00.000Z",
+      "lightMin" : 179,
+      "movementLevels" : [
+        0,
+        1,
+        11,
+        2,
+        -11
+      ],
+      "night" : "2024-11-04",
+      "remMin" : 122,
+      "skinTempC" : 1e+20,
+      "sleepScore" : 71,
+      "stressScore" : 34
+    },
+    {
+      "asleepMin" : 412,
+      "awakeMin" : 32,
+      "deepMin" : 92,
+      "efficiency" : 0.9375,
+      "feelScore" : 0,
+      "hrAwake" : 82,
+      "hrDeep" : 62,
+      "hrLight" : 70,
+      "hrRem" : 74,
+      "inBedEnd" : "2024-11-02T10:30:00.250Z",
+      "inBedStart" : "2024-11-02T02:00:00.000Z",
+      "lightMin" : 178,
+      "movementLevels" : [
+        0,
+        1,
+        12,
+        2,
+        -12
+      ],
+      "night" : "2024-11-02",
+      "remMin" : 124,
+      "skinTempC" : 36.5,
+      "sleepScore" : 72,
+      "stressScore" : 33
+    },
+    {
+      "asleepMin" : 313,
+      "awakeMin" : 25,
+      "deepMin" : 60,
+      "efficiency" : 0.30000000000000004,
+      "feelScore" : 0,
+      "hrAwake" : 0,
+      "hrDeep" : 0,
+      "hrLight" : 0,
+      "hrRem" : 0,
+      "inBedEnd" : null,
+      "inBedStart" : "2024-11-03T02:00:00.000Z",
+      "lightMin" : 170,
+      "movementLevels" : [
+
+      ],
+      "night" : "2024-11-03",
+      "remMin" : 70,
+      "skinTempC" : 0,
+      "sleepScore" : 83,
+      "stressScore" : 30
+    },
+    {
+      "asleepMin" : 414,
+      "awakeMin" : 34,
+      "deepMin" : 94,
+      "efficiency" : 0.5,
+      "feelScore" : 2,
+      "hrAwake" : 84,
+      "hrDeep" : 64,
+      "hrLight" : 72,
+      "hrRem" : 76,
+      "inBedEnd" : null,
+      "inBedStart" : null,
+      "lightMin" : 176,
+      "movementLevels" : [
+        0,
+        1,
+        14,
+        2,
+        -14
+      ],
+      "night" : "2024-11-04",
+      "remMin" : 128,
+      "skinTempC" : -0,
+      "sleepScore" : 74,
+      "stressScore" : 31
+    }
+  ],
+  "sleepSessions" : [
+    {
+      "coverage" : {
+        "coverageFraction" : 0.8571428571428571,
+        "coverageWithinReportedWindow" : 0.8571428571428571,
+        "expectedSamples" : 168,
+        "gaps" : [
+          {
+            "end" : "2024-10-31T23:25:01.442-04:00",
+            "seconds" : 2250.3370000123978,
+            "start" : "2024-10-31T22:47:31.105-04:00"
+          },
+          {
+            "end" : "2024-11-01T03:49:59.420-04:00",
+            "seconds" : 1648.9889999628067,
+            "start" : "2024-11-01T03:22:30.431-04:00"
+          }
+        ],
+        "longestGapSeconds" : 2250.3370000123978,
+        "observedSamples" : 144,
+        "windowEnd" : "2024-11-01T05:00:00.333-04:00",
+        "windowStart" : "2024-10-31T21:59:59.420-04:00"
+      },
+      "edgeProvenance" : {
+        "bedtimeGapSeconds" : 1000.4570000171661,
+        "bedtimeVerdict" : "resumedAfterGap",
+        "durationBasis" : "recorded",
+        "materialGapSeconds" : 3600,
+        "reasons" : [
+          "noRecordingAfterWake"
+        ],
+        "wakeGapSeconds" : 14339.292999982834,
+        "wakeVerdict" : "stoppedThenResumed",
+        "windowEnd" : "2024-11-01T05:00:00.333-04:00",
+        "windowStart" : "2024-10-31T21:59:59.420-04:00"
+      },
+      "hypnogram" : [
+        {
+          "durationSec" : 900.25,
+          "end" : "2024-10-31T22:14:59.670-04:00",
+          "stage" : "awake",
+          "start" : "2024-10-31T21:59:59.420-04:00"
+        },
+        {
+          "durationSec" : 8100.25,
+          "end" : "2024-11-01T00:29:59.920-04:00",
+          "stage" : "asleepCore",
+          "start" : "2024-10-31T22:14:59.670-04:00"
+        },
+        {
+          "durationSec" : 3599.625,
+          "end" : "2024-11-01T01:29:59.545-04:00",
+          "stage" : "asleepDeep",
+          "start" : "2024-11-01T00:29:59.920-04:00"
+        },
+        {
+          "durationSec" : 5400.625,
+          "end" : "2024-11-01T03:00:00.170-04:00",
+          "stage" : "asleepREM",
+          "start" : "2024-11-01T01:29:59.545-04:00"
+        },
+        {
+          "durationSec" : 7200.1629999876022,
+          "end" : "2024-11-01T05:00:00.333-04:00",
+          "stage" : "asleepCore",
+          "start" : "2024-11-01T03:00:00.170-04:00"
+        }
+      ],
+      "inBedEnd" : "2024-11-01T05:00:00.333-04:00",
+      "inBedStart" : "2024-10-31T21:59:59.420-04:00",
+      "isManuallyEdited" : false,
+      "night" : "2024-11-01",
+      "osa" : {
+        "avgSpO2" : 95.400000000000006,
+        "minSpO2" : 88,
+        "odi" : 4.25,
+        "timeBelow90Sec" : 312.5,
+        "validWindows" : 96
+      },
+      "referenceCoverage" : {
+        "beyondReportedEndSeconds" : 3600.4570000171661,
+        "coverageToReference" : 0.75,
+        "expectedSamples" : 192,
+        "gaps" : [
+          {
+            "end" : "2024-10-31T23:25:01.442-04:00",
+            "seconds" : 2250.3370000123978,
+            "start" : "2024-10-31T22:47:31.105-04:00"
+          },
+          {
+            "end" : "2024-11-01T03:49:59.420-04:00",
+            "seconds" : 1648.9889999628067,
+            "start" : "2024-11-01T03:22:30.431-04:00"
+          },
+          {
+            "end" : "2024-11-01T06:00:00.790-04:00",
+            "seconds" : 3749.3480000495911,
+            "start" : "2024-11-01T04:57:31.442-04:00"
+          }
+        ],
+        "longestGapSeconds" : 3749.3480000495911,
+        "observedSamples" : 144,
+        "reference" : "manualScheduleWake",
+        "referenceEnd" : "2024-11-01T06:00:00.790-04:00",
+        "windowEnd" : "2024-11-01T06:00:00.790-04:00",
+        "windowStart" : "2024-10-31T21:59:59.420-04:00"
+      },
+      "sessionID" : "night-2024-11-01",
+      "sleepOnset" : "2024-10-31T22:14:59.670-04:00",
+      "sleepWake" : "2024-11-01T05:00:00.333-04:00",
+      "summary" : {
+        "asleepMin" : 400,
+        "awakeMin" : 20,
+        "deepMin" : 80,
+        "efficiency" : 0.93754999999999999,
+        "feelScore" : 0,
+        "hrAwake" : 70,
+        "hrDeep" : 50,
+        "hrLight" : 58,
+        "hrRem" : 62,
+        "inBedEnd" : "2024-11-01T05:00:00.333-04:00",
+        "inBedStart" : "2024-10-31T21:59:59.420-04:00",
+        "lightMin" : 190,
+        "movementLevels" : [
+          0,
+          0,
+          2
+        ],
+        "night" : "2024-11-01",
+        "remMin" : 100,
+        "skinTempC" : 36.125,
+        "sleepScore" : 60,
+        "stressScore" : 45
+      }
+    },
+    {
+      "edgeProvenance" : {
+        "bedtimeGapSeconds" : 0,
+        "bedtimeVerdict" : "resumedAfterGap",
+        "durationBasis" : "edited",
+        "materialGapSeconds" : 1800,
+        "reasons" : [
+          "durationLikelyHigh",
+          "noRecordingAfterWake"
+        ],
+        "wakeVerdict" : "unknown",
+        "windowEnd" : "2024-11-02T04:30:00.083-04:00",
+        "windowStart" : "2024-11-01T22:09:59.920-04:00"
+      },
+      "hypnogram" : [
+        {
+          "durationSec" : 1200,
+          "end" : "2024-11-01T22:19:59.420-04:00",
+          "provenance" : "assertedOverMeasured",
+          "stage" : "awake",
+          "start" : "2024-11-01T21:59:59.420-04:00"
+        },
+        {
+          "durationSec" : 5800.3329999446869,
+          "end" : "2024-11-01T23:56:39.753-04:00",
+          "stage" : "asleepCore",
+          "start" : "2024-11-01T22:19:59.420-04:00"
+        },
+        {
+          "durationSec" : 3000.5,
+          "end" : "2024-11-02T00:46:40.253-04:00",
+          "provenance" : "asserted",
+          "stage" : "asleepCore",
+          "start" : "2024-11-01T23:56:39.753-04:00"
+        },
+        {
+          "durationSec" : 14600.080000042915,
+          "end" : "2024-11-02T04:50:00.333-04:00",
+          "provenance" : "assertedCoverageUnknown",
+          "stage" : "asleepREM",
+          "start" : "2024-11-02T00:46:40.253-04:00"
+        },
+        {
+          "durationSec" : 600,
+          "end" : "2024-11-02T05:00:00.333-04:00",
+          "provenance" : "asserted",
+          "stage" : "awake",
+          "start" : "2024-11-02T04:50:00.333-04:00"
+        }
+      ],
+      "inBedEnd" : "2024-11-02T05:00:00.333-04:00",
+      "inBedStart" : "2024-11-01T21:59:59.420-04:00",
+      "isManuallyEdited" : true,
+      "night" : "2024-11-02",
+      "provenanceSummary" : {
+        "assertedAsleepSec" : 3000.5,
+        "assertedAwakeSec" : 600,
+        "assertedOverMeasuredAsleepSec" : 0,
+        "assertedOverMeasuredAwakeSec" : 1200,
+        "coverageFraction" : 0.27778092801431958,
+        "coverageUnknownAsleepSec" : 14600.080000042915,
+        "coverageUnknownAwakeSec" : 0,
+        "coverageUnknownInBedSec" : 0,
+        "coveredInBedSec" : 7000.3329999446869,
+        "longestUnmeasuredGapSec" : 18200.580000042915,
+        "measuredAsleepSec" : 5800.3329999446869,
+        "measuredAwakeSec" : 0,
+        "scorable" : false
+      },
+      "recorded" : {
+        "inBedEnd" : "2024-11-02T04:30:00.083-04:00",
+        "inBedStart" : "2024-11-01T22:09:59.920-04:00",
+        "sleepWake" : "2024-11-02T04:30:00.083-04:00"
+      },
+      "referenceCoverage" : {
+        "reference" : null,
+        "unavailableReason" : "noManualSleepSchedule"
+      },
+      "sessionID" : "night-2024-11-02",
+      "sleepOnset" : "2024-11-01T22:19:59.420-04:00",
+      "sleepWake" : "2024-11-02T04:50:00.333-04:00",
+      "summary" : {
+        "asleepMin" : 401,
+        "awakeMin" : 21,
+        "deepMin" : 81,
+        "efficiency" : 0.03125,
+        "feelScore" : 1,
+        "hrAwake" : 71,
+        "hrDeep" : 51,
+        "hrLight" : 59,
+        "hrRem" : 63,
+        "inBedEnd" : "2024-11-02T05:00:00.333-04:00",
+        "inBedStart" : "2024-11-01T21:59:59.420-04:00",
+        "lightMin" : 189,
+        "movementLevels" : [
+          0,
+          1,
+          2
+        ],
+        "night" : "2024-11-02",
+        "remMin" : 101,
+        "skinTempC" : 36.375,
+        "sleepScore" : 61,
+        "stressScore" : 44
+      }
+    },
+    {
+      "coverage" : {
+        "coverageFraction" : 1,
+        "coverageWithinReportedWindow" : 1,
+        "expectedSamples" : 168,
+        "gaps" : [
+
+        ],
+        "longestGapSeconds" : 0,
+        "observedSamples" : 169,
+        "windowEnd" : "2024-11-03T04:00:00.333-05:00",
+        "windowStart" : "2024-11-02T21:59:59.420-04:00"
+      },
+      "hypnogram" : [
+
+      ],
+      "inBedEnd" : "2024-11-03T04:00:00.333-05:00",
+      "inBedStart" : "2024-11-02T21:59:59.420-04:00",
+      "isManuallyEdited" : false,
+      "night" : "2024-11-03",
+      "referenceCoverage" : {
+        "beyondReportedEndSeconds" : -1200.75,
+        "coverageToReference" : 1,
+        "expectedSamples" : 160,
+        "gaps" : [
+
+        ],
+        "longestGapSeconds" : 0,
+        "observedSamples" : 161,
+        "reference" : "manualScheduleWakeSoFar",
+        "referenceEnd" : "2024-11-03T03:39:59.583-05:00",
+        "windowEnd" : "2024-11-03T03:39:59.583-05:00",
+        "windowStart" : "2024-11-02T21:59:59.420-04:00"
+      },
+      "sessionID" : "night-2024-11-03",
+      "sleepOnset" : null,
+      "sleepWake" : null,
+      "summary" : {
+        "asleepMin" : 402,
+        "awakeMin" : 22,
+        "deepMin" : 82,
+        "efficiency" : 0.9375,
+        "feelScore" : 2,
+        "hrAwake" : 72,
+        "hrDeep" : 52,
+        "hrLight" : 60,
+        "hrRem" : 64,
+        "inBedEnd" : null,
+        "inBedStart" : "2024-11-02T21:59:59.420-04:00",
+        "lightMin" : 188,
+        "movementLevels" : [
+          0,
+          2,
+          2
+        ],
+        "night" : "2024-11-03",
+        "remMin" : 102,
+        "skinTempC" : 0,
+        "sleepScore" : 62,
+        "stressScore" : 43
+      }
+    },
+    {
+      "inBedEnd" : null,
+      "inBedStart" : null,
+      "isManuallyEdited" : false,
+      "night" : "2024-11-04",
+      "sessionID" : "night-2024-11-04",
+      "sleepOnset" : null,
+      "sleepWake" : null,
+      "summary" : {
+        "asleepMin" : 403,
+        "awakeMin" : 23,
+        "deepMin" : 83,
+        "efficiency" : 0.5,
+        "feelScore" : 3,
+        "hrAwake" : 73,
+        "hrDeep" : 53,
+        "hrLight" : 61,
+        "hrRem" : 65,
+        "inBedEnd" : null,
+        "inBedStart" : null,
+        "lightMin" : 187,
+        "movementLevels" : [
+          0,
+          3,
+          2
+        ],
+        "night" : "2024-11-04",
+        "remMin" : 103,
+        "skinTempC" : -0.001,
+        "sleepScore" : 63,
+        "stressScore" : 42
+      }
+    },
+    {
+      "edgeProvenance" : {
+        "bedtimeVerdict" : "witnessed",
+        "durationBasis" : "recorded",
+        "materialGapSeconds" : 3600,
+        "reasons" : [
+
+        ],
+        "wakeVerdict" : "witnessed",
+        "windowEnd" : "2024-11-05T03:33:19.620-05:00",
+        "windowStart" : "2024-11-04T21:59:59.420-05:00"
+      },
+      "hypnogram" : [
+        {
+          "durationSec" : 11000.399999976158,
+          "end" : "2024-11-05T01:03:19.820-05:00",
+          "stage" : "asleepCore",
+          "start" : "2024-11-04T21:59:59.420-05:00"
+        },
+        {
+          "durationSec" : 999.60000002384186,
+          "end" : "2024-11-05T01:19:59.420-05:00",
+          "stage" : "awake",
+          "start" : "2024-11-05T01:03:19.820-05:00"
+        },
+        {
+          "durationSec" : 5000.2000000476837,
+          "end" : "2024-11-05T03:33:19.620-05:00",
+          "provenance" : "asserted",
+          "stage" : "asleepCore",
+          "start" : "2024-11-05T02:09:59.420-05:00"
+        }
+      ],
+      "inBedEnd" : "2024-11-05T03:33:19.620-05:00",
+      "inBedStart" : "2024-11-04T21:59:59.420-05:00",
+      "isManuallyEdited" : false,
+      "night" : "2024-11-05",
+      "provenanceSummary" : {
+        "assertedAsleepSec" : 5000.2000000476837,
+        "assertedAwakeSec" : 0,
+        "assertedOverMeasuredAsleepSec" : 0,
+        "assertedOverMeasuredAwakeSec" : 0,
+        "coverageFraction" : 0.70587404853862545,
+        "coverageUnknownAsleepSec" : 0,
+        "coverageUnknownAwakeSec" : 0,
+        "coverageUnknownInBedSec" : 0,
+        "coveredInBedSec" : 12000,
+        "longestUnmeasuredGapSec" : 5000.2000000476837,
+        "measuredAsleepSec" : 11000.399999976158,
+        "measuredAwakeSec" : 999.60000002384186,
+        "measuredEfficiency" : 0.91669999999801322,
+        "scorable" : false
+      },
+      "sessionID" : "night-2024-11-05",
+      "sleepOnset" : "2024-11-04T21:59:59.420-05:00",
+      "sleepWake" : "2024-11-05T03:33:19.620-05:00",
+      "summary" : {
+        "asleepMin" : 404,
+        "awakeMin" : 24,
+        "deepMin" : 84,
+        "efficiency" : 0.96875,
+        "feelScore" : 0,
+        "hrAwake" : 74,
+        "hrDeep" : 54,
+        "hrLight" : 62,
+        "hrRem" : 66,
+        "inBedEnd" : "2024-11-05T03:33:19.620-05:00",
+        "inBedStart" : "2024-11-04T21:59:59.420-05:00",
+        "lightMin" : 186,
+        "movementLevels" : [
+          0,
+          4,
+          2
+        ],
+        "night" : "2024-11-05",
+        "remMin" : 104,
+        "skinTempC" : 34.200000000000003,
+        "sleepScore" : 64,
+        "stressScore" : 41
+      }
+    }
+  ],
+  "stepSamples" : [
+    {
+      "delta" : 0,
+      "end" : "2024-11-02T12:15:00.000Z",
+      "start" : "2024-11-02T12:00:00.000Z"
+    },
+    {
+      "delta" : 123,
+      "end" : "2024-11-02T12:30:00.000Z",
+      "start" : "2024-11-02T12:15:00.000Z"
+    },
+    {
+      "delta" : 4711,
+      "end" : "2024-11-02T12:45:00.000Z",
+      "start" : "2024-11-02T12:30:00.000Z"
+    },
+    {
+      "delta" : 0,
+      "end" : "2024-11-03T12:15:00.000Z",
+      "start" : "2024-11-03T12:00:00.000Z"
+    },
+    {
+      "delta" : 123,
+      "end" : "2024-11-03T12:30:00.000Z",
+      "start" : "2024-11-03T12:15:00.000Z"
+    },
+    {
+      "delta" : 4711,
+      "end" : "2024-11-03T12:45:00.000Z",
+      "start" : "2024-11-03T12:30:00.000Z"
+    },
+    {
+      "delta" : 0,
+      "end" : "2024-11-04T13:15:00.000Z",
+      "start" : "2024-11-04T13:00:00.000Z"
+    },
+    {
+      "delta" : 123,
+      "end" : "2024-11-04T13:30:00.000Z",
+      "start" : "2024-11-04T13:15:00.000Z"
+    },
+    {
+      "delta" : 4711,
+      "end" : "2024-11-04T13:45:00.000Z",
+      "start" : "2024-11-04T13:30:00.000Z"
+    }
+  ],
+  "units" : {
+    "activeEnergy" : "kcal",
+    "asleepMin" : "min",
+    "avgSpO2" : "percent",
+    "awakeMin" : "min",
+    "bedtimeGapSeconds" : "s",
+    "beyondReportedEndSeconds" : "s",
+    "celsius" : "degC",
+    "coverageFraction" : "fraction",
+    "coverageToReference" : "fraction",
+    "coverageToReferenceWake" : "fraction",
+    "coverageWithinReportedWindow" : "fraction",
+    "deepMin" : "min",
+    "delta" : "count",
+    "distance" : "m",
+    "durationSec" : "s",
+    "efficiency" : "fraction",
+    "exerciseMinutes" : "min",
+    "feelScore" : "score (unitless)",
+    "heartRate" : "count\/min",
+    "hrAwake" : "count\/min",
+    "hrDeep" : "count\/min",
+    "hrLight" : "count\/min",
+    "hrRem" : "count\/min",
+    "hrvSDNN" : "ms",
+    "lightMin" : "min",
+    "longestGapSeconds" : "s",
+    "materialGapSeconds" : "s",
+    "minSpO2" : "percent",
+    "movementLevels" : "level (ring motion index, no physical unit)",
+    "odi" : "events\/hour",
+    "osaAvgSpO2" : "percent",
+    "osaMinSpO2" : "percent",
+    "osaODI" : "events\/hour",
+    "osaTimeBelow90Sec" : "s",
+    "remMin" : "min",
+    "respiratoryRate" : "count\/min",
+    "restingHeartRate" : "count\/min",
+    "seconds" : "s",
+    "skinTempC" : "degC",
+    "sleep" : "category",
+    "sleepScore" : "score (unitless)",
+    "spo2" : "fraction",
+    "steps" : "count",
+    "stressScore" : "score (unitless)",
+    "temperature" : "degC",
+    "timeBelow90Sec" : "s",
+    "timeZoneOffsetSeconds" : "s",
+    "wakeGapSeconds" : "s"
+  }
+}

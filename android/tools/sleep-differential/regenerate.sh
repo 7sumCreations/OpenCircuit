@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # regenerate.sh — rebuild a differential's inputs and goldens from upstream's Swift code.
 #
-# Usage (from anywhere):  android/tools/sleep-differential/regenerate.sh [sleep|vitals|engine] [--keep]
+# Usage (from anywhere):  android/tools/sleep-differential/regenerate.sh [sleep|vitals|engine|export] [--keep]
 #   sleep    the sleep pipeline (the default when no target is given) → SleepDifferentialTest's files
 #   vitals   the vitals and energy maths → VitalsDifferentialTest's files
 #   engine   named sites of the trends, alert, headache, cycle and proximity engines →
 #            EngineDifferentialTest's files
+#   export   the export writers' whole CSV and JSON files and JSON key order →
+#            ExportDifferentialTest's files
 #   --keep   leave the temporary build directory in place and print its path
 # A run regenerates only its own target's files: no run touches another target's goldens.
 #
@@ -22,11 +24,13 @@
 #      `swift build --product <generator> -j 4`, scratch space inside the temporary directory
 #      (debug, so the generator may count internal branches);
 #   5. runs the generator, which writes inputs.txt, goldens.txt and coverage.txt (the engine target
-#      also random.txt, the Swift random draws the headache tests are built from) into the target's
-#      directory under android/ringkit/src/test/resources/ and prints the branch counts. The vitals
-#      and engine generators run with SWIFT_DETERMINISTIC_HASHING=1: upstream's energy ledger (and
-#      some engines) iterate a dictionary or set, whose order Swift seeds per process, and without a
-#      fixed seed the last bit of some goldens changes from one run to the next.
+#      also random.txt, the Swift random draws the headache tests are built from; the export target
+#      instead writes inputs.txt, keyorder.txt and one golden file per case and writer — CSV and
+#      JSON text verbatim) into the target's directory under android/ringkit/src/test/resources/
+#      and prints the branch counts. The vitals, engine and export generators run with
+#      SWIFT_DETERMINISTIC_HASHING=1: upstream's energy ledger (and some engines) iterate a
+#      dictionary or set, whose order Swift seeds per process, and without a fixed seed the last bit
+#      of some goldens changes from one run to the next.
 #
 # Requires git and Swift 6 (the Command Line Tools are enough: no Xcode, no XCTest). Gradle never
 # runs this script; the Kotlin tests only read the files it writes.
@@ -42,10 +46,10 @@ target=""
 for arg in "$@"; do
   case "$arg" in
     --keep) keep=1 ;;
-    sleep|vitals|engine)
+    sleep|vitals|engine|export)
       [ -z "$target" ] || die "more than one target given ($target, $arg)"
       target=$arg ;;
-    *) die "unknown argument: $arg (expected sleep, vitals, engine or --keep)" ;;
+    *) die "unknown argument: $arg (expected sleep, vitals, engine, export or --keep)" ;;
   esac
 done
 target=${target:-sleep}
@@ -53,6 +57,7 @@ case "$target" in
   sleep) GENERATOR=SleepDifferential; RESOURCE=sleep-differential; HASHING=0 ;;
   vitals) GENERATOR=VitalsDifferential; RESOURCE=vitals-differential; HASHING=1 ;;
   engine) GENERATOR=EngineDifferential; RESOURCE=engine-differential; HASHING=1 ;;
+  export) GENERATOR=ExportDifferential; RESOURCE=export-differential; HASHING=1 ;;
 esac
 
 SCRIPT_DIR=$(CDPATH='' cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -88,4 +93,4 @@ if [ "$HASHING" = 1 ]; then
 else
   "$bin/$GENERATOR" "$OUT_DIR"
 fi
-echo "regenerate: wrote $(cd "$OUT_DIR" && ls ./*.txt | tr '\n' ' ')" >&2
+echo "regenerate: wrote $(cd "$OUT_DIR" && ls | tr '\n' ' ')" >&2
