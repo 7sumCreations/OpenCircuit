@@ -61,7 +61,8 @@ internal fun <T> readStored(raw: String, read: (JsonElement) -> T): Decoded<T> =
 /** Thrown inside [readStored] only, and always turned into [Decoded.Unreadable] there. */
 internal class NotReadable(message: String) : RuntimeException(message)
 
-private fun unreadable(message: String): Nothing = throw NotReadable(message)
+/** Refuses the stored value being read; only valid inside a [readStored] block. */
+internal fun unreadable(message: String): Nothing = throw NotReadable(message)
 
 internal fun JsonElement.obj(): JsonObject = this as? JsonObject ?: unreadable("expected an object")
 
