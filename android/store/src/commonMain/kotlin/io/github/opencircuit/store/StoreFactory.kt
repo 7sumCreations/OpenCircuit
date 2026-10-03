@@ -22,20 +22,33 @@ object StoreFactory {
      *
      * Room opens lazily, on the first query. This opens now, so a file that is not a database,
      * a schema with no migration path or a newer schema fails HERE, in front of the caller,
-     * instead of inside the first write. On failure the handle is closed and the error rethrown;
-     * nothing is deleted.
+     * instead of inside the first write. On failure the handle is closed and the error rethrown (a
+     * failure to close is suppressed on it, never thrown instead); nothing is deleted.
      */
     internal suspend fun openWith(builder: RoomDatabase.Builder<StoreDatabase>): StoreDatabase {
         val db = builder
             .setDriver(BundledSQLiteDriver())
             .setQueryCoroutineContext(Dispatchers.IO)
             .build()
-        try {
+        closeOnFailure(close = db::close) {
             db.useWriterConnection { connection -> connection.usePrepared("PRAGMA user_version") { it.step() } }
-        } catch (failure: Throwable) {
-            db.close()
-            throw failure
         }
         return db
     }
 }
+
+/**
+ * Runs [block]; when it throws, runs [close] and rethrows what [block] threw. A failure of [close]
+ * is added to it as suppressed, never thrown in its place: the caller must see why [block] failed.
+ */
+internal inline fun <T> closeOnFailure(close: () -> Unit, block: () -> T): T =
+    try {
+        block()
+    } catch (failure: Throwable) {
+        try {
+            close()
+        } catch (closeFailure: Throwable) {
+            failure.addSuppressed(closeFailure)
+        }
+        throw failure
+    }
