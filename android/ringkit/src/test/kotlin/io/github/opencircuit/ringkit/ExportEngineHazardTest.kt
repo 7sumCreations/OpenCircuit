@@ -183,6 +183,161 @@ class ExportEngineHazardTest {
         )
     }
 
+    // --- device-local labels: one zone, passed in ---
+
+    @Test
+    fun theNightAndDayLabelsAndTheSessionIdArePrintedInThePassedZone() {
+        // Upstream prints these in Calendar.current; the port takes the zone. yyyy-MM-dd follows the
+        // same rounded millisecond as the ISO-8601 text (measured: half a millisecond before midnight
+        // prints the next day).
+        val midnightUtc = FoundationDate.unix(1_699_920_000.0) // 2023-11-14T00:00:00Z
+        val labels = mapOf(
+            "UTC" to "2023-11-14", "America/New_York" to "2023-11-13", "America/St_Johns" to "2023-11-13",
+            "Asia/Kolkata" to "2023-11-14", "Europe/Amsterdam" to "2023-11-14", "Pacific/Kiritimati" to "2023-11-14",
+            "Pacific/Pago_Pago" to "2023-11-13",
+        )
+        for ((id, label) in labels) {
+            val zone = ZoneId.of(id)
+            assertEquals(label, ExportEngine.dayStamp(midnightUtc, zone), id)
+            assertEquals("night-$label", ExportEngine.sessionID(midnightUtc, zone), id)
+            assertEquals(label, dataLine(ExportEngine.sleepCSV(listOf(sleepRow().withNight(midnightUtc)), zone)).substringBefore(','), id)
+            assertEquals("$label,1", dataLine(ExportEngine.dailyCSV(listOf(DailyRow(midnightUtc, 1)), zone)), id)
+            val root = ExportJsonReader.root(ExportEngine.toJSON(samples = emptyList(), sleep = listOf(sleepRow().withNight(midnightUtc)), daily = listOf(DailyRow(midnightUtc, 1)), zone = zone, now = t0)!!)
+            assertEquals(label, root["sleep"]?.asObjectList()?.single()?.string("night"), id)
+            assertEquals(label, root["daily"]?.asObjectList()?.single()?.string("day"), id)
+        }
+        // Local midnights on both sides of a DST change (the bucket a night is keyed by).
+        val amsterdam = ZoneId.of("Europe/Amsterdam")
+        assertEquals("night-2023-10-29", ExportEngine.sessionID(FoundationDate.unix(1_698_530_400.0), amsterdam)) // 2023-10-28T22:00Z
+        assertEquals("night-2023-10-30", ExportEngine.sessionID(FoundationDate.unix(1_698_620_400.0), amsterdam)) // 2023-10-29T23:00Z
+        assertEquals("night-2024-03-31", ExportEngine.sessionID(FoundationDate.unix(1_711_839_600.0), amsterdam)) // 2024-03-30T23:00Z
+        assertEquals("night-2024-04-01", ExportEngine.sessionID(FoundationDate.unix(1_711_922_400.0), amsterdam)) // 2024-03-31T22:00Z
+        // Half a millisecond before Kolkata's midnight of 2023-11-15 is printed as the next day; 0.6 ms
+        // before is not (the Date doubles Foundation was measured on, as IEEE-754 bits).
+        val kolkata = ZoneId.of("Asia/Kolkata")
+        assertEquals("night-2023-11-15", ExportEngine.sessionID(FoundationDate.referenceBits(4739337093954662302L), kolkata))
+        assertEquals("2023-11-14", ExportEngine.dayStamp(FoundationDate.referenceBits(4739337093954661463L), kolkata))
+    }
+
+    // --- the schema-2 JSON sections, field by field ---
+
+    @Test
+    fun everySchemaTwoSectionCarriesEveryFieldWithExplicitNullsAndTypedValues() {
+        val withTimes = SleepRow(
+            night = t0, asleepMin = 450, deepMin = 90, lightMin = 180, remMin = 120, awakeMin = 30, efficiency = 0.9375,
+            inBedStart = t0, inBedEnd = t1, skinTempC = 34.2, sleepScore = 82, stressScore = 40, feelScore = 7,
+            hrDeep = 55, hrLight = 60, hrRem = 64, hrAwake = 68, movementLevels = listOf(0, 1, 2),
+        )
+        val full = HistoryChannelTrace("sleep", 0x00, t0)
+        full.finishedAt = t1
+        full.sawSyncAck = true
+        full.syncAckFlag = 0x01
+        full.page4CCount = 3
+        full.page47Count = 2
+        full.endMarkerCount = 1
+        full.recordsAtStart = 2
+        full.recordsAtEnd = 8
+        full.firstOpcode = 0x4C
+        full.lastOpcode = 0x50
+        full.exitReason = HistoryChannelExitReason.END_MARKER
+        val legacy = trace(p4d = null, sport = null)
+        val json = ExportEngine.toJSON(
+            samples = emptyList(), sleep = listOf(withTimes, sleepRow()), daily = listOf(DailyRow(t0, 8000)),
+            stepSamples = listOf(StepSampleRow(t0, t1, 123)), naps = listOf(NapRow(t0, t1, 30, true)),
+            daytimeTemperatures = listOf(DaytimeTemperatureRow(t0, 34.2)),
+            historySyncEvidence = listOf(evidence(channels = listOf(full, legacy), outcome = "updated"), evidence()),
+            zone = utc, now = t1,
+        )
+        val root = ExportJsonReader.root(json!!)
+        assertEquals("2023-11-14T23:13:20.000Z", root.string("exportedAt"))
+
+        val (s, noTimes) = root["sleep"]!!.asObjectList()!!
+        assertEquals(
+            setOf(
+                "night", "asleepMin", "deepMin", "lightMin", "remMin", "awakeMin", "efficiency", "inBedStart", "inBedEnd", "skinTempC",
+                "sleepScore", "stressScore", "feelScore", "hrDeep", "hrLight", "hrRem", "hrAwake", "movementLevels",
+            ),
+            s.keys,
+        )
+        assertEquals("2023-11-14", s.string("night"))
+        assertEquals(listOf(450L, 90L, 180L, 120L, 30L, 82L, 40L, 7L, 55L, 60L, 64L, 68L), listOf("asleepMin", "deepMin", "lightMin", "remMin", "awakeMin", "sleepScore", "stressScore", "feelScore", "hrDeep", "hrLight", "hrRem", "hrAwake").map { s.long(it) })
+        assertEquals(0.9375, s.double("efficiency"))
+        assertEquals(34.2, s.double("skinTempC"))
+        assertEquals("2023-11-14T22:13:20.000Z", s.string("inBedStart"))
+        assertEquals("2023-11-14T23:13:20.000Z", s.string("inBedEnd"))
+        assertEquals(listOf(0L, 1L, 2L), s.array("movementLevels")!!.map { it.asLong() })
+        assertEquals(ReplayJson.Null, noTimes["inBedStart"], "an absent in-bed time is an explicit null")
+        assertEquals(ReplayJson.Null, noTimes["inBedEnd"])
+        assertEquals(emptyList(), noTimes.array("movementLevels"))
+
+        val d = root["daily"]!!.asObjectList()!!.single()
+        assertEquals(setOf("day", "steps"), d.keys)
+        assertEquals(8000L, d.long("steps"))
+        val st = root["stepSamples"]!!.asObjectList()!!.single()
+        assertEquals(mapOf("start" to "2023-11-14T22:13:20.000Z", "end" to "2023-11-14T23:13:20.000Z"), mapOf("start" to st.string("start"), "end" to st.string("end")))
+        assertEquals(setOf("start", "end", "delta"), st.keys)
+        assertEquals(123L, st.long("delta"))
+        val n = root["naps"]!!.asObjectList()!!.single()
+        assertEquals(setOf("start", "end", "asleepMin", "isLongNap"), n.keys)
+        assertEquals(ReplayJson.Bool(true), n["isLongNap"], "a boolean, not a number")
+        assertEquals(30L, n.long("asleepMin"))
+        val tmp = root["daytimeTemperatures"]!!.asObjectList()!!.single()
+        assertEquals(setOf("time", "celsius"), tmp.keys)
+        assertEquals("34.200000000000003", tmp["celsius"].toString(), "Foundation's %.17g number text")
+
+        val (e, bare) = root["historySyncEvidence"]!!.asObjectList()!!
+        assertEquals(
+            setOf("capturedAt", "ringID", "trigger", "sleepCommitted", "nightRowOutcome", "stagedSleepSegments", "mergedRecordCount", "historySampleCount", "rawRecordBlobBase64", "channels"),
+            e.keys,
+        )
+        assertEquals("updated", e.string("nightRowOutcome"))
+        assertEquals(ReplayJson.Null, bare["nightRowOutcome"], "no staged night is an explicit null")
+        assertEquals(ReplayJson.Bool(true), e["sleepCommitted"])
+        assertEquals(listOf(4L, 8L, 10L), listOf(e.long("stagedSleepSegments"), e.long("mergedRecordCount"), e.long("historySampleCount")))
+        assertEquals(emptyList(), bare.array("channels"))
+        val (c, l) = e["channels"]!!.asObjectList()!!
+        assertEquals(
+            setOf(
+                "label", "channel", "startedAt", "finishedAt", "outcome", "sawSyncAck", "syncAckFlag", "page4CCount", "page47Count", "page4DCount",
+                "sportSampleCount", "endMarkerCount", "recordsAtStart", "recordsAtEnd", "recordsAdded", "firstOpcode", "lastOpcode", "exitReason",
+            ),
+            c.keys,
+        )
+        assertEquals(listOf("sleep", "complete", "2023-11-14T22:13:20.000Z", "2023-11-14T23:13:20.000Z", "endMarker"), listOf("label", "outcome", "startedAt", "finishedAt", "exitReason").map { c.string(it) })
+        assertEquals(listOf(0L, 1L, 3L, 2L, 0L, 0L, 1L, 2L, 8L, 6L, 0x4CL, 0x50L), listOf("channel", "syncAckFlag", "page4CCount", "page47Count", "page4DCount", "sportSampleCount", "endMarkerCount", "recordsAtStart", "recordsAtEnd", "recordsAdded", "firstOpcode", "lastOpcode").map { c.long(it) })
+        assertEquals(ReplayJson.Bool(true), c["sawSyncAck"])
+        // A trace that predates the sport counters, and one that never finished: nulls, not zeros.
+        for (key in listOf("finishedAt", "syncAckFlag", "page4DCount", "sportSampleCount", "firstOpcode", "lastOpcode", "exitReason")) {
+            assertEquals(ReplayJson.Null, l[key], key)
+        }
+        assertEquals("empty", l.string("outcome"))
+        assertEquals(c.keys, l.keys)
+    }
+
+    @Test
+    fun aNonFiniteValueInAnySchemaTwoSectionMakesToJsonNullWhileItsCsvStillWrites() {
+        // Upstream's JSONSerialization raises on NaN or an infinity and the app dies (measured); the
+        // port's toJSON returns null instead (PORTING.md D-132), whichever section holds it.
+        for (bad in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+            fun json(sleep: List<SleepRow> = emptyList(), temps: List<DaytimeTemperatureRow> = emptyList()) =
+                ExportEngine.toJSON(samples = emptyList(), sleep = sleep, daily = emptyList(), daytimeTemperatures = temps, zone = utc, now = t0)
+            assertEquals(null, json(sleep = listOf(sleepRow(), sleepRow(efficiency = bad))), "efficiency $bad")
+            assertEquals(null, json(sleep = listOf(sleepRow(skinTempC = bad))), "skinTempC $bad")
+            assertEquals(null, json(temps = listOf(DaytimeTemperatureRow(t0, 36.0), DaytimeTemperatureRow(t1, bad))), "celsius $bad")
+            assertTrue(json(sleep = listOf(sleepRow()), temps = listOf(DaytimeTemperatureRow(t0, 36.0))) != null)
+            val text = if (bad.isNaN()) "nan" else if (bad > 0) "inf" else "-inf"
+            assertEquals(text, dataLine(ExportEngine.sleepCSV(listOf(sleepRow(efficiency = bad)), utc)).split(",")[6])
+            assertEquals("2023-11-14T22:13:20.000Z,$text", dataLine(ExportEngine.daytimeTemperatureCSV(listOf(DaytimeTemperatureRow(t0, bad)))))
+        }
+    }
+
+    private fun SleepRow.withNight(n: java.time.Instant) = SleepRow(
+        night = n, asleepMin = asleepMin, deepMin = deepMin, lightMin = lightMin, remMin = remMin, awakeMin = awakeMin,
+        efficiency = efficiency, inBedStart = inBedStart, inBedEnd = inBedEnd, skinTempC = skinTempC, sleepScore = sleepScore,
+        stressScore = stressScore, feelScore = feelScore, hrDeep = hrDeep, hrLight = hrLight, hrRem = hrRem, hrAwake = hrAwake,
+        movementLevels = movementLevels,
+    )
+
     // --- rows are values: copied in, read-only out ---
 
     @Test

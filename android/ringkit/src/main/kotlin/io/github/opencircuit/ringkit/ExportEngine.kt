@@ -3,9 +3,9 @@ package io.github.opencircuit.ringkit
 // Port of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/ExportEngine.swift (@ b1c2fdd), growing
 // in slices (see PORTING.md): pure export serialization — callers fetch from the store and pass plain
 // rows here. So far: schema 2 whole — the sample, sleep, daily, step, nap, daytime-temperature and
-// history-sync-evidence rows, their CSV writers (with the CSV field escaper and number text), and
-// `toJSON` with every schema-2 section plus the provenance, units and notes — the epoch-archive row
-// type, and `SleepEdgeProvenanceRow`
+// history-sync-evidence rows, their CSV writers (with the CSV field escaper and number text), the
+// device-local `sessionID` / `dayStamp`, and `toJSON` with every schema-2 section plus the
+// provenance, units and notes — the epoch-archive row type, and `SleepEdgeProvenanceRow`
 // (`:354-427`), which the sleep confidence tests use. Every byte follows upstream's Foundation output
 // on valid input (FoundationText, ExportJson); the export differential compares whole files.
 //
@@ -191,6 +191,21 @@ object ExportEngine {
         override fun toString(): String =
             "EpochArchiveRow(ringID=$ringID, recordCount=$recordCount, firstEpoch=$firstEpoch, lastEpoch=$lastEpoch, coverage=$coverage)"
     }
+
+    // --- device-local labels ---
+
+    /**
+     * Stable, human-sortable session id for a night bucket: `night-` + [dayStamp] in [zone], the zone
+     * the night was bucketed with, so the id and the `night` label can never disagree.
+     */
+    fun sessionID(night: Instant, zone: ZoneId): String = "night-" + dayStamp(night, zone)
+
+    /**
+     * `yyyy-MM-dd` of [date] in [zone] — the same text the `night` / `day` labels inside the file use.
+     * A caller needing a local day string (an export filename) uses this with the same zone rather
+     * than a formatter of its own, so the name and the labels in the file it names cannot disagree.
+     */
+    fun dayStamp(date: Instant, zone: ZoneId): String = FoundationText.dateOnly(date, zone)
 
     // --- CSV ---
 
