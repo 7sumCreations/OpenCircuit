@@ -259,4 +259,123 @@ class ExportEngineGuardTest {
         assertEquals(listOf("2023-11-14", "2023-11-13"), listOf(csvEast[0], csvWest[0]))
         assertEquals(csvEast.drop(1), csvWest.drop(1), "only the night label depends on the zone")
     }
+
+    // --- schema-3 core ---
+
+    private fun meta(zone: ZoneId, at: java.time.Instant = t0) =
+        ExportEngine.ExportMetadata.of(zone, exportedAt = at, rangeStart = night, rangeEnd = t1, appVersion = "1.0", appBuild = "1234567", deviceModel = "iPhone15,2")
+
+    private fun sessions(zone: ZoneId): List<ExportEngine.SleepSessionRow> {
+        val seg = { a: Long, b: Long, st: SleepStage, p: SleepProvenance -> SleepSegment(t0.plusSeconds(a), t0.plusSeconds(b), st, p) }
+        val coverage = ExportCoverage.assess((0L until 20L).filter { it !in 5L..9L }.map { t0.plusMillis(it * 150_250) }, t0, t0.plusSeconds(3_600))
+        val reference = ExportReferenceCoverage.assess(listOf(t0.plusSeconds(60)), t0, t0.plusSeconds(3_000), t1.plusMillis(1_234), ExportReferenceCoverage.Reference.MANUAL_SCHEDULE_WAKE)!!
+        val edge = ExportEngine.SleepEdgeProvenanceRow(t0, t1, "resumedAfterGap", 1_234.5, "stoppedThenResumed", 14_400.25, listOf("noRecordingAfterWake"), 3_600.0)
+        return listOf(
+            ExportEngine.SleepSessionRow(
+                sessionID = ExportEngine.sessionID(night, zone), night = night, inBedStart = t0, inBedEnd = t1, sleepOnset = t0.plusSeconds(600),
+                sleepWake = t1, isManuallyEdited = true, recordedInBedEnd = t1.minusSeconds(60),
+                hypnogram = listOf(
+                    seg(0, 3_600, SleepStage.IN_BED, SleepProvenance.MEASURED), seg(0, 1_234, SleepStage.ASLEEP_CORE, SleepProvenance.MEASURED),
+                    seg(1_234, 3_600, SleepStage.ASLEEP_DEEP, SleepProvenance.ASSERTED),
+                ),
+                summary = sleep(efficiency = 0.123456), osa = ExportEngine.OSARow(95.4, 88.0, 1_312.5, 14.25, 1_234_567),
+                coverage = coverage, referenceCoverage = ExportReferenceCoverage.Outcome.Measured(reference), edgeProvenance = edge,
+            ),
+            ExportEngine.SleepSessionRow(sessionID = "night-x", night = t1, summary = sleep(), referenceCoverage = ExportReferenceCoverage.Outcome.Unavailable("noManualSleepSchedule")),
+        )
+    }
+
+    /** Every schema-3 writer's text, for rows whose numbers have digits a localized formatter would change. */
+    private fun schemaThreeTexts(zone: ZoneId): List<String> = listOf(
+        ExportEngine.metadataCSV(meta(zone), zone),
+        ExportEngine.sleepSessionsCSV(sessions(zone), zone),
+        ExportEngine.hypnogramCSV(sessions(zone), zone),
+        ExportEngine.toJSON(emptyList(), emptyList(), emptyList(), zone = zone, now = t1, metadata = meta(zone), sleepSessions = sessions(zone))!!,
+    )
+
+    @Test
+    fun everySchemaThreeWriterPrintsTheSameAsciiTextUnderEveryMachineLocaleAndZone() {
+        val savedLocale = Locale.getDefault()
+        val savedZone = TimeZone.getDefault()
+        val zone = ZoneId.of("America/St_Johns")
+        try {
+            Locale.setDefault(Locale.ROOT)
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+            val reference = schemaThreeTexts(zone)
+            for (t in reference.dropLast(1)) assertTrue(t.all { it.code < 0x80 }, "ASCII: $t")
+            assertTrue(reference.last().replace(Regex("\"notes\" : \\{[^}]*\\}"), "").all { it.code < 0x80 }, "ASCII outside the notes")
+            assertTrue(reference[1].contains(",95.40,88.00,1312.5,14.25,1234567,"), reference[1])
+            assertTrue(reference[0].contains("timeZoneOffsetSeconds,-12600"), reference[0])
+            for (tag in listOf("ar-EG-u-nu-arab", "hi-IN-u-nu-deva", "th-TH-u-nu-thai", "fa-IR", "tr-TR")) {
+                Locale.setDefault(Locale.forLanguageTag(tag))
+                TimeZone.setDefault(TimeZone.getTimeZone("Asia/Tokyo"))
+                assertEquals(reference, schemaThreeTexts(zone), tag)
+            }
+        } finally {
+            Locale.setDefault(savedLocale)
+            TimeZone.setDefault(savedZone)
+        }
+    }
+
+    @Test
+    fun theMetadataCsvAndJsonAreOneOrderedFieldList() {
+        // Upstream's field order, which the CSV keeps (the JSON object is written with sorted keys).
+        val order = listOf(
+            "schemaVersion", "exportedAt", "rangeStart", "rangeEnd", "appVersion", "appBuild", "deviceModel", "osVersion",
+            "ringModel", "ringFirmware", "ringGeneration", "ringIdentifier", "timeZoneIdentifier", "timeZoneOffsetSeconds", "timestampPolicy",
+        )
+        val zone = ZoneId.of("Asia/Kolkata")
+        val rows = ExportEngineTest.parseCSV(ExportEngine.metadataCSV(meta(zone), zone)).drop(1)
+        assertEquals(order, rows.map { it[0] })
+        val json = ExportJsonReader.root(ExportEngine.toJSON(emptyList(), emptyList(), emptyList(), zone = zone, now = t1, metadata = meta(zone))!!).obj("meta")!!
+        assertEquals(order.toSet(), json.keys)
+        for ((key, value) in rows) assertEquals(value, json[key].let { it?.asString() ?: it.toString() }, key)
+    }
+
+    @Test
+    fun ofDeclaresThePrintedOffsetAcrossEveryTransition() {
+        // At every 2024 transition of these zones (a 30-minute DST in Lord Howe), and a hair either side
+        // of it, the offset `of` declares is the one `meta.exportedAt` is printed with.
+        fun printedOffset(text: String): Long {
+            if (text.endsWith("Z")) return 0
+            val s = text.takeLast(6)
+            val sign = if (s[0] == '-') -1 else 1
+            return sign * (s.substring(1, 3).toLong() * 3600 + s.substring(4, 6).toLong() * 60)
+        }
+        var checked = 0
+        for (id in listOf("Europe/Amsterdam", "America/St_Johns", "Australia/Lord_Howe", "Asia/Kolkata", "Pacific/Kiritimati", "America/New_York", "Europe/London")) {
+            val zone = ZoneId.of(id)
+            var at = java.time.Instant.parse("2024-01-01T00:00:00Z")
+            val instants = mutableListOf(at)
+            while (true) {
+                val tr = zone.rules.nextTransition(at) ?: break
+                if (tr.instant.isAfter(java.time.Instant.parse("2025-01-01T00:00:00Z"))) break
+                for (nanos in listOf(-1_000_000_000L, -600_000L, -500_000L, -400_000L, 0L, 400_000L, 500_000L, 1_000_000_000L)) instants += tr.instant.plusNanos(nanos)
+                at = tr.instant
+            }
+            for (t in instants) {
+                val m = meta(zone, t)
+                val fields = ExportEngineTest.parseCSV(ExportEngine.metadataCSV(m, zone)).drop(1).associate { it[0] to it[1] }
+                assertEquals(printedOffset(fields.getValue("exportedAt")), m.timeZoneOffsetSeconds, "$id at $t: ${fields["exportedAt"]}")
+                assertEquals(id, m.timeZoneIdentifier)
+                checked++
+            }
+        }
+        assertEquals(7 + 5 * 2 * 8, checked, "instants checked (five of the zones change twice in 2024)")
+    }
+
+    @Test
+    fun sessionAndOsaRowsAreValuesComparedAsSwift() {
+        val source = mutableListOf(SleepSegment(t0, t1, SleepStage.ASLEEP_CORE))
+        val row = ExportEngine.SleepSessionRow(sessionID = "s", night = night, hypnogram = source, summary = sleep())
+        source += SleepSegment(t1, t1.plusSeconds(60), SleepStage.AWAKE)
+        assertEquals(1, row.hypnogram.size, "the row keeps its own copy")
+        assertFailsWith<UnsupportedOperationException> { (row.hypnogram as MutableList<SleepSegment>).clear() }
+        assertEquals(row, ExportEngine.SleepSessionRow(sessionID = "s", night = night, hypnogram = listOf(SleepSegment(t0, t1, SleepStage.ASLEEP_CORE)), summary = sleep()))
+        assertNotEquals(row, ExportEngine.SleepSessionRow(sessionID = "s", night = night, summary = sleep()))
+        assertEquals(ExportEngine.OSARow(0.0, 1.0, 2.0, 3.0, 4), ExportEngine.OSARow(-0.0, 1.0, 2.0, 3.0, 4))
+        assertEquals(ExportEngine.OSARow(0.0, 1.0, 2.0, 3.0, 4).hashCode(), ExportEngine.OSARow(-0.0, 1.0, 2.0, 3.0, 4).hashCode())
+        assertNotEquals(ExportEngine.OSARow(Double.NaN, 1.0, 2.0, 3.0, 4), ExportEngine.OSARow(Double.NaN, 1.0, 2.0, 3.0, 4))
+        assertNotEquals(ExportEngine.OSARow(0.0, 1.0, 2.0, 3.0, 4), ExportEngine.OSARow(0.0, 1.0, 2.0, 3.0, 5))
+    }
 }
