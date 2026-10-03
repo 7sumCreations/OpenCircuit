@@ -120,8 +120,9 @@ class SleepStore internal constructor(
      * night — edited, or fuller than the staging — still widens its clamp window outward to a
      * staging that reaches further (the widened-recorded columns and the update time only).
      *
-     * Otherwise the stored night is replaced only when the new staging is at least as complete ([SleepSummaryMerge.shouldReplace], asleep time in whole
-     * minutes), or when both windows are the same coverage within one ring epoch — a
+     * Otherwise the stored night is replaced only when the new staging is at least as complete
+     * ([SleepSummaryMerge.shouldReplace], asleep time in whole minutes), or when both windows are
+     * the same coverage within one ring epoch — a
      * re-classification may then lower the minutes. A replacing save writes the minutes, the
      * windows (the onset and wake as given, the unknown defaults included), and [extras]: a zero
      * score or temperature keeps the stored value, a heart rate is taken for every stage present,
@@ -203,9 +204,13 @@ class SleepStore internal constructor(
             }
             // Only now, past every early return: a night found by its span may still carry its first
             // slice's key, and moves to the key this replacing staging gives it.
-            val key = if (NightRekey.dayKey(existing.night, zone) != dayStart && realignNightKey(existing, dayStart, zone, at)) dayStart else existing.night
+            val moves = NightRekey.dayKey(existing.night, zone) != dayStart
+            val key = if (moves && realignNightKey(existing, dayStart, zone, at)) dayStart else existing.night
             sleepDao.updateSummary(
-                existing.copy(night = key, efficiency = efficiency, updatedAt = at).withMinutes(minutes).withWindow(start, end, onset, wake).withExtras(staged),
+                existing.copy(night = key, efficiency = efficiency, updatedAt = at)
+                    .withMinutes(minutes)
+                    .withWindow(start, end, onset, wake)
+                    .withExtras(staged),
             )
             pruneAutoNaps(start, end)
             SleepPersistOutcome.UPDATED
