@@ -128,6 +128,17 @@ class JsonReadTest {
         assertTrue(millis < 2_000, "twelve 1 MB literals took $millis ms; each must be refused in linear time")
     }
 
+    /** The cap is exact: a literal of [StrictJson.MAX_NUMBER_LENGTH] characters is read, one more is not. */
+    @Test
+    fun aNumberLiteralOfExactlyTheCapIsReadAndOneCharacterMoreIsNot() {
+        val atCap = "1." + "0".repeat(StrictJson.MAX_NUMBER_LENGTH - 3) + "1"
+        assertEquals(400, atCap.length)
+        assertEquals(1.0, valueOf(doubleField("""{"n":$atCap}""")), "a 400-character literal is read")
+        val overCap = "1." + "0".repeat(StrictJson.MAX_NUMBER_LENGTH - 2) + "1"
+        assertEquals(401, overCap.length)
+        assertUnreadable(doubleField("""{"n":$overCap}"""), """{"n":$overCap}""")
+    }
+
     @Test
     fun onlyAFiniteDoubleIsRead() {
         assertEquals(1e300, valueOf(doubleField("""{"n":1e300}""")))
