@@ -26,7 +26,8 @@ import java.time.ZoneId
 // (:2042), `recentSleepSummaries` (:2051), `sleepSummaries(from:to:)` (:2056), `sleepSummary(night:)`
 // (:2063), `hypnogram(night:)` (:2074) and `sleepSummaryOverlapping` (:2084), the wearer's
 // edit `applySleepEdit` in both forms (:2133-2257), `setFeelScore` (:2101-2109) and
-// `applyOSASummary` (:2029-2039).
+// `applyOSASummary` (:2029-2039), and the nap reads `naps(on:)` (:2998-3005), `naps(from:to:)`
+// (:3008-3013), `autoNaps(overlapping:to:)` (:1809-1818) and `deleteNaps` (:1822-1829).
 //
 // Not yet part of this file: moving stored nights onto their wake day before a save (:1589) and
 // realigning a night resolved by its span (:1561-1573), and pruning the automatic naps a saved
@@ -49,6 +50,8 @@ import java.time.ZoneId
 // - An apnea summary with a NaN or infinite figure is refused before anything is written (SQLite
 //   would bind NaN as NULL, which the column refuses); upstream stores it. A failed apnea write is
 //   thrown, where upstream swallows it and still reports the summary applied.
+// - A failed nap delete is thrown with none deleted, and the count deleted is returned; upstream
+//   rolls back silently and records the count only in its event log.
 
 /**
  * The sleep half of the on-device store, over the same [StoreDatabase] as [LocalStore]. Every write
@@ -304,6 +307,55 @@ class SleepStore internal constructor(
      */
     suspend fun sleepSummaryOverlapping(start: Instant, end: Instant): StoredNight? =
         db.withReadTransaction { overlappingRow(start.toStoredMillis(), end.toStoredMillis())?.let { value(it) } }
+
+    // Naps. A nap is listed by the start it was detected at, whatever its edit says.
+
+    /** The naps detected to start on the day of [on] in [zone], the latest start first. */
+    suspend fun naps(on: Instant, zone: ZoneId): List<StoredNapRecord> {
+        val dayStart = startOfDay(on.toStoredMillis(), zone)
+        val dayEnd = dayStart.atZone(zone).plusDays(1).toInstant()
+        return db.withReadTransaction { sleepDao.napsStartingLatestFirst(dayStart, dayEnd).map { it.toStoredNapRecord() } }
+    }
+
+    /** The naps detected to start `from <= start < to`, the earliest first. */
+    suspend fun naps(from: Instant, to: Instant): List<StoredNapRecord> =
+        db.withReadTransaction { sleepDao.napsStarting(from.toStoredMillis(), to.toStoredMillis()).map { it.toStoredNapRecord() } }
+
+    /**
+     * The naps the ring detected that nobody edited or added, whose span — the detected and the
+     * effective window together — shares time with `[start, end]`; none when [end] is not after
+     * [start]. Read only: a caller that must first remove what Health holds for them deletes them
+     * with [deleteNaps] after.
+     */
+    suspend fun autoNaps(start: Instant, end: Instant): List<StoredNapRecord> {
+        val from = start.toStoredMillis()
+        val to = end.toStoredMillis()
+        if (to <= from) return emptyList()
+        return db.withReadTransaction { autoNapRows(from, to).map { it.toStoredNapRecord() } }
+    }
+
+    /**
+     * Deletes [naps] — each found by its start — in one transaction, and returns how many were still
+     * stored. Throws, deleting none, when a delete fails.
+     */
+    suspend fun deleteNaps(naps: List<StoredNapRecord>): Int {
+        if (naps.isEmpty()) return 0
+        val starts = naps.map { it.start }
+        return db.withWriteTransaction { starts.sumOf { sleepDao.deleteNapAt(it) } }
+    }
+
+    /**
+     * Upstream's automatic-nap filter (:1813-1817, the same in `pruneAutoNaps` :1842-1845): not added or
+     * edited by the wearer, and the span from the earlier to the later of the detected and effective
+     * edges overlapping `(from, to)`.
+     */
+    private suspend fun autoNapRows(from: Instant, to: Instant): List<StoredNapEntity> =
+        sleepDao.allNaps().filter { nap ->
+            if (nap.isManuallyAdded || nap.isManuallyEdited) return@filter false
+            val lo = minOf(nap.start, nap.editedStart ?: nap.start)
+            val hi = maxOf(nap.end, nap.editedEnd ?: nap.end)
+            hi > lo && lo < to && hi > from
+        }
 
     /** [row] as a value, with the onset saved with its edit; an unedited row's is not read. */
     private suspend fun value(row: StoredSleepSummaryEntity): StoredNight =
