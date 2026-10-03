@@ -1,6 +1,12 @@
 package io.github.opencircuit.ringkit
 
+import io.github.opencircuit.ringkit.ExportEngine.DailyRow
+import io.github.opencircuit.ringkit.ExportEngine.DaytimeTemperatureRow
+import io.github.opencircuit.ringkit.ExportEngine.HistorySyncEvidenceRow
+import io.github.opencircuit.ringkit.ExportEngine.NapRow
 import io.github.opencircuit.ringkit.ExportEngine.SampleRow
+import io.github.opencircuit.ringkit.ExportEngine.SleepRow
+import io.github.opencircuit.ringkit.ExportEngine.StepSampleRow
 import org.junit.jupiter.api.Timeout
 import java.io.File
 import java.time.Instant
@@ -15,12 +21,15 @@ import kotlin.test.assertTrue
 /**
  * Byte-for-byte differential of the export writers against upstream's own Swift code:
  * `tools/sleep-differential` (its `ExportDifferential` generator, `regenerate.sh export`) ran the
- * pinned `ExportEngine.samplesCSV` and `ExportEngine.toJSON` over synthetic cases — the measured
- * number texts, hostile kind strings (every CSV quoting trigger and JSON escape class), no rows,
- * millisecond ties before and after 1970, a seeded sweep of doubles across every exponent and the
- * format boundaries, and non-finite values — in four time zones, and wrote each output verbatim to
- * `src/test/resources/export-differential/`. This test rebuilds the same rows, runs the Kotlin
- * writers and compares BYTES. It also sorts the export's key vocabulary and seeded random
+ * pinned `ExportEngine` writers — every schema-2 CSV, `sessionID` / `dayStamp` and `toJSON` — over
+ * synthetic cases: the measured number texts, hostile kind strings (every CSV quoting trigger and
+ * JSON escape class), no rows, millisecond ties before and after 1970, a seeded sweep of doubles
+ * across every exponent and the format boundaries, non-finite values, every schema-2 row kind in
+ * Amsterdam, Kolkata and St John's across their DST changes (with the fixed-decimal edges, every
+ * channel outcome and each sport counter absent on its own), hostile text and 64-bit extremes in
+ * every evidence column, and a comma, quote or edge space carrying a combining mark — and wrote each
+ * output verbatim to `src/test/resources/export-differential/`. This test rebuilds the same rows,
+ * runs the Kotlin writers in the case's zone and compares BYTES. It also sorts the export's key vocabulary and seeded random
  * printable-ASCII keys with the port's comparator and compares the order `JSONSerialization` wrote.
  * The format is documented at the top of the generator's `main.swift`.
  *
@@ -33,7 +42,50 @@ import kotlin.test.assertTrue
  */
 class ExportDifferentialTest {
 
-    private class ECase(val id: String, val zone: ZoneId, val now: Instant, val json: Boolean, val rows: List<SampleRow>)
+    private class ECase(val id: String, val zone: ZoneId, val now: Instant, val json: Boolean) {
+        val rows = mutableListOf<SampleRow>()
+        val sleep = mutableListOf<SleepRow>()
+        val daily = mutableListOf<DailyRow>()
+        val steps = mutableListOf<StepSampleRow>()
+        val naps = mutableListOf<NapRow>()
+        val temperatures = mutableListOf<DaytimeTemperatureRow>()
+        val evidence = mutableListOf<Pair<EvidenceHead, MutableList<HistoryChannelTrace>>>()
+
+        val evidenceRows: List<HistorySyncEvidenceRow>
+            get() = evidence.map { (h, traces) ->
+                HistorySyncEvidenceRow(
+                    capturedAt = h.capturedAt, ringID = h.ringID, trigger = h.trigger, sleepCommitted = h.sleepCommitted,
+                    stagedSleepSegments = h.staged, mergedRecordCount = h.merged, historySampleCount = h.history,
+                    rawRecordBlobBase64 = h.blob, channels = traces, nightRowOutcome = h.outcome,
+                )
+            }
+
+        /** Every double the case's rows hold — a non-finite one is what upstream's JSON cannot write. */
+        val doubles: List<Double>
+            get() = rows.map { it.value } + sleep.flatMap { listOf(it.efficiency, it.skinTempC) } + temperatures.map { it.celsius }
+    }
+
+    private class EvidenceHead(
+        val capturedAt: Instant, val ringID: String, val trigger: String, val sleepCommitted: Boolean, val staged: Long,
+        val merged: Long, val history: Long, val blob: String, val outcome: String?,
+    )
+
+    /** Each output file of a case, with the port's writer that must reproduce it. */
+    private val writers: List<Pair<String, (ECase) -> String>> = listOf(
+        "samples.csv" to { c -> ExportEngine.samplesCSV(c.rows) },
+        "sleep.csv" to { c -> ExportEngine.sleepCSV(c.sleep, c.zone) },
+        "daily.csv" to { c -> ExportEngine.dailyCSV(c.daily, c.zone) },
+        "stepSamples.csv" to { c -> ExportEngine.stepSamplesCSV(c.steps) },
+        "naps.csv" to { c -> ExportEngine.napsCSV(c.naps) },
+        "daytimeTemperatures.csv" to { c -> ExportEngine.daytimeTemperatureCSV(c.temperatures) },
+        "historySyncEvidence.csv" to { c -> ExportEngine.historySyncEvidenceCSV(c.evidenceRows) },
+        "labels.txt" to { c -> (c.sleep.map { ExportEngine.sessionID(it.night, c.zone) } + c.daily.map { ExportEngine.dayStamp(it.day, c.zone) }).joinToString("\n") },
+    )
+
+    private fun json(c: ECase): String? = ExportEngine.toJSON(
+        samples = c.rows, sleep = c.sleep, daily = c.daily, stepSamples = c.steps, naps = c.naps,
+        daytimeTemperatures = c.temperatures, historySyncEvidence = c.evidenceRows, zone = c.zone, now = c.now,
+    )
 
     private data class Divergence(val case: String, val output: String)
 
@@ -46,10 +98,24 @@ class ExportDifferentialTest {
 
     /**
      * Each deliberate byte difference from upstream, keyed by the improvement (with its `PORTING.md`
-     * D-row). None so far: on every case the port writes upstream's bytes. A listed output that no
-     * longer differs fails as stale.
+     * D-row). A listed output that no longer differs fails as stale.
+     *
+     * D-134: upstream's CSV field escaper tests the comma, the quote and the edge spaces on Swift
+     * Characters, so one carrying a combining mark, a joiner, a variation selector or a keycap is
+     * missed and the row's later columns shift; the port quotes per character. The `v2-grapheme`
+     * case holds only such values, in the kinds of its samples and the ring ids of its evidence, so
+     * exactly those two CSVs differ; its JSON (escaped per character on both sides) does not.
+     *
+     * D-43 (the history-sync port): a channel that delivered epoch pages and went quiet without the
+     * end marker is `partial` in the port, `complete` upstream, so its outcome prints differently in
+     * the evidence CSV's channel summary and the JSON's `outcome`. Only `v2-quiet-after-pages` holds
+     * such a trace; every other case's traces classify alike on both sides.
      */
-    private val DELIBERATE_DIVERGENCES: Map<String, Set<Divergence>> = emptyMap()
+    private val DELIBERATE_DIVERGENCES: Map<String, Set<Divergence>> = mapOf(
+        "D-134 per-character CSV quoting" to setOf(Divergence("v2-grapheme", "samples.csv"), Divergence("v2-grapheme", "historySyncEvidence.csv")),
+        "D-43 quiet after pages without the end marker is partial" to
+            setOf(Divergence("v2-quiet-after-pages", "historySyncEvidence.csv"), Divergence("v2-quiet-after-pages", "json")),
+    )
 
     // --- reading the generator's files ---
 
@@ -72,6 +138,44 @@ class ExportDifferentialTest {
     private fun double(t: String): Double = java.lang.Double.longBitsToDouble(bitsOf(t))
     private fun date(t: String): Instant = FoundationDate.referenceBits(bitsOf(t))
 
+    private fun <T> opt(t: String, read: (String) -> T): T? = if (t == "-") null else read(t)
+
+    private fun flag(t: String): Boolean = when (t) {
+        "1" -> true
+        "0" -> false
+        else -> error("bad flag token $t")
+    }
+
+    private fun levels(t: String): List<Long> {
+        require(t.startsWith("m")) { "bad movement-levels token $t" }
+        return if (t.length == 1) emptyList() else t.substring(1).split('|').map { it.toLong() }
+    }
+
+    private fun exitReason(raw: String): HistoryChannelExitReason =
+        HistoryChannelExitReason.entries.singleOrNull { it.rawValue == raw } ?: error("unknown exit reason $raw")
+
+    private fun trace(f: List<String>): HistoryChannelTrace {
+        val t = HistoryChannelTrace(hexString(f[1]), f[2].toInt(), date(f[3]))
+        t.finishedAt = opt(f[4], ::date)
+        t.sawSyncAck = flag(f[5])
+        t.syncAckFlag = opt(f[6]) { it.toInt() }
+        t.sawEmptyHistorySignal = flag(f[7])
+        t.openWriteFailed = opt(f[8], ::flag)
+        t.fetchNudges = opt(f[9]) { it.toInt() }
+        t.reopenRound = opt(f[10]) { it.toInt() }
+        t.page4CCount = f[11].toInt()
+        t.page47Count = f[12].toInt()
+        t.page4DCount = opt(f[13]) { it.toInt() }
+        t.sportSampleCount = opt(f[14]) { it.toInt() }
+        t.endMarkerCount = f[15].toInt()
+        t.recordsAtStart = f[16].toInt()
+        t.recordsAtEnd = f[17].toInt()
+        t.firstOpcode = opt(f[18]) { it.toInt() }
+        t.lastOpcode = opt(f[19]) { it.toInt() }
+        t.exitReason = opt(f[20]) { exitReason(hexString(it)) }
+        return t
+    }
+
     private fun inputs(): List<ECase> {
         val all = text("inputs.txt")
         val out = mutableListOf<ECase>()
@@ -79,15 +183,34 @@ class ExportDifferentialTest {
         while (i < all.size) {
             val head = all[i].split(' ')
             check(head.size == 5 && head[0] == "case" && head[4] in setOf("json", "csvonly")) { "bad case header: ${all[i]}" }
-            val rows = mutableListOf<SampleRow>()
+            val c = ECase(head[1], ZoneId.of(head[2]), date(head[3]), head[4] == "json")
             i++
             while (all[i] != "end") {
                 val f = all[i].split(' ')
-                check(f.size == 5 && f[0] == "s") { "bad sample line: ${all[i]}" }
-                rows += SampleRow(hexString(f[1]), date(f[2]), date(f[3]), double(f[4]))
+                val arity = mapOf("s" to 5, "sl" to 19, "dy" to 3, "st" to 4, "np" to 5, "dt" to 3, "ev" to 10, "ch" to 21)
+                check(arity[f[0]] == f.size) { "bad row line: ${all[i]}" }
+                when (f[0]) {
+                    "s" -> c.rows += SampleRow(hexString(f[1]), date(f[2]), date(f[3]), double(f[4]))
+                    "sl" -> c.sleep += SleepRow(
+                        night = date(f[1]), asleepMin = f[2].toLong(), deepMin = f[3].toLong(), lightMin = f[4].toLong(),
+                        remMin = f[5].toLong(), awakeMin = f[6].toLong(), efficiency = double(f[7]), inBedStart = opt(f[8], ::date),
+                        inBedEnd = opt(f[9], ::date), skinTempC = double(f[10]), sleepScore = f[11].toLong(), stressScore = f[12].toLong(),
+                        feelScore = f[13].toLong(), hrDeep = f[14].toLong(), hrLight = f[15].toLong(), hrRem = f[16].toLong(),
+                        hrAwake = f[17].toLong(), movementLevels = levels(f[18]),
+                    )
+                    "dy" -> c.daily += DailyRow(date(f[1]), f[2].toLong())
+                    "st" -> c.steps += StepSampleRow(date(f[1]), date(f[2]), f[3].toLong())
+                    "np" -> c.naps += NapRow(date(f[1]), date(f[2]), f[3].toLong(), flag(f[4]))
+                    "dt" -> c.temperatures += DaytimeTemperatureRow(date(f[1]), double(f[2]))
+                    "ev" -> c.evidence += EvidenceHead(
+                        date(f[1]), hexString(f[2]), hexString(f[3]), flag(f[4]), f[5].toLong(), f[6].toLong(), f[7].toLong(),
+                        hexString(f[8]), opt(f[9], ::hexString),
+                    ) to mutableListOf()
+                    "ch" -> c.evidence.last().second += trace(f)
+                }
                 i++
             }
-            out += ECase(head[1], ZoneId.of(head[2]), date(head[3]), head[4] == "json", rows)
+            out += c
             i++
         }
         return out
@@ -122,11 +245,13 @@ class ExportDifferentialTest {
     private fun runAll(divergences: Map<String, Set<Divergence>>): Report {
         val report = Report()
         for (c in inputs()) {
-            val csv = checkNotNull(resource("${c.id}.samples.csv")) { "missing golden ${c.id}.samples.csv" }
-            compare(c.id, "samples.csv", csv, ExportEngine.samplesCSV(c.rows).toByteArray(Charsets.UTF_8), divergences, report)
+            for ((output, write) in writers) {
+                val golden = checkNotNull(resource("${c.id}.$output")) { "missing golden ${c.id}.$output" }
+                compare(c.id, output, golden, write(c).toByteArray(Charsets.UTF_8), divergences, report)
+            }
             if (c.json) {
-                val json = checkNotNull(resource("${c.id}.json")) { "missing golden ${c.id}.json" }
-                compare(c.id, "json", json, ExportEngine.toJSON(samples = c.rows, sleep = emptyList(), daily = emptyList(), zone = c.zone, now = c.now)?.toByteArray(Charsets.UTF_8), divergences, report)
+                val golden = checkNotNull(resource("${c.id}.json")) { "missing golden ${c.id}.json" }
+                compare(c.id, "json", golden, json(c)?.toByteArray(Charsets.UTF_8), divergences, report)
             }
         }
         return report
@@ -138,7 +263,13 @@ class ExportDifferentialTest {
         val report = runAll(DELIBERATE_DIVERGENCES)
         println("export differential: ${inputs().size} cases, ${report.compared} outputs, ${report.bytes} bytes compared, ${report.mismatches.size} mismatches")
         for ((improvement, seen) in report.allowed) println("  deliberate divergence '$improvement': ${seen.joinToString()}")
-        assertTrue(report.compared >= 11, "expected at least 11 compared outputs, got ${report.compared} — FIX THE READER")
+        assertTrue(report.compared >= 107, "expected at least 107 compared outputs, got ${report.compared} — FIX THE READER")
+        // The generator's own count of the rows it wrote (its stderr line): a reader that dropped a
+        // line kind would compare less than it claims.
+        val cases = inputs()
+        assertEquals(676, cases.sumOf { it.rows.size }, "sample rows read")
+        assertEquals(270, cases.sumOf { it.sleep.size + it.daily.size + it.steps.size + it.naps.size + it.temperatures.size + it.evidence.size }, "schema-2 rows read")
+        assertEquals(130, cases.sumOf { c -> c.evidence.sumOf { it.second.size } }, "channel traces read")
         assertTrue(report.mismatches.isEmpty(), "${report.mismatches.size} output(s) differ from upstream:\n" + report.mismatches.joinToString("\n"))
         val stale = staleEntries(report, DELIBERATE_DIVERGENCES)
         assertTrue(stale.isEmpty(), "listed deliberate divergence(s) no longer diverge — remove them:\n" + stale.joinToString("\n"))
@@ -149,8 +280,8 @@ class ExportDifferentialTest {
         val csvOnly = inputs().filter { !it.json }
         assertTrue(csvOnly.isNotEmpty(), "the generator wrote no non-finite case")
         for (c in csvOnly) {
-            assertTrue(c.rows.any { !it.value.isFinite() }, "${c.id} is marked csvonly but every value is finite")
-            assertNull(ExportEngine.toJSON(samples = c.rows, sleep = emptyList(), daily = emptyList(), zone = c.zone, now = c.now), c.id)
+            assertTrue(c.doubles.any { !it.isFinite() }, "${c.id} is marked csvonly but every value is finite")
+            assertNull(json(c), c.id)
             assertNull(resource("${c.id}.json"), "${c.id} has a JSON golden although upstream cannot write one")
         }
     }
@@ -177,7 +308,8 @@ class ExportDifferentialTest {
         val root = assertNotNull(System.getProperty("opencircuit.androidRoot"), "system property opencircuit.androidRoot is not set — see ringkit/build.gradle.kts")
         val dir = File(root, "ringkit/src/test/resources/export-differential")
         val present = assertNotNull(dir.list(), "no directory $dir").toSet()
-        val expected = setOf("inputs.txt", "keyorder.txt") + inputs().flatMap { c -> listOfNotNull("${c.id}.samples.csv", if (c.json) "${c.id}.json" else null) }
+        val expected = setOf("inputs.txt", "keyorder.txt") +
+            inputs().flatMap { c -> writers.map { "${c.id}.${it.first}" } + listOfNotNull(if (c.json) "${c.id}.json" else null) }
         assertEquals(expected, present, "stale or missing goldens — regenerate with regenerate.sh export")
     }
 
@@ -193,6 +325,15 @@ class ExportDifferentialTest {
                 val back = assertNotNull(s.asObject()?.double("value"), "${c.id} ${row.kind}")
                 assertTrue(back == row.value, "${c.id}: ${row.value} read back as $back")
             }
+            val sizes = listOf("sleep", "daily", "stepSamples", "naps", "daytimeTemperatures", "historySyncEvidence").map { root.array(it)?.size }
+            assertEquals(listOf(c.sleep.size, c.daily.size, c.steps.size, c.naps.size, c.temperatures.size, c.evidence.size), sizes, c.id)
+            val sleepBack = assertNotNull(root["sleep"]?.asObjectList(), c.id)
+            for ((row, s) in c.sleep.zip(sleepBack)) {
+                assertTrue(s.double("efficiency") == row.efficiency && s.double("skinTempC") == row.skinTempC, "${c.id}: $row")
+                assertEquals(ExportEngine.dayStamp(row.night, c.zone), s.string("night"), c.id)
+            }
+            val traces = assertNotNull(root["historySyncEvidence"]?.asObjectList(), c.id).map { it.array("channels")?.size }
+            assertEquals(c.evidence.map { it.second.size }, traces, c.id)
         }
     }
 

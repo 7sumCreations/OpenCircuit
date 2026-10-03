@@ -1,0 +1,9 @@
+capturedAt,ringID,trigger,sleepCommitted,stagedSleepSegments,mergedRecordCount,historySampleCount,channelSummary,rawRecordBlobBase64,nightRowOutcome
+2023-11-14T22:13:20.000Z,a,́b,manual,true,1,2,3,,AQID,
+2023-11-14T22:14:20.000Z,a,‍b,manual,true,1,2,3,,AQID,
+2023-11-14T22:15:20.000Z,a,️b,manual,true,1,2,3,,AQID,
+2023-11-14T22:16:20.000Z,a,⃣,manual,true,1,2,3,,AQID,
+2023-11-14T22:17:20.000Z,a"́b,manual,true,1,2,3,,AQID,
+2023-11-14T22:18:20.000Z,"q"́""x",manual,true,1,2,3,,AQID,
+2023-11-14T22:19:20.000Z, ́lead,manual,true,1,2,3,,AQID,
+2023-11-14T22:20:20.000Z, ̈,manual,true,1,2,3,,AQID,
