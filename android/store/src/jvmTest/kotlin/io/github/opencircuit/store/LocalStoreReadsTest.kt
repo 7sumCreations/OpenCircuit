@@ -93,7 +93,7 @@ class LocalStoreReadsTest {
     /**
      * Kotlin-only: SQLite binds NaN as NULL (the NOT NULL column then fails with an
      * `SQLiteException`) and stores ±∞, which is no temperature. Either is refused before the
-     * database with an `IllegalArgumentException`, and nothing is written (as I-46 for ingest).
+     * database with an `IllegalArgumentException`, and nothing is written (ingest drops them: PORTING D-140).
      */
     @Test
     fun aDaytimeTemperatureThatIsNotFiniteIsRefusedBeforeTheDatabase() = runBlocking<Unit> {

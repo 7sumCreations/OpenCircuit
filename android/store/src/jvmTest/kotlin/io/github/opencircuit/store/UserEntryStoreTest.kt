@@ -316,9 +316,9 @@ class UserEntryStoreTest {
     }
 
     /**
-     * Kotlin-only (I-30 / PL-2026-10-01-o): an entry the store hands out shares no list with the
-     * row it was built from, and its lists cannot be changed by casting them to `MutableList`
-     * (Swift's arrays copy; a Kotlin `List` from the column reader is an `ArrayList`).
+     * Kotlin-only: an entry the store hands out shares no list with the row it was built from, and
+     * its lists cannot be changed by casting them to `MutableList` (Swift's arrays copy; a Kotlin
+     * `List` from the column reader is an `ArrayList`).
      */
     @Test
     fun anEntrysListsAreItsOwnAndCannotBeChanged() {

@@ -116,8 +116,7 @@ class EpochArchiveCodecTest {
     }
 
     /**
-     * Kotlin-only (the I-30 / PL-2026-10-01-o class): marks that would not read back as themselves
-     * are refused when built. A time stored as 0 ms or less reads as no date (upstream's `t > 0`),
+     * Kotlin-only: marks that would not read back as themselves are refused when built. A time stored as 0 ms or less reads as no date (upstream's `t > 0`),
      * a time past 64-bit milliseconds cannot be written, and a drain count below 0 is not a count.
      */
     @Test

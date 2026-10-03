@@ -106,7 +106,7 @@ class JsonReadTest {
     }
 
     /**
-     * Kotlin-only (I7, unbounded work): a number literal is turned into a `BigDecimal` / double from
+     * Kotlin-only (unbounded work): a number literal is turned into a `BigDecimal` / double from
      * its whole text, which costs more than linear time in its length. A literal longer than any
      * number the store writes is unreadable before that work. The longest the store can need: the
      * smallest double written out in plain decimal, `-0.` + 323 zeros + `5` (327 characters).
