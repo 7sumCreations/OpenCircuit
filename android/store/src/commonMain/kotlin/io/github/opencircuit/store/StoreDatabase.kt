@@ -19,12 +19,17 @@ import androidx.room3.RoomDatabaseConstructor
         StoredDailyEntity::class,
         StoredStepSampleEntity::class,
         StoredDaytimeTempEntity::class,
+        StoredSleepSummaryEntity::class,
+        StoredNapEntity::class,
+        StoredPeriodEntryEntity::class,
+        StoredHeadacheEntryEntity::class,
+        StoredHeadacheRiskEntity::class,
         StoreKvEntity::class,
     ],
     version = 1,
     exportSchema = true,
 )
-@ColumnTypeConverters(InstantColumnConverter::class)
+@ColumnTypeConverters(InstantColumnConverter::class, ListColumnConverter::class)
 @ConstructedBy(StoreDatabaseConstructor::class)
 abstract class StoreDatabase : RoomDatabase() {
     internal abstract fun sampleDao(): SampleDao
@@ -32,6 +37,8 @@ abstract class StoreDatabase : RoomDatabase() {
     internal abstract fun dailyDao(): DailyDao
 
     internal abstract fun kvDao(): KvDao
+
+    internal abstract fun userEntryDao(): UserEntryDao
 }
 
 /** Room generates the `actual` for each target. */

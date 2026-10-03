@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "92b1096e4feb8f31f23204b8b1f246bd",
+    "identityHash": "6d59784cee88687acd5b43fc1f78333c",
     "entities": [
       {
         "tableName": "stored_sample",
@@ -255,6 +255,758 @@
         ]
       },
       {
+        "tableName": "stored_sleep_summary",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `night` INTEGER NOT NULL DEFAULT -62135769600000, `asleep_min` INTEGER NOT NULL DEFAULT 0, `deep_min` INTEGER NOT NULL DEFAULT 0, `light_min` INTEGER NOT NULL DEFAULT 0, `rem_min` INTEGER NOT NULL DEFAULT 0, `awake_min` INTEGER NOT NULL DEFAULT 0, `efficiency` REAL NOT NULL DEFAULT 0, `in_bed_start` INTEGER NOT NULL DEFAULT -62135769600000, `in_bed_end` INTEGER NOT NULL DEFAULT -62135769600000, `sleep_onset` INTEGER NOT NULL DEFAULT -62135769600000, `sleep_wake` INTEGER NOT NULL DEFAULT -62135769600000, `updated_at` INTEGER NOT NULL DEFAULT -62135769600000, `skin_temp_c` REAL NOT NULL DEFAULT 0, `sleep_score` INTEGER NOT NULL DEFAULT 0, `stress_score` INTEGER NOT NULL DEFAULT 0, `feel_score` INTEGER NOT NULL DEFAULT 0, `hr_deep` INTEGER NOT NULL DEFAULT 0, `hr_light` INTEGER NOT NULL DEFAULT 0, `hr_rem` INTEGER NOT NULL DEFAULT 0, `hr_awake` INTEGER NOT NULL DEFAULT 0, `movement_levels` TEXT NOT NULL DEFAULT '[]', `hypnogram_data` BLOB NOT NULL DEFAULT x'', `osa_avg_spo2` REAL NOT NULL DEFAULT 0, `osa_min_spo2` REAL NOT NULL DEFAULT 0, `osa_time_below_90_sec` REAL NOT NULL DEFAULT 0, `osa_odi` REAL NOT NULL DEFAULT 0, `osa_valid_windows` INTEGER NOT NULL DEFAULT 0, `edited_in_bed_start` INTEGER NOT NULL DEFAULT -62135769600000, `edited_in_bed_end` INTEGER NOT NULL DEFAULT -62135769600000, `is_manually_edited` INTEGER NOT NULL DEFAULT 0, `widened_recorded_in_bed_start` INTEGER NOT NULL DEFAULT -62135769600000, `widened_recorded_in_bed_end` INTEGER NOT NULL DEFAULT -62135769600000, `widened_recorded_onset` INTEGER NOT NULL DEFAULT -62135769600000, `widened_recorded_wake` INTEGER NOT NULL DEFAULT -62135769600000, `recorded_hypnogram_data` BLOB NOT NULL DEFAULT x'', `measured_asleep_seconds` REAL NOT NULL DEFAULT -1, `asserted_asleep_seconds` REAL NOT NULL DEFAULT -1, `coverage_fraction` REAL NOT NULL DEFAULT -1, `longest_gap_seconds` REAL NOT NULL DEFAULT -1, `measured_efficiency` REAL NOT NULL DEFAULT -1, `sleep_basis` TEXT NOT NULL DEFAULT '')",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "night",
+            "columnName": "night",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "asleepMin",
+            "columnName": "asleep_min",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "deepMin",
+            "columnName": "deep_min",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "lightMin",
+            "columnName": "light_min",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "remMin",
+            "columnName": "rem_min",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "awakeMin",
+            "columnName": "awake_min",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "efficiency",
+            "columnName": "efficiency",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "inBedStart",
+            "columnName": "in_bed_start",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "inBedEnd",
+            "columnName": "in_bed_end",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "sleepOnset",
+            "columnName": "sleep_onset",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "sleepWake",
+            "columnName": "sleep_wake",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "skinTempC",
+            "columnName": "skin_temp_c",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "sleepScore",
+            "columnName": "sleep_score",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "stressScore",
+            "columnName": "stress_score",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "feelScore",
+            "columnName": "feel_score",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hrDeep",
+            "columnName": "hr_deep",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hrLight",
+            "columnName": "hr_light",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hrRem",
+            "columnName": "hr_rem",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hrAwake",
+            "columnName": "hr_awake",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "movementLevels",
+            "columnName": "movement_levels",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "hypnogramData",
+            "columnName": "hypnogram_data",
+            "affinity": "BLOB",
+            "notNull": true,
+            "defaultValue": "x''"
+          },
+          {
+            "fieldPath": "osaAvgSpO2",
+            "columnName": "osa_avg_spo2",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "osaMinSpO2",
+            "columnName": "osa_min_spo2",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "osaTimeBelow90Sec",
+            "columnName": "osa_time_below_90_sec",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "osaODI",
+            "columnName": "osa_odi",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "osaValidWindows",
+            "columnName": "osa_valid_windows",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "editedInBedStart",
+            "columnName": "edited_in_bed_start",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "editedInBedEnd",
+            "columnName": "edited_in_bed_end",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "isManuallyEdited",
+            "columnName": "is_manually_edited",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "widenedRecordedInBedStart",
+            "columnName": "widened_recorded_in_bed_start",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "widenedRecordedInBedEnd",
+            "columnName": "widened_recorded_in_bed_end",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "widenedRecordedOnset",
+            "columnName": "widened_recorded_onset",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "widenedRecordedWake",
+            "columnName": "widened_recorded_wake",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "recordedHypnogramData",
+            "columnName": "recorded_hypnogram_data",
+            "affinity": "BLOB",
+            "notNull": true,
+            "defaultValue": "x''"
+          },
+          {
+            "fieldPath": "measuredAsleepSeconds",
+            "columnName": "measured_asleep_seconds",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "-1"
+          },
+          {
+            "fieldPath": "assertedAsleepSeconds",
+            "columnName": "asserted_asleep_seconds",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "-1"
+          },
+          {
+            "fieldPath": "coverageFraction",
+            "columnName": "coverage_fraction",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "-1"
+          },
+          {
+            "fieldPath": "longestGapSeconds",
+            "columnName": "longest_gap_seconds",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "-1"
+          },
+          {
+            "fieldPath": "measuredEfficiency",
+            "columnName": "measured_efficiency",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "-1"
+          },
+          {
+            "fieldPath": "sleepBasis",
+            "columnName": "sleep_basis",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stored_sleep_summary_night",
+            "unique": true,
+            "columnNames": [
+              "night"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_stored_sleep_summary_night` ON `${TABLE_NAME}` (`night`)"
+          }
+        ]
+      },
+      {
+        "tableName": "stored_nap",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `start` INTEGER NOT NULL DEFAULT -62135769600000, `end` INTEGER NOT NULL DEFAULT -62135769600000, `asleep_min` INTEGER NOT NULL DEFAULT 0, `is_long_nap` INTEGER NOT NULL DEFAULT 0, `health_written` INTEGER NOT NULL DEFAULT 0, `updated_at` INTEGER NOT NULL DEFAULT -62135769600000, `is_manually_edited` INTEGER NOT NULL DEFAULT 0, `is_manually_added` INTEGER NOT NULL DEFAULT 0, `nap_segments_data` BLOB, `edited_start` INTEGER, `edited_end` INTEGER, `recorded_nap_segments_data` BLOB, `health_written_start` INTEGER NOT NULL DEFAULT -62135769600000, `health_written_end` INTEGER NOT NULL DEFAULT -62135769600000)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "start",
+            "columnName": "start",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "end",
+            "columnName": "end",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "asleepMin",
+            "columnName": "asleep_min",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "isLongNap",
+            "columnName": "is_long_nap",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "healthWritten",
+            "columnName": "health_written",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "isManuallyEdited",
+            "columnName": "is_manually_edited",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "isManuallyAdded",
+            "columnName": "is_manually_added",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "napSegmentsData",
+            "columnName": "nap_segments_data",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "editedStart",
+            "columnName": "edited_start",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "editedEnd",
+            "columnName": "edited_end",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "recordedNapSegmentsData",
+            "columnName": "recorded_nap_segments_data",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "healthWrittenStart",
+            "columnName": "health_written_start",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "healthWrittenEnd",
+            "columnName": "health_written_end",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stored_nap_start",
+            "unique": true,
+            "columnNames": [
+              "start"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_stored_nap_start` ON `${TABLE_NAME}` (`start`)"
+          }
+        ]
+      },
+      {
+        "tableName": "stored_period_entry",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `start` INTEGER NOT NULL DEFAULT -62135769600000, `end` INTEGER, `flow_level_raw` INTEGER NOT NULL DEFAULT 2, `symptoms` TEXT NOT NULL DEFAULT '[]', `notes` TEXT NOT NULL DEFAULT '', `health_written` INTEGER NOT NULL DEFAULT 0, `hk_sample_uuids` TEXT NOT NULL DEFAULT '[]', `updated_at` INTEGER NOT NULL DEFAULT -62135769600000)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "start",
+            "columnName": "start",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "end",
+            "columnName": "end",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "flowLevelRaw",
+            "columnName": "flow_level_raw",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "2"
+          },
+          {
+            "fieldPath": "symptoms",
+            "columnName": "symptoms",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "healthWritten",
+            "columnName": "health_written",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hkSampleUUIDs",
+            "columnName": "hk_sample_uuids",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stored_period_entry_start",
+            "unique": true,
+            "columnNames": [
+              "start"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_stored_period_entry_start` ON `${TABLE_NAME}` (`start`)"
+          }
+        ]
+      },
+      {
+        "tableName": "stored_headache_entry",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `onset` INTEGER NOT NULL DEFAULT -62135769600000, `end` INTEGER, `severity_raw` INTEGER NOT NULL DEFAULT 0, `symptoms` TEXT NOT NULL DEFAULT '[]', `custom_symptoms` TEXT NOT NULL DEFAULT '[]', `factors` TEXT NOT NULL DEFAULT '[]', `notes` TEXT NOT NULL DEFAULT '', `source_raw` TEXT NOT NULL DEFAULT 'user', `imported_hk_uuid` TEXT, `health_written` INTEGER NOT NULL DEFAULT 0, `hk_sample_uuids` TEXT NOT NULL DEFAULT '[]', `updated_at` INTEGER NOT NULL DEFAULT -62135769600000)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "onset",
+            "columnName": "onset",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "end",
+            "columnName": "end",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "severityRaw",
+            "columnName": "severity_raw",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "symptoms",
+            "columnName": "symptoms",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "customSymptoms",
+            "columnName": "custom_symptoms",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "factors",
+            "columnName": "factors",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "sourceRaw",
+            "columnName": "source_raw",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'user'"
+          },
+          {
+            "fieldPath": "importedHKUUID",
+            "columnName": "imported_hk_uuid",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "healthWritten",
+            "columnName": "health_written",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hkSampleUUIDs",
+            "columnName": "hk_sample_uuids",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stored_headache_entry_onset",
+            "unique": true,
+            "columnNames": [
+              "onset"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_stored_headache_entry_onset` ON `${TABLE_NAME}` (`onset`)"
+          }
+        ]
+      },
+      {
+        "tableName": "stored_headache_risk",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `day` INTEGER NOT NULL DEFAULT -62135769600000, `night_key` INTEGER NOT NULL DEFAULT -62135769600000, `index` REAL NOT NULL DEFAULT 0, `band_raw` INTEGER NOT NULL DEFAULT 0, `ring_feature_count` INTEGER NOT NULL DEFAULT 0, `coverage_fraction` REAL NOT NULL DEFAULT 0, `contributions_json` TEXT NOT NULL DEFAULT '', `absent_json` TEXT NOT NULL DEFAULT '', `computed_at` INTEGER NOT NULL DEFAULT -62135769600000, `sleep_updated_at` INTEGER, `sleep_restaged` INTEGER NOT NULL DEFAULT 0, `alerted` INTEGER NOT NULL DEFAULT 0, `post_unlock` INTEGER NOT NULL DEFAULT 0, `updated_at` INTEGER NOT NULL DEFAULT -62135769600000)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "day",
+            "columnName": "day",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "nightKey",
+            "columnName": "night_key",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "index",
+            "columnName": "index",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "bandRaw",
+            "columnName": "band_raw",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "ringFeatureCount",
+            "columnName": "ring_feature_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "coverageFraction",
+            "columnName": "coverage_fraction",
+            "affinity": "REAL",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "contributionsJSON",
+            "columnName": "contributions_json",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "absentJSON",
+            "columnName": "absent_json",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "computedAt",
+            "columnName": "computed_at",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          },
+          {
+            "fieldPath": "sleepUpdatedAt",
+            "columnName": "sleep_updated_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sleepRestaged",
+            "columnName": "sleep_restaged",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "alerted",
+            "columnName": "alerted",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "postUnlock",
+            "columnName": "post_unlock",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "-62135769600000"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stored_headache_risk_day",
+            "unique": true,
+            "columnNames": [
+              "day"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_stored_headache_risk_day` ON `${TABLE_NAME}` (`day`)"
+          }
+        ]
+      },
+      {
         "tableName": "store_kv",
         "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`key`))",
         "fields": [
@@ -287,7 +1039,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '92b1096e4feb8f31f23204b8b1f246bd')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6d59784cee88687acd5b43fc1f78333c')"
     ]
   }
 }
