@@ -7,11 +7,11 @@ import io.github.opencircuit.ringkit.CumulativeMetricState
 import io.github.opencircuit.ringkit.LiveHR
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
+import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SyncCursor
 import io.github.opencircuit.ringkit.isCumulativeCounter
 import java.time.Instant
 import java.time.ZoneId
-import java.time.temporal.ChronoUnit
 
 // The store's ingest path: ring samples and the per-metric sync cursor, committed together.
 // Port of upstream ios/OpenCircuit/Store/LocalStore.swift (@ b1c2fdd): `IngestPreview` (:878),
@@ -23,7 +23,11 @@ import java.time.temporal.ChronoUnit
 // `recentDailies` :3114, `dailies` :3119); daytime temperatures (:1073, :1079); retention and
 // repairs (`sampleRetentionDays` :1051, `pruneExpiredSamples` :1058, `purgeImplausibleHeartRate`
 // :1090, `purgeImplausibleTimestamps` :1110, `repairFutureSyncCursors` :1144), with the purges'
-// one-time latches from ios/OpenCircuit/App.swift (:624, :638).
+// one-time latches from ios/OpenCircuit/App.swift (:624, :638); the period log
+// (ios/OpenCircuit/CycleStore.swift :73-156), the headache log and the frozen headache-risk rows
+// (ios/OpenCircuit/Store/HeadacheStore.swift :195-315, :332-406), without their health-write calls
+// (`periodEntriesNeedingHealthMirror`, `recordPeriodEntryHK`, `pendingHeadacheEntries`,
+// `recordHeadacheEntryHK`), which belong to the health-store port.
 //
 // Differences, each deliberate:
 // - `now` and `zone` are parameters. Upstream reads the wall clock and `Calendar.current`; the
@@ -36,6 +40,10 @@ import java.time.temporal.ChronoUnit
 //   Swift's `+=` traps; a failed day lookup fails the write (upstream's `try?` inserts a new row).
 // - The two one-time purges keep their latch in this database and write it in the purge's own
 //   transaction; upstream sets a UserDefaults flag after the purge has saved.
+// - The period and headache logs share one implementation of upstream's save rules
+//   (UserEntrySaveRules.kt), and a move whose original has vanished keeps the row already at the
+//   destination (upstream deletes it). A failed fetch fails the write (upstream's `try?` treats it
+//   as "no row").
 
 /**
  * The on-device store over one [StoreDatabase]. Every write is one transaction: it commits whole
@@ -46,8 +54,186 @@ class LocalStore internal constructor(
     private val sampleDao: SampleDao = db.sampleDao(),
     private val dailyDao: DailyDao = db.dailyDao(),
     private val kvDao: KvDao = db.kvDao(),
+    private val userEntryDao: UserEntryDao = db.userEntryDao(),
 ) {
-    constructor(db: StoreDatabase) : this(db, db.sampleDao(), db.dailyDao(), db.kvDao())
+    constructor(db: StoreDatabase) : this(db, db.sampleDao(), db.dailyDao(), db.kvDao(), db.userEntryDao())
+
+    private val periodTable = PeriodEntryTable(userEntryDao)
+
+    private val headacheTable = HeadacheEntryTable(userEntryDao)
+
+    // Period log (ios/OpenCircuit/CycleStore.swift :73-156). Every instant is cut to the stored
+    // millisecond first, so comparisons and lookups see what the store keeps.
+
+    /**
+     * Saves the period starting at [start], in one transaction. With [originalStart] (an edit that
+     * moved the start), the original entry moves to [start] and takes over the Health sample ids of
+     * any entry already there. A change of flow, end or symptoms marks the entry for re-writing to
+     * the health store, keeping its written ids so the stale samples can be deleted; a notes-only
+     * edit does not.
+     */
+    suspend fun savePeriodEntry(
+        start: Instant,
+        end: Instant?,
+        flowLevelRaw: Int,
+        symptoms: List<String>,
+        notes: String,
+        now: Instant,
+        originalStart: Instant? = null,
+    ) {
+        val key = start.toStoredMillis()
+        val endMs = end?.toStoredMillis()
+        val at = now.toStoredMillis()
+        val tags = symptoms.toList()
+        db.withWriteTransaction {
+            periodTable.saveEntry(
+                key = key,
+                originalKey = originalStart?.toStoredMillis(),
+                edited = { it.copy(end = endMs, flowLevelRaw = flowLevelRaw, symptoms = tags, notes = notes, updatedAt = at) },
+                isClinicalChange = { it.flowLevelRaw != flowLevelRaw || it.end != endMs || it.symptoms != tags },
+                fresh = {
+                    StoredPeriodEntryEntity(start = key, end = endMs, flowLevelRaw = flowLevelRaw, symptoms = tags, notes = notes, updatedAt = at)
+                },
+            )
+        }
+    }
+
+    /**
+     * Deletes the period starting at [start] and returns the ids of the Health samples written for
+     * it, for the caller to delete there; an empty list when there was no such entry.
+     */
+    suspend fun deletePeriodEntry(start: Instant): List<String> =
+        db.withWriteTransaction {
+            val row = userEntryDao.periodAt(start.toStoredMillis()) ?: return@withWriteTransaction emptyList()
+            userEntryDao.deletePeriod(row)
+            row.hkSampleUUIDs
+        }
+
+    /** Every logged period, oldest start first. */
+    suspend fun allPeriodEntries(): List<PeriodEntry> = userEntryDao.allPeriods().map { it.toPeriodEntry() }
+
+    // Headache log (ios/OpenCircuit/Store/HeadacheStore.swift :195-315).
+
+    /**
+     * Saves the headache with [onset], in one transaction, under the period log's rules: a move
+     * ([originalOnset]) relocates the original entry and takes over the ids of any entry at
+     * [onset]; a change of severity, end or symptoms marks it for re-writing; notes, custom
+     * symptoms and possible triggers do not. [source] and [importedHKUUID] are taken by a new entry
+     * only; an edit keeps the entry's own.
+     */
+    suspend fun saveHeadacheEntry(
+        onset: Instant,
+        end: Instant?,
+        severityRaw: Int,
+        symptoms: List<String>,
+        customSymptoms: List<String> = emptyList(),
+        factors: List<String> = emptyList(),
+        notes: String = "",
+        source: HeadacheSource = HeadacheSource.USER,
+        importedHKUUID: String? = null,
+        originalOnset: Instant? = null,
+        now: Instant,
+    ) {
+        val key = onset.toStoredMillis()
+        val endMs = end?.toStoredMillis()
+        val at = now.toStoredMillis()
+        val tags = symptoms.toList()
+        val custom = customSymptoms.toList()
+        val triggers = factors.toList()
+        db.withWriteTransaction {
+            headacheTable.saveEntry(
+                key = key,
+                originalKey = originalOnset?.toStoredMillis(),
+                edited = {
+                    it.copy(
+                        end = endMs, severityRaw = severityRaw, symptoms = tags, customSymptoms = custom,
+                        factors = triggers, notes = notes, updatedAt = at,
+                    )
+                },
+                isClinicalChange = { it.severityRaw != severityRaw || it.end != endMs || it.symptoms != tags },
+                fresh = {
+                    StoredHeadacheEntryEntity(
+                        onset = key, end = endMs, severityRaw = severityRaw, symptoms = tags, customSymptoms = custom,
+                        factors = triggers, notes = notes, sourceRaw = source.rawValue, importedHKUUID = importedHKUUID,
+                        updatedAt = at,
+                    )
+                },
+            )
+        }
+    }
+
+    /**
+     * Deletes the headache with [onset] and returns the ids of the Health samples written for it;
+     * an empty list when there was no such entry.
+     */
+    suspend fun deleteHeadacheEntry(onset: Instant): List<String> =
+        db.withWriteTransaction {
+            val row = userEntryDao.headacheAt(onset.toStoredMillis()) ?: return@withWriteTransaction emptyList()
+            userEntryDao.deleteHeadache(row)
+            row.hkSampleUUIDs
+        }
+
+    /** Every logged headache, oldest onset first. */
+    suspend fun allHeadacheEntries(): List<HeadacheEntry> = userEntryDao.allHeadaches().map { it.toHeadacheEntry() }
+
+    /** Headaches with `from <= onset < to`, oldest first. */
+    suspend fun headacheEntries(from: Instant, to: Instant): List<HeadacheEntry> =
+        userEntryDao.headaches(from, to).map { it.toHeadacheEntry() }
+
+    /** The health-store sample ids already imported as headaches, so a repeated import adds nothing. */
+    suspend fun importedHeadacheHKUUIDs(): Set<String> = userEntryDao.importedHeadacheUUIDs().toSet()
+
+    // Frozen risk rows (ios/OpenCircuit/Store/HeadacheStore.swift :332-406).
+
+    /**
+     * Stores [row] unless its day is already scored, or its night is (a time-zone change moves the
+     * day key; a night key never moves). Returns true when it was stored. A day's score is never
+     * replaced: there is no update path, by design. One transaction.
+     */
+    suspend fun insertRiskDayIfAbsent(row: HeadacheRiskDay): Boolean {
+        val stored = row.toEntity()
+        return db.withWriteTransaction {
+            if (userEntryDao.riskOn(stored.day) != null) return@withWriteTransaction false
+            if (stored.nightKey != SleepEdit.DISTANT_PAST && userEntryDao.riskForNight(stored.nightKey) != null) {
+                return@withWriteTransaction false
+            }
+            userEntryDao.insertRisk(stored)
+            true
+        }
+    }
+
+    /** The frozen row scoring the night [nightKey]; null for [SleepEdit.DISTANT_PAST] or none. */
+    suspend fun riskRow(nightKey: Instant): HeadacheRiskDay? {
+        val key = nightKey.toStoredMillis()
+        if (key == SleepEdit.DISTANT_PAST) return null
+        return userEntryDao.riskForNight(key)?.toRiskDay()
+    }
+
+    /** Frozen rows with `from <= day < to`, oldest first. */
+    suspend fun riskDays(from: Instant, to: Instant): List<HeadacheRiskDay> = userEntryDao.riskDays(from, to).map { it.toRiskDay() }
+
+    /**
+     * Records, once, that [day]'s night was re-staged after its score was frozen ([sleepUpdatedAt]:
+     * the summary's new update time). The score is untouched; a later call changes nothing, and
+     * nothing happens when [day] has no row.
+     */
+    suspend fun markRiskRestaged(day: Instant, sleepUpdatedAt: Instant, now: Instant) {
+        db.withWriteTransaction {
+            val row = userEntryDao.riskOn(day.toStoredMillis()) ?: return@withWriteTransaction
+            if (row.sleepRestaged) return@withWriteTransaction
+            userEntryDao.updateRisk(
+                row.copy(sleepRestaged = true, sleepUpdatedAt = sleepUpdatedAt.toStoredMillis(), updatedAt = now.toStoredMillis()),
+            )
+        }
+    }
+
+    /** Records that an alert fired for [day]; nothing happens when [day] has no row. */
+    suspend fun markRiskAlerted(day: Instant, now: Instant) {
+        db.withWriteTransaction {
+            val row = userEntryDao.riskOn(day.toStoredMillis()) ?: return@withWriteTransaction
+            userEntryDao.updateRisk(row.copy(alerted = true, updatedAt = now.toStoredMillis()))
+        }
+    }
 
     /** What [ingest] would do with a batch, without writing (upstream `IngestPreview`). */
     data class IngestPreview(
@@ -364,8 +550,8 @@ class LocalStore internal constructor(
 
         /** The sample with both times cut to the whole milliseconds the store keeps. */
         private fun toStoredPrecision(s: QuantitySample): QuantitySample {
-            val start = s.start.truncatedTo(ChronoUnit.MILLIS)
-            val end = s.end.truncatedTo(ChronoUnit.MILLIS)
+            val start = s.start.toStoredMillis()
+            val end = s.end.toStoredMillis()
             return if (start == s.start && end == s.end) s else s.copy(start = start, end = end)
         }
 

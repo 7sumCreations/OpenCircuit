@@ -105,6 +105,14 @@ internal fun StoredHeadacheEntryEntity.toHeadacheEntry() = HeadacheEntry(
     healthWritten = healthWritten, hkSampleUUIDs = hkSampleUUIDs, updatedAt = updatedAt,
 )
 
+/** The row for this day, every instant cut to the stored millisecond. */
+internal fun HeadacheRiskDay.toEntity() = StoredHeadacheRiskEntity(
+    day = day.toStoredMillis(), nightKey = nightKey.toStoredMillis(), index = index, bandRaw = bandRaw,
+    ringFeatureCount = ringFeatureCount, coverageFraction = coverageFraction, contributionsJSON = contributionsJSON,
+    absentJSON = absentJSON, computedAt = computedAt.toStoredMillis(), sleepUpdatedAt = sleepUpdatedAt?.toStoredMillis(),
+    sleepRestaged = sleepRestaged, alerted = alerted, postUnlock = postUnlock, updatedAt = updatedAt.toStoredMillis(),
+)
+
 internal fun StoredHeadacheRiskEntity.toRiskDay() = HeadacheRiskDay(
     day = day, nightKey = nightKey, index = index, bandRaw = bandRaw, ringFeatureCount = ringFeatureCount,
     coverageFraction = coverageFraction, contributionsJSON = contributionsJSON, absentJSON = absentJSON,

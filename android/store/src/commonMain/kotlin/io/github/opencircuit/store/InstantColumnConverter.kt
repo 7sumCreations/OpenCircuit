@@ -2,6 +2,7 @@ package io.github.opencircuit.store
 
 import androidx.room3.ColumnTypeConverter
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
  * Every instant column is whole epoch milliseconds (`INTEGER`). Writing truncates: the
@@ -16,3 +17,10 @@ internal class InstantColumnConverter {
     @ColumnTypeConverter
     fun fromEpochMillis(epochMillis: Long): Instant = Instant.ofEpochMilli(epochMillis)
 }
+
+/**
+ * This instant as the store keeps it (whole milliseconds, cut toward the past). A write compares
+ * and looks up by the stored value, so it cuts its inputs first: otherwise an instant a fraction of
+ * a millisecond off a stored one would look different from it while finding the same row.
+ */
+internal fun Instant.toStoredMillis(): Instant = truncatedTo(ChronoUnit.MILLIS)
