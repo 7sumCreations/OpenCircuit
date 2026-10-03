@@ -36,6 +36,7 @@ import java.time.ZoneId
 //   is what the store keeps; otherwise a sub-millisecond sample would look newer than its own
 //   stored cursor and be stored again on every re-sync.
 // - A heart rate that is NaN or infinite is dropped as implausible; upstream's `Int(value)` traps.
+//   A NaN or infinite value of any other kind is dropped too (a NaN cannot be stored here).
 // - Step totals are `Long` (Swift's `Int` is 64-bit) and an overflowing total fails the write, as
 //   Swift's `+=` traps; a failed day lookup fails the write (upstream's `try?` inserts a new row).
 // - The two one-time purges keep their latch in this database and write it in the purge's own
@@ -243,6 +244,8 @@ class LocalStore internal constructor(
         val duplicateCount: Int = 0,
         val invalidTimestampCount: Int = 0,
         val invalidHeartRateCount: Int = 0,
+        /** Samples of any kind whose value is NaN or infinite. */
+        val invalidValueCount: Int = 0,
     )
 
     /**
@@ -253,11 +256,13 @@ class LocalStore internal constructor(
         val cursor = cursorOf(storeCursorRows())
         var invalidTimestamp = 0
         var invalidHeartRate = 0
+        var invalidValue = 0
         val plausible = ArrayList<QuantitySample>(samples.size)
         for (s in samples.map(::toStoredPrecision)) {
             when (plausibility(s, now)) {
                 Plausibility.BAD_TIMESTAMP -> invalidTimestamp++
                 Plausibility.BAD_HEART_RATE -> invalidHeartRate++
+                Plausibility.BAD_VALUE -> invalidValue++
                 Plausibility.PLAUSIBLE -> plausible += s
             }
         }
@@ -269,6 +274,7 @@ class LocalStore internal constructor(
             duplicateCount = maxOf(plausible.size - fresh, 0),
             invalidTimestampCount = invalidTimestamp,
             invalidHeartRateCount = invalidHeartRate,
+            invalidValueCount = invalidValue,
         )
     }
 
@@ -504,17 +510,20 @@ class LocalStore internal constructor(
         return CumulativeMetricState(previousRawValue = previousRaw)
     }
 
-    private enum class Plausibility { PLAUSIBLE, BAD_TIMESTAMP, BAD_HEART_RATE }
+    private enum class Plausibility { PLAUSIBLE, BAD_TIMESTAMP, BAD_HEART_RATE, BAD_VALUE }
 
     /**
      * The one plausibility check behind [previewIngest] and [ingest] (upstream `isPlausible`):
      * `start` no earlier than the ring's counter epoch and no later than one day after [now]; a
      * heart rate whose truncated value is in [LiveHR.VALID_BPM]. A NaN or infinite heart rate is
-     * implausible (it truncates to 0 or an `Int` bound here; upstream traps).
+     * implausible (it truncates to 0 or an `Int` bound here; upstream traps). A NaN or infinite
+     * value of any other kind is implausible too: SQLite binds NaN as NULL, which the value
+     * column refuses, so one such sample would fail the whole batch on every sync.
      */
     private fun plausibility(s: QuantitySample, now: Instant): Plausibility {
         if (s.start < SYNC_EPOCH_INSTANT || s.start > futureCeiling(now)) return Plausibility.BAD_TIMESTAMP
         if (s.kind == MetricKind.HEART_RATE && s.value.toInt() !in LiveHR.VALID_BPM) return Plausibility.BAD_HEART_RATE
+        if (!s.value.isFinite()) return Plausibility.BAD_VALUE
         return Plausibility.PLAUSIBLE
     }
 

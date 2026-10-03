@@ -101,6 +101,11 @@ class EpochArchiveCodecTest {
         val other = """{"headAt":0,"hrvPooling":7,"lastDrainAt":-5,"records":"$recordsHex","unmovedDrains":"3"}"""
         assertEquals(StoredEpochArchive(records, EpochArchiveMarks.NONE), readable(EpochArchiveCodec.decode(other)))
 
+        // A number past every bound the number parser has (an exponent past 32 bits, or one that
+        // overflows the digit count) is a fact that cannot be read, not a damaged archive.
+        val huge = """{"headAt":10e2147483647,"lastDrainAt":1e2147483647,"records":"$recordsHex","unmovedDrains":1e2147483648}"""
+        assertEquals(StoredEpochArchive(records, EpochArchiveMarks.NONE), readable(EpochArchiveCodec.decode(huge)))
+
         // Missing facts are the defaults too.
         assertEquals(StoredEpochArchive(records, EpochArchiveMarks.NONE), readable(EpochArchiveCodec.decode("""{"records":"$recordsHex"}""")))
     }

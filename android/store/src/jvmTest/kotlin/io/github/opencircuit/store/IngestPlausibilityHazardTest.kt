@@ -76,6 +76,31 @@ class IngestPlausibilityHazardTest {
         }
     }
 
+    /**
+     * A value that is NaN or infinite is dropped for every kind, not only heart rate: SQLite binds
+     * NaN as NULL, so one such sample would fail the batch's NOT NULL insert, roll the whole batch
+     * back with its cursor, and fail again on every later sync of the same page.
+     */
+    @Test
+    fun aNonFiniteValueOfAnyKindIsDroppedAndTheRestOfTheBatchIsStored() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val start = Instant.parse("2026-06-02T00:00:00Z")
+            val good = QuantitySample(MetricKind.TEMPERATURE, start = start, value = 33.0)
+            val bad = listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY).mapIndexed { i, v ->
+                QuantitySample(MetricKind.TEMPERATURE, start = start.plusSeconds(60L * (i + 1)), value = v)
+            }
+            val store = LocalStore(db)
+
+            assertEquals(listOf(good), store.ingest(bad + good, now, ZoneOffset.UTC))
+            assertEquals(listOf(good), store.samples(MetricKind.TEMPERATURE, start, start.plusSeconds(3600)))
+
+            val preview = store.previewIngest(bad + good, now)
+            assertEquals(1, preview.plausibleCount)
+            assertEquals(3, preview.invalidValueCount)
+            assertEquals(0, preview.invalidHeartRateCount)
+        }
+    }
+
     @Test
     fun aRepeatedPageIsCountedAsDuplicateByTheDryRun() = runBlocking {
         withInMemoryStore { db ->

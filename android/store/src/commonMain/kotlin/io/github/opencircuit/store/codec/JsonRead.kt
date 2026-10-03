@@ -89,9 +89,16 @@ private fun JsonElement.numberText(): String {
 private const val LONG_DIGITS = 19
 
 internal fun JsonElement.long(): Long {
-    val n = BigDecimal(numberText())
+    // An exponent past 32 bits is refused by the parse itself; it is still just a number this
+    // reader cannot take, so a lenient caller can fall back to its default for it.
+    val n = try {
+        BigDecimal(numberText())
+    } catch (e: NumberFormatException) {
+        unreadable("integer past 64 bits")
+    }
     if (n.signum() == 0) return 0L
-    if (n.precision() - n.scale() > LONG_DIGITS) unreadable("integer past 64 bits")
+    // In Long: precision minus a scale near Int.MIN_VALUE overflows an Int.
+    if (n.precision().toLong() - n.scale() > LONG_DIGITS) unreadable("integer past 64 bits")
     val whole = n.stripTrailingZeros()
     if (whole.scale() > 0) unreadable("not an integer")
     return try {
