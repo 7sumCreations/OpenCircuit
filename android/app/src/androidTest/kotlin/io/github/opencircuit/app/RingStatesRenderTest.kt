@@ -45,8 +45,8 @@ class RingStatesRenderTest {
     private val actions = mutableListOf<RingAction>()
     private var state by mutableStateOf(idle(ConnectFlowState()))
 
-    private val alpha = RememberedRing("C0:FF:EE:00:00:01", AddressType.RANDOM, "RingConn Alpha")
-    private val zulu = RememberedRing("C0:FF:EE:00:00:02", AddressType.RANDOM, "RingConn Zulu")
+    private val alpha = RememberedRing("AA:BB:CC:DD:EE:00", AddressType.RANDOM, "RingConn Alpha")
+    private val zulu = RememberedRing("AA:BB:CC:DD:EE:FF", AddressType.RANDOM, "RingConn Zulu")
 
     private fun idle(flow: ConnectFlowState, adapter: AdapterState? = AdapterState.ON, link: LinkState = LinkState.Idle, ringName: String? = null) =
         RingUiState(

@@ -44,7 +44,7 @@ class SharedPreferencesKeyValuesTest {
     @Test
     fun theRingAndBothFlagsRoundTripThroughARealFile() {
         val values = SharedPreferencesKeyValues(prefs)
-        val ring = RememberedRing("C0:FF:EE:00:00:01", AddressType.RANDOM, "RingConn Gen2 TEST")
+        val ring = RememberedRing("AA:BB:CC:DD:EE:FF", AddressType.RANDOM, "RingConn Gen2 TEST")
 
         assertTrue(PrefsRememberedRingStore(values).save(ring))
         assertTrue(PrefsAppPrefs(values).setOnboardingCompleted())
