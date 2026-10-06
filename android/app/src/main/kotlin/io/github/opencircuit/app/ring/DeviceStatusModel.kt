@@ -31,8 +31,12 @@ data class DeviceStatusState(
     /** How many descriptors carried a valid battery: the witness that a status request was answered. */
     val batteryReadings: Int = 0,
 ) {
-    /** Charging, by the descriptor's state byte or by the rising battery. */
-    val charging: Boolean get() = onCharger || chargingInferred
+    /**
+     * The battery is filling, by the state byte or by the inference: the time line counts to full,
+     * not to empty. Only [onCharger] may block Measure or show the charger hint; the inference can
+     * be a one-point jitter on a worn ring (PORTING D-241).
+     */
+    val towardFull: Boolean get() = onCharger || chargingInferred
 }
 
 /**

@@ -93,6 +93,7 @@ private fun BatteryColumn(battery: BatteryUi) {
             if (battery.charging) Text("⚡", style = caption, color = colour)
         }
         battery.asOf?.let { Text(it, style = caption, color = faint) }
+        battery.inferredChargingLabel?.let { Text(it, style = caption, color = faint) }
         battery.timeLine?.let { Text(it, style = caption, color = faint) }
         battery.caseLine?.let {
             val caseColour = if (battery.caseCharging) MaterialTheme.colorScheme.primary else faint

@@ -58,7 +58,8 @@ class RingViewModel(
                     title = title,
                     card = connectionCardUi(link, ringName, status, measuring, problem),
                     // Measuring needs an authenticated link (upstream draws the buttons only when ready, VT:319-337).
-                    measure = if (link == LinkState.Authenticated) measureUi(live, charging = status.charging) else null,
+                    // Only the charger byte blocks Measure; an inferred charge never does (PORTING D-242).
+                    measure = if (link == LinkState.Authenticated) measureUi(live, onCharger = status.onCharger) else null,
                 )
             }.stateIn(scope, SharingStarted.Eagerly, initial)
         }
@@ -72,7 +73,7 @@ class RingViewModel(
         val controller = controller ?: return
         when (action) {
             // A ring on its charger is not on a finger: no new measure (the button is disabled too).
-            is RingAction.Measure -> if (!controller.deviceStatus.state.value.charging) controller.liveMeasure.start(action.mode)
+            is RingAction.Measure -> if (!controller.deviceStatus.state.value.onCharger) controller.liveMeasure.start(action.mode)
             RingAction.StopMeasure -> controller.liveMeasure.stop()
             is RingAction.Link -> when (action.action) {
                 LinkAction.SCAN_AND_CONNECT, LinkAction.TRY_AGAIN -> controller.connect()

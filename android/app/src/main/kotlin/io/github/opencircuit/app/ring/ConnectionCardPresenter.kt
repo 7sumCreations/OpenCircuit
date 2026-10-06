@@ -11,9 +11,9 @@ enum class BatteryBand { EMPTY, QUARTER, HALF, THREE_QUARTERS, FULL }
 data class BatteryUi(
     val percent: Int,
     val band: BatteryBand,
-    /** Charging, by the state byte or the rising battery: drawn with a bolt. */
+    /** On the charger, by the descriptor's state byte: drawn with a bolt. */
     val charging: Boolean,
-    /** 20 % or less and not charging: drawn in the warning colour. */
+    /** 20 % or less and not filling: drawn in the warning colour. */
     val low: Boolean,
     /** The reading is out of date: drawn faded, with [asOf]. */
     val stale: Boolean,
@@ -25,6 +25,11 @@ data class BatteryUi(
     val caseLine: String?,
     /** The case itself is plugged in. */
     val caseCharging: Boolean,
+    /**
+     * "charging (inferred)" when only the rising battery says the ring charges (the charger byte
+     * does not), else null. Never a bolt, never a reason to block Measure.
+     */
+    val inferredChargingLabel: String?,
 )
 
 /** Everything the connection card shows. */
@@ -35,20 +40,24 @@ data class ConnectionCardUi(
     val link: LinkStateUi,
     /** The ring battery, or null before the first reading. */
     val battery: BatteryUi?,
-    /** "Ring is on the charger — Measure unavailable" while connected, charging and not measuring. */
+    /** "Ring is on the charger — Measure unavailable" while connected, the charger byte set and not measuring. */
     val chargerHint: String?,
     /** Why the last status request did not go out, in words, or null. */
     val problem: String?,
 )
 
-/** The text the card shows while the ring charges and no measure runs (Measure is disabled then). */
+/**
+ * The text the card shows while the descriptor's charger byte is set and no measure runs (Measure
+ * is disabled then). The rising-battery inference alone never shows it (PORTING D-241, D-242).
+ */
 const val ON_THE_CHARGER = "Ring is on the charger — Measure unavailable"
 
 /**
  * The connection card for one moment: the link's state through [LinkStatePresenter], and the
- * battery lines by upstream's rules (`ContentView.swift:1131-1191`): while charging "Full" at
- * 100 %, the time to full, or "estimating time to full…"; otherwise, unless the reading is out of
- * date, the time left or "estimating time left…"; the case only while docked.
+ * battery lines by upstream's rules (`ContentView.swift:1131-1191`): while filling (charger byte or
+ * inference) "Full" at 100 %, the time to full, or "estimating time to full…"; otherwise, unless
+ * the reading is out of date, the time left or "estimating time left…"; the case only while
+ * docked. The bolt and the charger hint follow the charger byte alone, as upstream draws them.
  */
 fun connectionCardUi(
     linkState: LinkState,
@@ -60,14 +69,14 @@ fun connectionCardUi(
     ringName = ringName,
     link = LinkStatePresenter.present(linkState, ringName ?: "the ring"),
     battery = status.batteryPercent?.let { batteryUi(it, status) },
-    chargerHint = if (linkState == LinkState.Authenticated && status.charging && !measuring) ON_THE_CHARGER else null,
+    chargerHint = if (linkState == LinkState.Authenticated && status.onCharger && !measuring) ON_THE_CHARGER else null,
     problem = keepaliveProblem?.let { "Couldn't ask the ring for its status — ${it.words()}." },
 )
 
 private fun batteryUi(percent: Int, status: DeviceStatusState): BatteryUi {
     val stale = status.batteryAgeMillis != null
     val timeLine = when {
-        status.charging -> when {
+        status.towardFull -> when {
             percent >= 100 -> "Full"
             status.timeToFullSeconds != null && status.timeToFullSeconds > 0 -> "~${durationWords(status.timeToFullSeconds)} to full"
             else -> "estimating time to full…"
@@ -79,13 +88,14 @@ private fun batteryUi(percent: Int, status: DeviceStatusState): BatteryUi {
     return BatteryUi(
         percent = percent,
         band = batteryBand(percent),
-        charging = status.charging,
-        low = percent <= LOW_PERCENT && !status.charging,
+        charging = status.onCharger,
+        low = percent <= LOW_PERCENT && !status.towardFull,
         stale = stale,
         timeLine = timeLine,
         asOf = status.batteryAgeMillis?.let { "as of ${ageWords(it)}" },
         caseLine = status.caseBattery?.let { "Case ${it.percent}%" },
         caseCharging = status.caseBattery?.isCharging == true,
+        inferredChargingLabel = if (status.chargingInferred && !status.onCharger) INFERRED_CHARGING else null,
     )
 }
 
@@ -129,6 +139,9 @@ private fun KeepaliveProblem.words(): String = when (this) {
     }
     is KeepaliveProblem.Failed -> "the ring stopped answering"
 }
+
+/** The battery line's note when only the rising battery suggests charging. */
+const val INFERRED_CHARGING = "charging (inferred)"
 
 /** At or below this the battery is drawn in the warning colour (CV:1145). */
 private const val LOW_PERCENT = 20

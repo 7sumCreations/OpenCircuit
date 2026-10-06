@@ -56,7 +56,7 @@ class ConnectionCardRenderTest {
     ) = RingUiState(
         title = "Ring",
         card = connectionCardUi(link, RING, status, measuring, problem),
-        measure = if (link == LinkState.Authenticated) measureUi(live, charging = status.charging) else null,
+        measure = if (link == LinkState.Authenticated) measureUi(live, onCharger = status.onCharger) else null,
     )
 
     private fun show() {
@@ -115,6 +115,19 @@ class ConnectionCardRenderTest {
         compose.onNodeWithText("Ring is on the charger — Measure unavailable").assertIsDisplayed()
         compose.onNodeWithContentDescription("Measure heart rate").performScrollTo().assertIsNotEnabled()
         compose.onNodeWithContentDescription("Measure SpO₂").performScrollTo().assertIsNotEnabled()
+    }
+
+    @Test
+    fun anInferredChargeIsLabelledAndLeavesMeasureEnabled() {
+        state = screen(LinkState.Authenticated, DeviceStatusState(batteryPercent = 67, chargingInferred = true, batteryReadings = 2))
+        show()
+
+        compose.onNodeWithText("charging (inferred)").assertIsDisplayed()
+        compose.onNodeWithText("estimating time to full…").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Ring battery").assertIsDisplayed()
+        compose.onNodeWithText("Ring is on the charger — Measure unavailable").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Measure heart rate").performScrollTo().assertIsEnabled()
+        compose.onNodeWithContentDescription("Measure SpO₂").performScrollTo().assertIsEnabled()
     }
 
     @Test

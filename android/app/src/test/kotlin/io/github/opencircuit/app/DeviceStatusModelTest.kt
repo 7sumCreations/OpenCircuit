@@ -25,7 +25,8 @@ class DeviceStatusModelTest {
         val state = model().state.value
 
         assertNull(state.batteryPercent)
-        assertFalse(state.charging)
+        assertFalse(state.onCharger)
+        assertFalse(state.towardFull)
         assertNull(state.caseBattery)
         assertNull(state.timeToFullSeconds)
         assertNull(state.timeToEmptySeconds)
@@ -79,7 +80,7 @@ class DeviceStatusModelTest {
         val model = model()
         model.onDescriptor(TestFrames.chargingDescriptor) // [2] = 0x04
         assertTrue(model.state.value.onCharger)
-        assertTrue(model.state.value.charging)
+        assertTrue(model.state.value.towardFull)
 
         model.onDescriptor(descriptor(battery = 71, state = 0x02))
         assertFalse(model.state.value.onCharger)
