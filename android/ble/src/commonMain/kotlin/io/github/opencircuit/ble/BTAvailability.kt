@@ -24,11 +24,18 @@ enum class BTAvailability {
          * The availability for a [permissions] state and an [adapterState]; `adapterState == null`
          * means the adapter state has not been read yet.
          *
-         * Not built yet: it throws [NotImplementedError] until the upstream mapping lands together
-         * with its six ported upstream tests (`ios/OpenCircuitTests/BTAvailabilityTests.swift:13-49`).
+         * Upstream's rule (`ios/OpenCircuit/BLE/RingScanner.swift:181-197` @ b1c2fdd): the
+         * permission decides [DENIED] (denied or restricted) and [NOT_DETERMINED]; once it is
+         * granted, only an adapter that is [AdapterState.OFF] gives [POWERED_OFF]. An adapter not
+         * read yet, or turning on or off, gives [READY], so a tap goes ahead and the scan or the
+         * connection waits for Bluetooth to be on.
          */
         fun of(permissions: BluetoothPermission, adapterState: AdapterState?): BTAvailability =
-            TODO("ported together with its upstream tests in a later change")
+            when (permissions) {
+                BluetoothPermission.DENIED, BluetoothPermission.RESTRICTED -> DENIED
+                BluetoothPermission.NOT_DETERMINED -> NOT_DETERMINED
+                BluetoothPermission.GRANTED -> if (adapterState == AdapterState.OFF) POWERED_OFF else READY
+            }
     }
 }
 
