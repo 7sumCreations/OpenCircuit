@@ -106,8 +106,10 @@ discovery: an already bonded ring goes on, a ring already bonding is waited for,
 link calls `createBond()` once and waits while Android shows its pairing prompt. A bond that is
 refused, falls back to "not bonded" or is not made in 40 s shows `PairingFailed(reason)` and is
 not retried until the next `connect()`; at 40 s the link reads the bond state once more first, so
-a bond made while its broadcast was lost lets the bring-up go on. Bond changes on a live connection keep `LinkInfo.bonded`
-current. Ten seconds with only `0x81` frames after notifications are on shows `NotStreaming` (the
+a bond made while its broadcast was lost lets the bring-up go on (if that read fails too, the
+bond counts as not made). If Android cannot report the bond state when the link first checks it,
+the connection fails and reconnects as below; a bond broadcast with a missing or unrecognised
+state is ignored. Bond changes on a live connection keep `LinkInfo.bonded` current. Ten seconds with only `0x81` frames after notifications are on shows `NotStreaming` (the
 ring has not accepted this phone); the first data frame clears it. Three connections in a row to
 a bonded ring that Android drops within 2 s or before discovery is done show
 `BondLostSuspected`: the user should forget the ring in Settings and pair again. Only drops that
