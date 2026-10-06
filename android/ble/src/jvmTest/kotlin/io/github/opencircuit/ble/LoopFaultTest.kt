@@ -3,6 +3,7 @@ package io.github.opencircuit.ble
 import io.github.opencircuit.ble.FakeGatt.Operation
 import io.github.opencircuit.ble.Fixtures.hex
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -32,10 +33,17 @@ class LoopFaultTest {
     private class FaultyClock(private val inner: TimeSource) : TimeSource {
         var faults = 0
 
+        /** The next readings throw a `CancellationException` instead. */
+        var cancellations = 0
+
         override fun markNow(): TimeMark {
             val mark = inner.markNow()
             return object : TimeMark {
                 override fun elapsedNow(): Duration {
+                    if (cancellations > 0) {
+                        cancellations--
+                        throw CancellationException("the clock was cancelled")
+                    }
                     if (faults > 0) {
                         faults--
                         throw IllegalStateException("the clock failed")
@@ -103,6 +111,30 @@ class LoopFaultTest {
         rig.link.connect()
         runCurrent()
         assertEquals(LinkState.Authenticated, rig.link.state.value)
+    }
+
+    /**
+     * Cancellation is not a fault to recover from: a `CancellationException` thrown inside the loop
+     * ends it, as cancelling the link's scope does (the connection closed, the link `Idle` and
+     * deaf from then on), instead of being counted as a connection failure and reconnecting.
+     */
+    @Test
+    fun aCancellationInsideTheLoopEndsTheLinkInsteadOfReconnecting() = runTest {
+        val (ring, link, clock) = rig().let { Triple(it.ring, it.link, it.clock) }
+        link.connect()
+        runCurrent()
+        assertEquals(LinkState.Authenticated, link.state.value)
+
+        clock.cancellations = 1
+        ring.changeBondState(GattPort.BondState.BONDED)
+        runCurrent()
+
+        assertEquals(LinkState.Idle, link.state.value)
+        assertEquals("close", ring.log.last())
+        advance(10 * 60_000)
+        link.connect()
+        runCurrent()
+        assertEquals(1, ring.connects.size, "the link is over: no reconnect, and connect() is not heard")
     }
 
     @Test
