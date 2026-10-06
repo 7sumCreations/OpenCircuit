@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -28,7 +29,18 @@ class SendRefusalTest {
 
     private val poll = hex("950000")
     private val syncOpen = hex("0200ffffffff000100")
-    private val unbonded = Fixtures.acceptingRing().copy(bondState = GattPort.BondState.NONE)
+
+    /**
+     * A link authenticated on a bonded ring whose bond then became [bond] (removed in system
+     * Settings, or being made again). A ring with no bond never gets as far as `Authenticated`:
+     * the bring-up waits for the bond before the MTU exchange.
+     */
+    private fun TestScope.authenticatedThenBond(bond: GattPort.BondState, mtuGrant: Int = 247): Pair<FakeGatt, RingLink> {
+        val (ring, link) = authenticatedLink(Fixtures.acceptingRing(mtuGrant = mtuGrant))
+        ring.changeBondState(bond)
+        runCurrent()
+        return ring to link
+    }
 
     private fun refused(reason: RefusalReason) = SendResult.Refused(reason)
 
@@ -64,7 +76,7 @@ class SendRefusalTest {
 
     @Test
     fun aDataCommandWhileTheRingIsNotBondedIsRefused() = runTest {
-        val (ring, link) = authenticatedLink(unbonded)
+        val (ring, link) = authenticatedThenBond(GattPort.BondState.NONE)
         val log = ring.log
 
         val results = listOf(poll, syncOpen, hex("d00000")).map { link.send(it) }
@@ -76,7 +88,7 @@ class SendRefusalTest {
 
     @Test
     fun aSyncOpenOnAnUnbondedNarrowConnectionIsRefusedForTheMissingBondFirst() = runTest {
-        val (ring, link) = authenticatedLink(unbonded.copy(mtuGrant = 23))
+        val (ring, link) = authenticatedThenBond(GattPort.BondState.NONE, mtuGrant = 23)
         val log = ring.log
 
         val result = link.send(syncOpen)
@@ -88,7 +100,7 @@ class SendRefusalTest {
 
     @Test
     fun aBondingRingIsNotYetBonded() = runTest {
-        val (_, link) = authenticatedLink(Fixtures.acceptingRing().copy(bondState = GattPort.BondState.BONDING))
+        val (_, link) = authenticatedThenBond(GattPort.BondState.BONDING)
 
         assertFalse(link.info.value.bonded)
         assertEquals(refused(RefusalReason.NOT_BONDED), link.send(poll))
@@ -96,7 +108,7 @@ class SendRefusalTest {
 
     @Test
     fun aStatusFamilyCommandOtherThanTheAuthOnesIsWrittenWhileNotBonded() = runTest {
-        val (ring, link) = authenticatedLink(unbonded)
+        val (ring, link) = authenticatedThenBond(GattPort.BondState.NONE)
 
         val result = link.send(hex("010200"))
 
@@ -152,7 +164,7 @@ class SendRefusalTest {
     fun noCommandInAnyStateMakesSendThrow() = runTest {
         val commands = listOf(hex(""), hex("01"), hex("02"), hex("0101"), hex("010000"), poll, syncOpen, hex("ff"))
         val linkScope = CoroutineScope(coroutineContext + Job())
-        val (_, unbondedLink) = authenticatedLink(unbonded)
+        val (_, unbondedLink) = authenticatedThenBond(GattPort.BondState.NONE)
         val (_, narrowLink) = authenticatedLink(Fixtures.acceptingRing(mtuGrant = 23))
         val idleLink = RingLink(Fixtures.ring, FakeGatt(backgroundScope, Fixtures.acceptingRing()), backgroundScope)
         val endedLink = RingLink(Fixtures.ring, FakeGatt(backgroundScope, Fixtures.acceptingRing()), linkScope)

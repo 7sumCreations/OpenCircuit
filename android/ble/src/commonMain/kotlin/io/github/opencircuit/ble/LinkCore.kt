@@ -31,9 +31,10 @@ import kotlin.coroutines.ContinuationInterceptor
  * every Bluetooth adapter change becomes a [LinkEvent] in one unbounded channel, taken one at a
  * time by a single coroutine; only that coroutine touches the fields below, so they need no locks.
  *
- * Cold bring-up: connect → discover → MTU exchange → notifications enabled (the CCCD write
- * CONFIRMED) → Device Information reads → `01 00 00` → answer `81 00 <challenge>` with
- * `RingAuth.authCommand` → the first frame other than `0x81` means the ring's data path is open.
+ * Cold bring-up: connect → discover → the bond (PORTING.md D-193) → MTU exchange → notifications
+ * enabled (the CCCD write CONFIRMED) → Device Information reads → `01 00 00` → answer
+ * `81 00 <challenge>` with `RingAuth.authCommand` → the first frame other than `0x81` means the
+ * ring's data path is open.
  * Auth starts only after the descriptor write is confirmed (PORTING.md D-183); every GATT
  * operation waits for the previous one's answer (PORTING.md D-184), for at most its own timeout
  * (PORTING.md D-185).
@@ -99,6 +100,12 @@ internal class LinkCore(
     private var frameSeen = false
     private var connectIsLate = false
 
+    /** Discovery is done and the bring-up waits for the bond before the MTU exchange. */
+    private var awaitingBond = false
+
+    /** While waiting: the bond has started ("bonding" was seen), so a "not bonded" now means it failed. */
+    private var bondStarted = false
+
     override val state: StateFlow<LinkState> = stateFlow.asStateFlow()
     override val info: StateFlow<LinkInfo> = infoFlow.asStateFlow()
     override val frames: Flow<ByteArray> = frameBuffer.flow
@@ -136,6 +143,11 @@ internal class LinkCore(
         inbox.trySend(LinkEvent.AdapterChanged(state))
     }
 
+    /** The phone's bond state with the ring changed; called from any thread. */
+    fun onBondState(state: GattPort.BondState) {
+        inbox.trySend(LinkEvent.BondChanged(state))
+    }
+
     private fun handle(event: LinkEvent) {
         when (event) {
             LinkEvent.Connect -> onConnectAsked()
@@ -144,6 +156,7 @@ internal class LinkCore(
             is LinkEvent.Gatt -> onGatt(event.event)
             is LinkEvent.TimerFired -> onTimer(event)
             is LinkEvent.AdapterChanged -> onAdapter(event.state)
+            is LinkEvent.BondChanged -> onBond(event.state)
         }
         pump()
     }
@@ -187,6 +200,7 @@ internal class LinkCore(
         connected = false
         frameSeen = false
         connectIsLate = false
+        awaitingBond = false
         discovered = emptySet()
         addressMac = macFromAddress(ring.address)
         mac = null
@@ -291,12 +305,7 @@ internal class LinkCore(
                 }
                 // With no System ID to read, the device address is the MAC.
                 if (GattPort.SYSTEM_ID !in discovered) settleMac(addressMac)
-                // The bond step (after discovery, before the MTU exchange). A bond state that
-                // cannot be read counts as no bond: data commands stay refused.
-                val bonded = failsClosed { port.bondState() == GattPort.BondState.BONDED }
-                infoFlow.update { it.copy(bonded = bonded) }
-                stateFlow.value = LinkState.Preparing
-                queue.add(GattOp.RequestMtu)
+                startBondStep()
             }
             GattOp.RequestMtu -> {
                 val mtu = (event as GattEvent.MtuChanged).mtu
@@ -311,6 +320,85 @@ internal class LinkCore(
             is GattOp.Read -> applyDeviceInformation(op.characteristic, (event as GattEvent.CharacteristicRead).value)
             is GattOp.Write -> op.reply?.complete(SendResult.Sent)
         }
+    }
+
+    /**
+     * The bond step, after discovery and before the MTU exchange: on the connection already open,
+     * so pairing needs no second connection, and late enough to see a bond the ring started
+     * itself before deciding to ask. Bonded: on with the bring-up. Being bonded already (the ring
+     * asked to pair, or a bond left over): wait, never ask again, which would collide with the
+     * bond in progress. Not bonded: ask once and wait.
+     */
+    private fun startBondStep() {
+        val bond = readBondState() ?: return dropLink(SendFailure.GATT_ERROR)
+        when (bond) {
+            GattPort.BondState.BONDED -> continueAfterBond()
+            GattPort.BondState.BONDING -> awaitBond(alreadyBonding = true)
+            GattPort.BondState.NONE -> {
+                if (!failsClosed { port.createBond() }) return pairingFailed(PairingFailure.BOND_REQUEST_REJECTED)
+                awaitBond(alreadyBonding = false)
+            }
+        }
+    }
+
+    /**
+     * Waits at most [LinkTimeouts.BOND] for the bond, showing `PairingNeeded`: Android is asking
+     * the user to confirm the pairing. A "not bonded" counts as the end of the bond only once
+     * the bond has started ([alreadyBonding], or a "bonding" since): before that it is a
+     * broadcast left over from earlier.
+     */
+    private fun awaitBond(alreadyBonding: Boolean) {
+        awaitingBond = true
+        bondStarted = alreadyBonding
+        infoFlow.update { it.copy(bonded = false) }
+        stateFlow.value = LinkState.PairingNeeded
+        startTimer(LinkTimer.BOND, LinkTimeouts.BOND)
+    }
+
+    private fun continueAfterBond() {
+        awaitingBond = false
+        cancelTimer(LinkTimer.BOND)
+        infoFlow.update { it.copy(bonded = true) }
+        stateFlow.value = LinkState.Preparing
+        queue.add(GattOp.RequestMtu)
+    }
+
+    /**
+     * A bond-state change. On a live connection it keeps `LinkInfo.bonded` current (a bond
+     * removed in Settings refuses data again at once); while the bring-up waits, it ends the wait.
+     */
+    private fun onBond(state: GattPort.BondState) {
+        if (session == null) return
+        if (!awaitingBond) {
+            infoFlow.update { it.copy(bonded = state == GattPort.BondState.BONDED) }
+            return
+        }
+        when (state) {
+            GattPort.BondState.BONDED -> continueAfterBond()
+            GattPort.BondState.BONDING -> bondStarted = true
+            GattPort.BondState.NONE -> if (bondStarted) pairingFailed(PairingFailure.BOND_NOT_COMPLETED)
+        }
+    }
+
+    /**
+     * The bond could not be made: the connection is closed and the link stays in `PairingFailed`
+     * until `connect()` is called again. No retry of its own, which would put the same pairing
+     * prompt in front of the user again.
+     */
+    private fun pairingFailed(reason: PairingFailure) {
+        wanted = false
+        cancelTimer(LinkTimer.RECONNECT)
+        closeSession(SendFailure.LINK_LOST, TeardownReason.LINK_DROPPED)
+        stateFlow.value = LinkState.PairingFailed(reason)
+    }
+
+    /** The phone's bond state with the ring; null when it cannot be read (PORTING.md D-187). */
+    private fun readBondState(): GattPort.BondState? = try {
+        port.bondState()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
     }
 
     private fun onNotification(event: GattEvent.Notification) {
@@ -382,6 +470,7 @@ internal class LinkCore(
             // Checked once, as upstream RingScanner.swift:977-986: a later frame does not reopen it.
             LinkTimer.STABILITY -> if (frameSeen) attempts = 0
             LinkTimer.RECONNECT -> open(standingConnection = nextIsStanding)
+            LinkTimer.BOND -> if (awaitingBond) pairingFailed(PairingFailure.BOND_TIMED_OUT)
         }
     }
 
@@ -415,12 +504,14 @@ internal class LinkCore(
         cancelTimer(LinkTimer.OPERATION)
         cancelTimer(LinkTimer.LATE_CONNECT)
         cancelTimer(LinkTimer.STABILITY)
+        cancelTimer(LinkTimer.BOND)
         closePort()
         session = null
         // The buffer is per connection: what its collector never took is dropped and counted.
         val undelivered = frameBuffer.clear()
         if (connected) teardownBuffer.add(LinkTeardown(reason, undelivered))
         connected = false
+        awaitingBond = false
     }
 
     /** The loop ended (its scope was cancelled): close what is open and answer every waiting caller. */

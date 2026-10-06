@@ -48,13 +48,30 @@ internal fun TestScope.authenticatedLink(
     script: FakeGatt.Script = Fixtures.acceptingRing(),
     ring: RememberedRing = Fixtures.ring,
 ): Pair<FakeGatt, RingLink> {
-    val gatt = FakeGatt(backgroundScope, script)
-    val link = RingLink(ring, gatt, backgroundScope)
+    val (gatt, link) = linkTo(script, ring)
     link.connect()
     runCurrent()
     check(link.state.value == LinkState.Authenticated) { "not authenticated: ${link.state.value}, ${gatt.log}" }
     return gatt to link
 }
+
+/**
+ * A link over a scripted ring, not yet connected, with the fake's bond changes wired to the
+ * link the way Android's bond-state broadcast is.
+ */
+internal fun TestScope.linkTo(
+    script: FakeGatt.Script = Fixtures.acceptingRing(),
+    ring: RememberedRing = Fixtures.ring,
+): Pair<FakeGatt, LinkCore> {
+    val gatt = FakeGatt(backgroundScope, script)
+    val link = LinkCore(ring, gatt, backgroundScope)
+    gatt.onBondStateChanged(link::onBondState)
+    return gatt to link
+}
+
+/** A ring the phone holds no bond with, that otherwise answers like [Fixtures.acceptingRing]. */
+internal fun unbondedRing(mtuGrant: Int = 247): FakeGatt.Script =
+    Fixtures.acceptingRing(mtuGrant = mtuGrant).copy(bondState = GattPort.BondState.NONE)
 
 /** The ring sends each of [frames], in order. */
 internal fun FakeGatt.notifyAll(frames: List<ByteArray>) = frames.forEach(::notify)

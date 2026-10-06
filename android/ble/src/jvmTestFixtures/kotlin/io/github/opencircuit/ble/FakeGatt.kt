@@ -12,7 +12,9 @@ import kotlinx.coroutines.launch
  * throws [AssertionError], failing the test. A test can [hold] the callbacks of an operation
  * (the ring never answers), [release] them, make an operation [failWith] a GATT status,
  * [dropConnection] with a status, or [notify] any bytes. [connects], [sessions] and
- * [maxOpenConnections] record how the link opened and closed its connections.
+ * [maxOpenConnections] record how the link opened and closed its connections. The bond starts as
+ * [Script.bondState]; [changeBondState] moves it and tells every [onBondStateChanged] listener,
+ * [refuseBondRequests] makes `createBond` fail, and [createBondCalls] counts the requests.
  *
  * The ring itself answers `01 00 00` with [Script.challengeFrame], and answers a write equal to
  * [Script.acceptedAuthReply] with [Script.firstFrameAfterAuth]; any other reply gets nothing,
@@ -82,6 +84,10 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
     private var generation = 0
     private var open = 0
     private var mostOpen = 0
+    private var bond = script.bondState
+    private var bondRequests = 0
+    private var bondRequestsAccepted = true
+    private val bondListeners = mutableListOf<(GattPort.BondState) -> Unit>()
 
     /** Every call the link made, in order, one line each (UUIDs shortened to their first group). */
     val log: List<String> get() = calls.toList()
@@ -198,11 +204,41 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
         ) { status -> GattEvent.CharacteristicWritten(session(), characteristic, status) }
     }
 
-    override fun bondState(): GattPort.BondState = script.bondState
+    override fun bondState(): GattPort.BondState = bond
 
     override fun createBond(): Boolean {
         calls += "createBond"
-        return true
+        bondRequests++
+        return bondRequestsAccepted
+    }
+
+    /** How many times the link called `createBond`. */
+    val createBondCalls: Int get() = bondRequests
+
+    /** Makes every later `createBond` return false: Android would not start the bond. */
+    fun refuseBondRequests() {
+        bondRequestsAccepted = false
+    }
+
+    /**
+     * Sends every later bond-state change to [listener], as Android's bond-state broadcast
+     * reaches the link. Bond changes are not GATT callbacks: they belong to the device, not to
+     * one connection, so they carry no session token.
+     */
+    fun onBondStateChanged(listener: (GattPort.BondState) -> Unit) {
+        bondListeners += listener
+    }
+
+    /**
+     * The phone's bond state with the ring becomes [state] (the user confirmed or declined the
+     * pairing prompt, the ring asked to pair, the bond was removed in Settings): `bondState()`
+     * answers [state] at once, and every listener hears it later on the fake's scope, as a
+     * broadcast arrives. `createBond` changes nothing by itself; the test drives each change.
+     */
+    fun changeBondState(state: GattPort.BondState) {
+        bond = state
+        val listeners = bondListeners.toList()
+        scope.launch { listeners.forEach { it(state) } }
     }
 
     override fun close() {

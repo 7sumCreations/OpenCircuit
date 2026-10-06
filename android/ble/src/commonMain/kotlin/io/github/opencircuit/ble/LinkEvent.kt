@@ -22,6 +22,9 @@ internal sealed interface LinkEvent {
 
     /** The phone's Bluetooth adapter changed state. */
     class AdapterChanged(val state: AdapterState) : LinkEvent
+
+    /** The phone's bond state with the ring changed (Android's bond-state broadcast). */
+    class BondChanged(val state: GattPort.BondState) : LinkEvent
 }
 
 /** The link's timers: at most one of each kind runs at a time. */
@@ -37,4 +40,7 @@ internal enum class LinkTimer {
 
     /** The wait before the next reconnect attempt. */
     RECONNECT,
+
+    /** The wait for the bond to be made ([LinkTimeouts.BOND]). */
+    BOND,
 }
