@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Nearby devices: find the ring (never used to derive location) and talk to it. Asked for
+         at the first Scan & connect, never by onboarding. Nothing else: no network, no
+         notifications, no location, no legacy Bluetooth permissions. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- The companion device manager accepts an association only from an app that lists this
+         feature. Not required: a phone without it can still install the app, and pairing then
+         falls back to the plain Bluetooth bond. -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
+
     <application
         android:name=".OpenCircuitApp"
         android:allowBackup="false"
