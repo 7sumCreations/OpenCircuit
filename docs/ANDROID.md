@@ -86,7 +86,9 @@ the ring sends except the auth challenge the link answers itself; `send(command)
 command. A `RememberedRing` is the ring's upper-case address, its address type and its advertised
 name; the app stores it. When the app is done with a link for good (the ring is forgotten or
 replaced), it ends it with `(link as? AutoCloseable)?.close()`, which closes the connection and
-unregisters the link's Bluetooth receivers; a closed link does nothing more.
+unregisters the link's Bluetooth receivers; a closed link shows `Idle`, answers every `send()`
+with `Failed(LINK_LOST)` and ignores `connect()`. A link dropped without `close()` keeps its
+receivers registered for the life of the process.
 
 **Bring-up order.** Each connection goes connect → service discovery → bond → ATT MTU exchange
 (517 asked for) → notifications on, waiting until the descriptor write is confirmed → Device
@@ -106,8 +108,9 @@ not retried until the next `connect()`. Bond changes on a live connection keep `
 current. Ten seconds with only `0x81` frames after notifications are on shows `NotStreaming` (the
 ring has not accepted this phone); the first data frame clears it. Three connections in a row to
 a bonded ring that Android drops within 2 s or before discovery is done show
-`BondLostSuspected`: the user should forget the ring in Settings and pair again. The app never
-removes a bond.
+`BondLostSuspected`: the user should forget the ring in Settings and pair again. Only drops that
+Android reports count, never the link's own timeouts, and the link keeps reconnecting meanwhile.
+The app never removes a bond.
 
 **Sending.** `send()` never throws; it answers `Sent`, `Failed(reason)` or `Refused(reason)` and
 writes nothing when it refuses: before `Authenticated` (`NOT_AUTHENTICATED`); the link's own auth
@@ -115,7 +118,9 @@ commands `01 00 00` and `01 01 …` (`AUTH_COMMAND_RESERVED`); any command outsi
 family without a bond (`NOT_BONDED`); a history sync open while the ATT MTU is below 246, too small
 for a whole history frame (`HISTORY_UNSAFE`, the MTU gate; `LinkInfo.historySafe`).
 Acknowledgements of the ring's pages (`0x47`, `0x4C`, `0x4D`) and heartbeats (`0x11`) are the
-link's job: each is written once, in arrival order, ahead of any waiting `send()`.
+link's job: each is written once, in arrival order, ahead of any waiting `send()`. If the
+coroutine calling `send()` is cancelled while its write still waits its turn, the write is dropped
+and never reaches the ring; a write already under way completes.
 
 **One collector at a time.** `frames` and `teardowns` each take one collector at a time: a second
 collection while one runs throws `IllegalStateException`. Frames wait in order while nobody
@@ -123,13 +128,14 @@ collects, and a collector that stops or is cancelled leaves what it did not take
 The app should collect `frames` once and hand each frame on from there. When a connection is torn
 down, the frames still waiting are dropped and counted in the `LinkTeardown` it publishes.
 
-**Reconnecting.** A failure (a timeout, an error status, a refused call) or a drop closes the
-connection and tries again by the ring's address, never by scanning: `Reconnecting(attempt,
+**Reconnecting.** A failure (a timeout, an error status, a refused call, or an unexpected error
+inside the link itself) or a drop closes the connection and tries again by the ring's address, never by scanning: `Reconnecting(attempt,
 delay)` after 1 s, 5 s, then 30 s, and after three failed attempts (or once the ring is plainly out
 of reach) a standing connection that waits for the ring to come back (`WaitingForRing`). The count
 resets once a connection has stayed up 6 s and delivered a frame. Bluetooth turning off shows
 `BluetoothOff` and closes everything; turning on connects again if a connection was wanted.
-Callbacks from a closed connection change nothing.
+Callbacks from a closed connection change nothing. An unexpected error never stops the link or
+crashes the app: it fails the current connection, which then reconnects as above.
 
 **Scanning.** `RingScanner(context).scan()` is a cold flow of `ScanUpdate`s: each collection starts
 one scan and cancelling it stops the scan (Android throttles apps that start more than five scans
