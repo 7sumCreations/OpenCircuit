@@ -18,8 +18,8 @@ import kotlin.test.assertNull
 /**
  * The session controller is the one collector of the link's `frames` and `teardowns`: every
  * feature reaches frames through its dispatcher, never the flow. The fake link fails a second
- * collection, and a failure in a background coroutine fails the test, so a controller that
- * collected twice turns these tests red.
+ * collection while one runs, and a failure in a background coroutine fails the test, so a
+ * controller that collected twice at once turns these tests red.
  */
 class SingleCollectorTest {
 

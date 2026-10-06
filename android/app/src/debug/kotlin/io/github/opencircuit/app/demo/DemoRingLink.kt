@@ -21,8 +21,11 @@ import kotlinx.coroutines.flow.consumeAsFlow
  * the on-device tests run against this link instead. It exists only in the debug source set;
  * release builds do not contain it.
  *
- * It keeps the real link's contract: [frames] and [teardowns] each take one collection, [send]
- * never throws and refuses the auth commands the real link reserves (`01 00 00`, `01 01 …`).
+ * It keeps the real link's contract where the app relies on it: [send] never throws and refuses
+ * the auth commands the real link reserves (`01 00 00`, `01 01 …`), and a second collection of
+ * [frames] or [teardowns] fails. It is stricter than the real link in one way the app never
+ * meets: each flow takes one collection for the demo's lifetime (the real link lets a new
+ * collector take over after one stops), and the app's session collects each flow once.
  * [connect] goes straight to [LinkState.Authenticated] and sends one device-status descriptor
  * with a battery of 72 %; [disconnect] tears the connection down once and goes [LinkState.Idle].
  */

@@ -24,7 +24,8 @@ fun interface RingLinkFactory {
  * lifetime (no dependency-injection framework).
  *
  * The session controller lives here, not in a screen: it is the one collector of its link's
- * frames, and a link's frames can be collected only once, so it must outlive any activity.
+ * frames, a link's frames take one collector at a time, and the session holds its collection for
+ * as long as it lives, so it must outlive any activity.
  */
 class AppContainer(context: Context) {
 

@@ -38,9 +38,11 @@ class LiveFrameCounter {
 
 /**
  * The app's session with one ring: the ONLY collector of the link's [RingLink.frames] and
- * [RingLink.teardowns]. Each flow takes exactly one collection for the link's lifetime, so every
- * feature reaches frames through [dispatcher] (registering a handler for its opcode), never
- * through the flow.
+ * [RingLink.teardowns]. Each flow takes one collector at a time (a second collection while one
+ * runs fails), and this controller holds one collection of each for the whole session and never
+ * starts another, so every feature reaches frames through [dispatcher] (registering a handler for
+ * its opcode), never through the flow. Because nothing restarts a collection that ended, the
+ * dispatcher contains a handler's exception instead of letting it end the collection.
  *
  * Routes: `0x10` / `0x87` descriptors → [deviceStatus]; `0x15` live samples → [liveFrames];
  * `0x11` heartbeats are ignored (the link already answered them); everything else is counted by
@@ -78,7 +80,7 @@ class RingSessionController(
         dispatcher.ignore(HEARTBEAT)
     }
 
-    /** Starts the two collections. Calling it again does nothing: a flow is collected once. */
+    /** Starts the two collections. Calling it again does nothing: the session collects each flow once. */
     fun start() {
         if (!started.compareAndSet(false, true)) return
         scope.launch { link.frames.collect { dispatcher.dispatch(it) } }

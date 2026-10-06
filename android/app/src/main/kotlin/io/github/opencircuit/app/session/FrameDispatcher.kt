@@ -79,8 +79,8 @@ class FrameDispatcher(private val log: (String) -> Unit) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Contained so one bad frame cannot end the only collection of the link's frames,
-            // which can never be restarted; counted and logged so the failure stays visible.
+            // Contained so one bad frame cannot end the session's one collection of the link's
+            // frames, which nothing restarts; counted and logged so the failure stays visible.
             countsFlow.update { it.copy(handlerFailures = it.handlerFailures.incremented(opcode)) }
             log(
                 "Handler for frame opcode ${opcode.hex()} failed: ${e::class.java.simpleName} " +

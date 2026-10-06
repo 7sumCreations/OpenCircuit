@@ -18,7 +18,8 @@ import kotlin.test.assertFailsWith
 
 /**
  * The debug build's demo link: a ring the emulator can "connect" to. It keeps the real link's
- * contract (one collection per flow, refusals as values) so the app code above it runs unchanged.
+ * contract where the app relies on it (a second collection fails, refusals as values) so the app
+ * code above it runs unchanged.
  */
 class DemoRingLinkTest {
 
