@@ -5,6 +5,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.testTimeSource
 import java.time.Duration
 
 /** Every state [link] publishes from now on, in order (the current one first). */
@@ -64,7 +65,7 @@ internal fun TestScope.linkTo(
     ring: RememberedRing = Fixtures.ring,
 ): Pair<FakeGatt, LinkCore> {
     val gatt = FakeGatt(backgroundScope, script)
-    val link = LinkCore(ring, gatt, backgroundScope)
+    val link = LinkCore(ring, gatt, backgroundScope, testTimeSource)
     gatt.onBondStateChanged(link::onBondState)
     return gatt to link
 }

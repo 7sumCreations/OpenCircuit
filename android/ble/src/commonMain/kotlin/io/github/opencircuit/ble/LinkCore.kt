@@ -25,6 +25,7 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.time.Duration
 import kotlin.coroutines.ContinuationInterceptor
+import kotlin.time.TimeSource
 
 /**
  * The link's state machine. Every GATT callback, every API call, every timer of its own and
@@ -50,12 +51,17 @@ import kotlin.coroutines.ContinuationInterceptor
  * operation in flight, closes the connection and schedules the next attempt by address
  * (PORTING.md D-186, D-187). Each connection has its own [SessionToken]; a callback carrying any
  * other token changes nothing.
+ *
+ * Every bring-up step, bond change, failure and close is also noted in [diagnostics] (the last
+ * 64, never an address, a MAC or frame bytes; PORTING.md D-196).
  */
 internal class LinkCore(
     override val ring: RememberedRing,
     private val port: GattPort,
     private val scope: CoroutineScope,
-) : RingLink {
+    /** The clock of [diagnostics]: the scheduler's virtual time in tests. */
+    private val timeSource: TimeSource = TimeSource.Monotonic,
+) : RingLink, LinkDiagnostics {
 
     private val inbox = Channel<LinkEvent>(Channel.UNLIMITED) { undelivered ->
         if (undelivered is LinkEvent.Send) undelivered.reply.complete(SendResult.Failed(SendFailure.LINK_LOST))
@@ -125,6 +131,17 @@ internal class LinkCore(
     override val info: StateFlow<LinkInfo> = infoFlow.asStateFlow()
     override val frames: Flow<ByteArray> = frameBuffer.flow
     override val teardowns: Flow<LinkTeardown> = teardownBuffer.flow
+    private val diagnosticLog = DiagnosticLog()
+    override val diagnostics: StateFlow<List<LinkDiagnostic>> = diagnosticLog.flow
+
+    /** When the current connection attempt started: the zero of every diagnostic's time. */
+    private var attemptStart = timeSource.markNow()
+
+    /** The bond state last read or announced, for the diagnostics' "before → after". */
+    private var lastBond: GattPort.BondState? = null
+
+    /** This connection asked Android for the bond (`createBond`). */
+    private var bondRequested = false
 
     init {
         val loop = scope.launch(loopDispatcher) {
@@ -210,8 +227,10 @@ internal class LinkCore(
 
     private fun open(standingConnection: Boolean) {
         if (session != null) return
+        attemptStart = timeSource.markNow()
         session = SessionToken(++sessionsOpened)
         standing = standingConnection
+        bondRequested = false
         connected = false
         frameSeen = false
         connectIsLate = false
@@ -244,9 +263,11 @@ internal class LinkCore(
         while (true) {
             val op = queue.startNext() ?: return
             if (!submit(op)) {
+                note("refused", op.stepName)
                 dropLink(SendFailure.GATT_ERROR)
                 return
             }
+            if (op.isBringUpStep) note("${op.stepName} started", startDetail(op))
             op.timeout?.let { startTimer(LinkTimer.OPERATION, it) }
             if (op is GattOp.Connect && !op.autoConnect) startTimer(LinkTimer.LATE_CONNECT, ReconnectPolicy.LATE_FAILURE_AFTER)
         }
@@ -281,6 +302,7 @@ internal class LinkCore(
         if (op != null && op.isAnsweredBy(event)) {
             cancelTimer(LinkTimer.OPERATION)
             if (!succeeded(event)) {
+                note("failed", "${op.stepName}, status ${statusOf(event)}")
                 val failure = if (op is GattOp.Connect) {
                     ReconnectPolicy.classifyOpenFailure((event as GattEvent.ConnectionChanged).status, connectIsLate)
                 } else {
@@ -290,14 +312,47 @@ internal class LinkCore(
                 return
             }
             queue.finish()
+            if (op.isBringUpStep) note("${op.stepName} finished", finishDetail(op, event))
             onAnswered(op, event)
             return
         }
         when (event) {
             is GattEvent.Notification -> onNotification(event)
-            is GattEvent.ConnectionChanged -> if (!event.connected) dropLink(SendFailure.LINK_LOST, disconnected = true)
+            is GattEvent.ConnectionChanged -> if (!event.connected) {
+                note("disconnected", "status ${event.status}")
+                dropLink(SendFailure.LINK_LOST, disconnected = true)
+            }
             else -> Unit // an answer no operation is waiting for
         }
+    }
+
+    /** Adds a diagnostic stamped with the time since the current connection attempt started. */
+    private fun note(event: String, detail: String = "") {
+        diagnosticLog.add(LinkDiagnostic(attemptStart.elapsedNow().inWholeMilliseconds, event, detail))
+    }
+
+    private fun startDetail(op: GattOp): String = when (op) {
+        is GattOp.Connect -> if (op.autoConnect) "standing" else "direct"
+        GattOp.RequestMtu -> "asked ${GattPort.REQUESTED_MTU}"
+        is GattOp.Read -> op.characteristic.shortName
+        else -> ""
+    }
+
+    private fun finishDetail(op: GattOp, event: GattEvent): String = when (op) {
+        GattOp.DiscoverServices -> "${(event as GattEvent.ServicesDiscovered).characteristics.size} characteristics"
+        GattOp.RequestMtu -> "granted ${(event as GattEvent.MtuChanged).mtu}"
+        is GattOp.Read -> op.characteristic.shortName
+        else -> ""
+    }
+
+    private fun statusOf(event: GattEvent): Int = when (event) {
+        is GattEvent.ConnectionChanged -> event.status
+        is GattEvent.ServicesDiscovered -> event.status
+        is GattEvent.MtuChanged -> event.status
+        is GattEvent.DescriptorWritten -> event.status
+        is GattEvent.CharacteristicRead -> event.status
+        is GattEvent.CharacteristicWritten -> event.status
+        is GattEvent.Notification -> GattPort.GATT_SUCCESS
     }
 
     private fun succeeded(event: GattEvent): Boolean = when (event) {
@@ -329,7 +384,10 @@ internal class LinkCore(
                     return
                 }
                 // With no System ID to read, the device address is the MAC.
-                if (GattPort.SYSTEM_ID !in discovered) settleMac(addressMac)
+                if (GattPort.SYSTEM_ID !in discovered) {
+                    note("MAC source", if (addressMac != null) "device address" else "none")
+                    settleMac(addressMac)
+                }
                 startBondStep()
             }
             GattOp.RequestMtu -> {
@@ -357,12 +415,17 @@ internal class LinkCore(
      * bond in progress. Not bonded: ask once and wait.
      */
     private fun startBondStep() {
-        val bond = readBondState() ?: return dropLink(SendFailure.GATT_ERROR)
+        val bond = readBondState()
+        note("bond started", bond?.let { "read $it" } ?: "read failed")
+        if (bond == null) return dropLink(SendFailure.GATT_ERROR)
         when (bond) {
             GattPort.BondState.BONDED -> continueAfterBond()
             GattPort.BondState.BONDING -> awaitBond(alreadyBonding = true)
             GattPort.BondState.NONE -> {
-                if (!failsClosed { port.createBond() }) return pairingFailed(PairingFailure.BOND_REQUEST_REJECTED)
+                bondRequested = true
+                val accepted = failsClosed { port.createBond() }
+                note("bond requested", if (accepted) "createBond accepted" else "createBond refused")
+                if (!accepted) return pairingFailed(PairingFailure.BOND_REQUEST_REJECTED)
                 awaitBond(alreadyBonding = false)
             }
         }
@@ -383,6 +446,7 @@ internal class LinkCore(
     }
 
     private fun continueAfterBond() {
+        note("bond finished", "bonded")
         awaitingBond = false
         cancelTimer(LinkTimer.BOND)
         infoFlow.update { it.copy(bonded = true) }
@@ -395,6 +459,11 @@ internal class LinkCore(
      * removed in Settings refuses data again at once); while the bring-up waits, it ends the wait.
      */
     private fun onBond(state: GattPort.BondState) {
+        val before = lastBond
+        lastBond = state
+        // Whether the ring started bonding before the link asked tells a ring Security Request apart.
+        val asked = if (bondRequested) "after createBond" else "before createBond"
+        note("bond state", "${before?.let { "$it → " }.orEmpty()}$state, $asked")
         if (session == null) return
         if (!awaitingBond) {
             infoFlow.update { it.copy(bonded = state == GattPort.BondState.BONDED) }
@@ -413,6 +482,7 @@ internal class LinkCore(
      * prompt in front of the user again.
      */
     private fun pairingFailed(reason: PairingFailure) {
+        note("pairing failed", reason.name)
         wanted = false
         cancelTimer(LinkTimer.RECONNECT)
         closeSession(SendFailure.LINK_LOST, TeardownReason.LINK_DROPPED)
@@ -421,7 +491,7 @@ internal class LinkCore(
 
     /** The phone's bond state with the ring; null when it cannot be read (PORTING.md D-187). */
     private fun readBondState(): GattPort.BondState? = try {
-        port.bondState()
+        port.bondState().also { lastBond = it }
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
@@ -452,11 +522,13 @@ internal class LinkCore(
      */
     private fun onDataFrame() {
         cancelTimer(LinkTimer.NOT_STREAMING)
-        when (stateFlow.value) {
-            LinkState.Authenticating -> stateFlow.value = LinkState.Authenticated
-            LinkState.NotStreaming -> stateFlow.value = if (authStarted) LinkState.Authenticated else LinkState.Preparing
-            else -> Unit
+        val next = when (stateFlow.value) {
+            LinkState.Authenticating -> LinkState.Authenticated
+            LinkState.NotStreaming -> if (authStarted) LinkState.Authenticated else LinkState.Preparing
+            else -> return
         }
+        stateFlow.value = next
+        note(if (next == LinkState.Authenticated) "Authenticated" else "streaming before auth")
     }
 
     /**
@@ -491,6 +563,9 @@ internal class LinkCore(
                     val text = formatMac(fromSystemId)
                     val mismatch = addressMac?.contentEquals(fromSystemId) == false
                     infoFlow.update { it.copy(mac = text, macMismatch = mismatch, firmware = it.firmware.copy(mac = text)) }
+                    note("MAC source", if (mismatch) "System ID, differs from the device address" else "System ID")
+                } else {
+                    note("MAC source", if (addressMac != null) "device address, System ID unreadable" else "none")
                 }
                 settleMac(fromSystemId ?: addressMac)
             }
@@ -505,13 +580,19 @@ internal class LinkCore(
         if (running == null || running.first !== event.ticket) return // cancelled or replaced since
         timers.remove(event.timer)
         when (event.timer) {
-            LinkTimer.OPERATION -> dropLink(SendFailure.TIMED_OUT)
+            LinkTimer.OPERATION -> {
+                queue.inFlight?.let { note("timed out", it.stepName) }
+                dropLink(SendFailure.TIMED_OUT)
+            }
             LinkTimer.LATE_CONNECT -> connectIsLate = true
             // Checked once, as upstream RingScanner.swift:977-986: a later frame does not reopen it.
             LinkTimer.STABILITY -> if (frameSeen) attempts = 0
             LinkTimer.RECONNECT -> open(standingConnection = nextIsStanding)
             LinkTimer.BOND -> if (awaitingBond) pairingFailed(PairingFailure.BOND_TIMED_OUT)
-            LinkTimer.NOT_STREAMING -> stateFlow.value = LinkState.NotStreaming
+            LinkTimer.NOT_STREAMING -> {
+                stateFlow.value = LinkState.NotStreaming
+                note("not streaming", "no data frame ${NOT_STREAMING_AFTER.toMillis()} ms after the CCCD")
+            }
             LinkTimer.EARLY_DROP -> {
                 pastEarlyWindow = true
                 if (discoveryDone) earlyDrops = 0 // a healthy connection
@@ -537,6 +618,8 @@ internal class LinkCore(
         nextIsStanding = plan.standing
         // Reconnecting goes on either way: the bond may be fine and the drops something else.
         stateFlow.value = if (bondLost) LinkState.BondLostSuspected else LinkState.Reconnecting(plan.attempt, plan.delay)
+        if (bondLost) note("bond lost suspected", "$earlyDrops early drops in a row")
+        note("reconnect scheduled", "attempt ${plan.attempt} in ${plan.delay.toMillis()} ms")
         startTimer(LinkTimer.RECONNECT, plan.delay)
     }
 
@@ -582,6 +665,7 @@ internal class LinkCore(
         // The buffer is per connection: what its collector never took is dropped and counted.
         val undelivered = frameBuffer.clear()
         if (connected) teardownBuffer.add(LinkTeardown(reason, undelivered))
+        note("closed", if (connected) "${reason.rawValue}, $undelivered undelivered frames" else reason.rawValue)
         connected = false
         awaitingBond = false
     }
@@ -725,6 +809,33 @@ internal fun refusalOf(command: ByteArray, authenticated: Boolean, info: LinkInf
         else -> null
     }
 }
+
+/** The operation's name in the diagnostics. */
+private val GattOp.stepName: String
+    get() = when (this) {
+        is GattOp.Connect -> "connect"
+        GattOp.DiscoverServices -> "discover"
+        GattOp.RequestMtu -> "MTU"
+        GattOp.EnableNotifications -> "CCCD"
+        is GattOp.Read -> "DIS read"
+        is GattOp.Write -> when (purpose) {
+            Purpose.AUTH_START -> "auth"
+            Purpose.AUTH_REPLY -> "auth reply"
+            Purpose.ACK -> "ack"
+            Purpose.FEATURE -> "write"
+        }
+    }
+
+/**
+ * Whether the diagnostics record the operation's start and finish: every bring-up step does;
+ * acknowledgements and feature writes, thousands per drain, would push them out of the 64 kept,
+ * so only their failures are recorded.
+ */
+private val GattOp.isBringUpStep: Boolean
+    get() = !(this is GattOp.Write && (purpose == Purpose.ACK || purpose == Purpose.FEATURE))
+
+/** `00002a23-…` → `2a23`: the characteristic's number, never its value. */
+private val GattPort.Characteristic.shortName: String get() = uuid.substringBefore('-').takeLast(4)
 
 /** The acknowledgement the ring waits for after a frame with [opcode], or null when it waits for none. */
 private fun ackFor(opcode: Int): ByteArray? = when (opcode) {

@@ -15,9 +15,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * each take ONE collector at a time (a second collection while one runs throws
  * [IllegalStateException]); items wait in order while nobody collects, and a collector that stops
  * or is cancelled leaves what it did not take for the next one. Every byte value is copied in and
- * out, and [send] answers with a value and never throws.
+ * out, and [send] answers with a value and never throws. Like the real link it offers
+ * [LinkDiagnostics]; [emitDiagnostic] scripts the entries, of which the last 64 are kept.
  */
-class FakeRingLink(override val ring: RememberedRing) : RingLink {
+class FakeRingLink(override val ring: RememberedRing) : RingLink, LinkDiagnostics {
 
     private val stateFlow = MutableStateFlow<LinkState>(LinkState.Idle)
     private val infoFlow = MutableStateFlow(LinkInfo())
@@ -32,6 +33,13 @@ class FakeRingLink(override val ring: RememberedRing) : RingLink {
     override val info: StateFlow<LinkInfo> = infoFlow.asStateFlow()
     override val frames: Flow<ByteArray> = frameBuffer.flow
     override val teardowns: Flow<LinkTeardown> = teardownBuffer.flow
+    private val diagnosticLog = DiagnosticLog()
+    override val diagnostics: StateFlow<List<LinkDiagnostic>> = diagnosticLog.flow
+
+    /** Adds [diagnostic] to [diagnostics], as the real link records a step; the last 64 are kept. */
+    fun emitDiagnostic(diagnostic: LinkDiagnostic) {
+        diagnosticLog.add(diagnostic)
+    }
 
     /** Every command passed to [send], in order (copies). */
     val sent: List<ByteArray> get() = sentCommands.map { it.copyOf() }

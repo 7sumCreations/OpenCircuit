@@ -118,6 +118,20 @@ class FakeRingLinkTest {
     }
 
     @Test
+    fun diagnosticsAreScriptableInOrderAndKeepOnlyTheLast64() = runTest {
+        val link: RingLink = FakeRingLink(Fixtures.ring)
+        val fake = link as FakeRingLink
+        val diagnostics = (link as? LinkDiagnostics)?.diagnostics ?: error("the fake offers diagnostics as the real link does")
+        assertEquals(emptyList(), diagnostics.value)
+
+        repeat(70) { fake.emitDiagnostic(LinkDiagnostic(sinceConnectMillis = it.toLong(), event = "step $it", detail = "")) }
+
+        assertEquals(64, diagnostics.value.size)
+        assertEquals((6 until 70).map { "step $it" }, diagnostics.value.map { it.event })
+        assertEquals(69, diagnostics.value.last().sinceConnectMillis)
+    }
+
+    @Test
     fun stateInfoAndCallsAreScriptableAndObservable() = runTest {
         val link = FakeRingLink(Fixtures.ring)
         assertEquals(LinkState.Idle, link.state.value)
