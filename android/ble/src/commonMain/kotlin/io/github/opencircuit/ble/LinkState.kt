@@ -40,7 +40,8 @@ sealed interface LinkState {
 
     /**
      * Only `0x81` frames for 10 s after notifications were enabled: the symptom of a ring that
-     * did not accept this phone (not bonded, or the auth reply was wrong).
+     * did not accept this phone (not bonded, or the auth reply was wrong). The connection stays
+     * open; the ring's first data frame still moves the link on to [Authenticated].
      */
     data object NotStreaming : LinkState
 

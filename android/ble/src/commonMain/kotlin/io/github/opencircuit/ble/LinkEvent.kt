@@ -43,4 +43,7 @@ internal enum class LinkTimer {
 
     /** The wait for the bond to be made ([LinkTimeouts.BOND]). */
     BOND,
+
+    /** The wait, from the confirmed notifications, for the ring's first data frame. */
+    NOT_STREAMING,
 }

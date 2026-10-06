@@ -106,6 +106,9 @@ internal class LinkCore(
     /** While waiting: the bond has started ("bonding" was seen), so a "not bonded" now means it failed. */
     private var bondStarted = false
 
+    /** `01 00 00` was written on this connection. */
+    private var authStarted = false
+
     override val state: StateFlow<LinkState> = stateFlow.asStateFlow()
     override val info: StateFlow<LinkInfo> = infoFlow.asStateFlow()
     override val frames: Flow<ByteArray> = frameBuffer.flow
@@ -201,6 +204,7 @@ internal class LinkCore(
         frameSeen = false
         connectIsLate = false
         awaitingBond = false
+        authStarted = false
         discovered = emptySet()
         addressMac = macFromAddress(ring.address)
         mac = null
@@ -246,7 +250,11 @@ internal class LinkCore(
                         port.writeDescriptor(GattPort.NOTIFY, GattPort.CCCD, byteArrayOf(0x01, 0x00))
                 is GattOp.Read -> port.read(op.characteristic)
                 is GattOp.Write -> {
-                    if (op.purpose == Purpose.AUTH_START) stateFlow.value = LinkState.Authenticating
+                    if (op.purpose == Purpose.AUTH_START) {
+                        authStarted = true
+                        // A ring that has not streamed for 10 s stays NotStreaming until it does.
+                        if (stateFlow.value != LinkState.NotStreaming) stateFlow.value = LinkState.Authenticating
+                    }
                     port.write(GattPort.WRITE, op.value)
                 }
             }
@@ -313,7 +321,9 @@ internal class LinkCore(
                 queue.add(GattOp.EnableNotifications)
             }
             GattOp.EnableNotifications -> {
-                // Notifications are confirmed on: only now can the challenge be received (D-183).
+                // Notifications are confirmed on: only now can the challenge be received (D-183),
+                // and only from now can the ring be expected to stream (PORTING.md D-194).
+                startTimer(LinkTimer.NOT_STREAMING, NOT_STREAMING_AFTER)
                 DEVICE_INFORMATION_READS.filter { it in discovered }.forEach { queue.add(GattOp.Read(it)) }
                 queue.add(GattOp.Write(Command.status0, Purpose.AUTH_START))
             }
@@ -413,10 +423,23 @@ internal class LinkCore(
         // Acknowledged by its opcode alone, whatever it holds (a page that fails its checksum
         // too): the ring waits for this before its next page (RingSession.swift:5130-5249).
         ackFor(frame.u8(0))?.let { queue.add(GattOp.Write(it, Purpose.ACK)) }
-        if (frame.u8(0) != 0x81 && stateFlow.value == LinkState.Authenticating) {
-            stateFlow.value = LinkState.Authenticated
-        }
+        if (frame.u8(0) != 0x81) onDataFrame()
         frameBuffer.add(frame)
+    }
+
+    /**
+     * A frame other than `0x81`: the ring's data path is open. It ends the wait for data and
+     * authenticates a link that wrote `01 00 00`, from `NotStreaming` too: a ring that starts to
+     * stream late is streaming (upstream clears `notStreaming` on its first data frame,
+     * RingSession.swift:4884-4888).
+     */
+    private fun onDataFrame() {
+        cancelTimer(LinkTimer.NOT_STREAMING)
+        when (stateFlow.value) {
+            LinkState.Authenticating -> stateFlow.value = LinkState.Authenticated
+            LinkState.NotStreaming -> stateFlow.value = if (authStarted) LinkState.Authenticated else LinkState.Preparing
+            else -> Unit
+        }
     }
 
     /**
@@ -471,6 +494,7 @@ internal class LinkCore(
             LinkTimer.STABILITY -> if (frameSeen) attempts = 0
             LinkTimer.RECONNECT -> open(standingConnection = nextIsStanding)
             LinkTimer.BOND -> if (awaitingBond) pairingFailed(PairingFailure.BOND_TIMED_OUT)
+            LinkTimer.NOT_STREAMING -> stateFlow.value = LinkState.NotStreaming
         }
     }
 
@@ -505,6 +529,7 @@ internal class LinkCore(
         cancelTimer(LinkTimer.LATE_CONNECT)
         cancelTimer(LinkTimer.STABILITY)
         cancelTimer(LinkTimer.BOND)
+        cancelTimer(LinkTimer.NOT_STREAMING)
         closePort()
         session = null
         // The buffer is per connection: what its collector never took is dropped and counted.
@@ -550,6 +575,12 @@ internal class LinkCore(
          * §5.5.1) whole: 243 bytes of value + 3 bytes of ATT header.
          */
         const val HISTORY_SAFE_MTU = 246
+
+        /**
+         * How long after notifications are confirmed a ring that sends no data frame shows
+         * `NotStreaming` (upstream `firstFrameTimeout`, RingSession.swift:264).
+         */
+        val NOT_STREAMING_AFTER: Duration = Duration.ofSeconds(10)
 
         /** Upstream reads these when the ring has them (RingSession.swift:4794-4813). */
         val DEVICE_INFORMATION_READS = listOf(
