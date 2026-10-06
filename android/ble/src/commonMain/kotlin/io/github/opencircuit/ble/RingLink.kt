@@ -20,12 +20,15 @@ interface RingLink {
 
     /**
      * Every frame the ring sends except the `81 00` auth challenge the link answers itself, in
-     * arrival order. EXACTLY ONE collector: a second collection fails with an exception. Frames
-     * wait here while nobody collects.
+     * arrival order. EXACTLY ONE collector at a time: a collection started while another is
+     * running throws [IllegalStateException]. Frames wait here while nobody collects; a collector
+     * that stops or is cancelled leaves every frame it did not take for the next collector. Frames
+     * still waiting when the connection is torn down are dropped and counted in
+     * [LinkTeardown.undeliveredFrames].
      */
     val frames: Flow<ByteArray>
 
-    /** One [LinkTeardown] per torn-down connection. EXACTLY ONE collector, as for [frames]. */
+    /** One [LinkTeardown] per torn-down connection. EXACTLY ONE collector at a time, as for [frames]. */
     val teardowns: Flow<LinkTeardown>
 
     /**

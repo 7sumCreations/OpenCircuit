@@ -40,6 +40,25 @@ internal fun TestScope.advance(millis: Long) {
 /** The state of a link waiting [seconds] before its [attempt]-th reconnect. */
 internal fun reconnecting(attempt: Int, seconds: Long): LinkState = LinkState.Reconnecting(attempt, Duration.ofSeconds(seconds))
 
+/**
+ * A link over a scripted ring, connected and authenticated (the ring's first data frame
+ * `15 00 08 0a b0 a7` is the frame that authenticated it and waits in `frames`).
+ */
+internal fun TestScope.authenticatedLink(
+    script: FakeGatt.Script = Fixtures.acceptingRing(),
+    ring: RememberedRing = Fixtures.ring,
+): Pair<FakeGatt, RingLink> {
+    val gatt = FakeGatt(backgroundScope, script)
+    val link = RingLink(ring, gatt, backgroundScope)
+    link.connect()
+    runCurrent()
+    check(link.state.value == LinkState.Authenticated) { "not authenticated: ${link.state.value}, ${gatt.log}" }
+    return gatt to link
+}
+
+/** The ring sends each of [frames], in order. */
+internal fun FakeGatt.notifyAll(frames: List<ByteArray>) = frames.forEach(::notify)
+
 /** A ring that answers every operation but sends no notification unless the test makes it. */
 internal fun quietRing(): FakeGatt.Script = Fixtures.acceptingRing().copy(challengeFrame = null)
 

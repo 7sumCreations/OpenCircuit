@@ -21,6 +21,12 @@ class DisconnectMidOpTest {
 
     private val dropped = LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 0)
 
+    /**
+     * The teardown of an authenticated connection nobody collected `frames` from: the frame that
+     * authenticated it (`15 00 08 0a b0 a7`) was never taken, so it is counted as undelivered.
+     */
+    private val droppedAfterAuth = LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 1)
+
     private fun TestScope.authenticated(): Triple<FakeGatt, RingLink, List<LinkTeardown>> {
         val ring = FakeGatt(backgroundScope, Fixtures.acceptingRing())
         val link = RingLink(Fixtures.ring, ring, backgroundScope)
@@ -50,7 +56,7 @@ class DisconnectMidOpTest {
         assertEquals(SendResult.Failed(SendFailure.LINK_LOST), queued.getCompleted())
         assertEquals("close", ring.log.last())
         assertEquals(1, ring.log.count { it == "close" })
-        assertEquals(listOf(dropped), teardowns)
+        assertEquals(listOf(droppedAfterAuth), teardowns)
         assertEquals(reconnecting(attempt = 1, seconds = 1), link.state.value)
     }
 
@@ -113,7 +119,7 @@ class DisconnectMidOpTest {
 
         assertEquals(LinkState.Authenticated, link.state.value)
         assertEquals(log, ring.log, "no close of the new connection")
-        assertEquals(listOf(dropped), teardowns)
+        assertEquals(listOf(droppedAfterAuth), teardowns)
     }
 
     @Test
@@ -125,7 +131,8 @@ class DisconnectMidOpTest {
         advance(10 * 60_000)
 
         assertEquals(LinkState.Idle, link.state.value)
-        assertEquals(listOf(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 0)), teardowns)
+        // The frame that authenticated the connection was never collected.
+        assertEquals(listOf(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 1)), teardowns)
         assertEquals(1, ring.connects.size)
         assertEquals("close", ring.log.last())
     }
@@ -143,7 +150,7 @@ class DisconnectMidOpTest {
 
         assertEquals(LinkState.Idle, link.state.value)
         assertEquals(1, ring.connects.size)
-        assertEquals(listOf(dropped), teardowns, "nothing was connected to tear down a second time")
+        assertEquals(listOf(droppedAfterAuth), teardowns, "nothing was connected to tear down a second time")
     }
 
     @Test

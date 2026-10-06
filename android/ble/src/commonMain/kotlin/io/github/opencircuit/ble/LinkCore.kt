@@ -4,6 +4,7 @@ import io.github.opencircuit.ble.GattOp.Write.Purpose
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.FirmwareInfo
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
+import io.github.opencircuit.ringkit.Opcode
 import io.github.opencircuit.ringkit.RingAuth
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -17,7 +18,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
@@ -38,6 +38,13 @@ import kotlin.coroutines.ContinuationInterceptor
  * operation waits for the previous one's answer (PORTING.md D-184), for at most its own timeout
  * (PORTING.md D-185).
  *
+ * Once data flows: every `0x47` / `0x4c` / `0x4d` page and `0x11` heartbeat is acknowledged once,
+ * in arrival order, on the link lane, ahead of any waiting feature write (PORTING.md D-190);
+ * every `81 00` challenge is answered, held until the MAC is settled (PORTING.md D-188); every
+ * frame but that challenge waits for the one collector of [frames] in a per-connection buffer
+ * whose leftovers a teardown counts (PORTING.md D-189); and [send] refuses what the ring must not get
+ * (PORTING.md D-191).
+ *
  * Any failure (a timeout, an error status, a refused or throwing call, a drop) fails the
  * operation in flight, closes the connection and schedules the next attempt by address
  * (PORTING.md D-186, D-187). Each connection has its own [SessionToken]; a callback carrying any
@@ -55,8 +62,8 @@ internal class LinkCore(
     private val loopDispatcher = loopDispatcherFor(scope)
     private val stateFlow = MutableStateFlow<LinkState>(LinkState.Idle)
     private val infoFlow = MutableStateFlow(LinkInfo())
-    private val frameChannel = Channel<ByteArray>(Channel.UNLIMITED)
-    private val teardownChannel = Channel<LinkTeardown>(Channel.UNLIMITED)
+    private val frameBuffer = SingleCollectorBuffer<ByteArray>("frames")
+    private val teardownBuffer = SingleCollectorBuffer<LinkTeardown>("teardowns")
     private val sink = GattPort.EventSink { inbox.trySend(LinkEvent.Gatt(it)) }
 
     // Owned by the event loop.
@@ -65,7 +72,16 @@ internal class LinkCore(
     private var session: SessionToken? = null
     private var sessionsOpened = 0L
     private var discovered: Set<GattPort.Characteristic> = emptySet()
+
+    /** The MAC the device address names, if it is six pairs of hex digits (PORTING.md D-11). */
+    private var addressMac: ByteArray? = null
+
+    /** The MAC auth uses; set once settled: the System ID's when the ring has one, else the address's. */
     private var mac: ByteArray? = null
+    private var macSettled = false
+
+    /** Challenges that arrived before the MAC was settled, in arrival order (PORTING.md D-188). */
+    private val heldChallenges = mutableListOf<Int>()
 
     /** The user asked for a connection: `connect()` and no `disconnect()` since. */
     private var wanted = false
@@ -85,8 +101,8 @@ internal class LinkCore(
 
     override val state: StateFlow<LinkState> = stateFlow.asStateFlow()
     override val info: StateFlow<LinkInfo> = infoFlow.asStateFlow()
-    override val frames: Flow<ByteArray> = frameChannel.consumeAsFlow()
-    override val teardowns: Flow<LinkTeardown> = teardownChannel.consumeAsFlow()
+    override val frames: Flow<ByteArray> = frameBuffer.flow
+    override val teardowns: Flow<LinkTeardown> = teardownBuffer.flow
 
     init {
         val loop = scope.launch(loopDispatcher) {
@@ -172,16 +188,20 @@ internal class LinkCore(
         frameSeen = false
         connectIsLate = false
         discovered = emptySet()
-        mac = macFromAddress(ring.address)
+        addressMac = macFromAddress(ring.address)
+        mac = null
+        macSettled = false
+        heldChallenges.clear()
         // The model name is the ring's advertised name, as upstream RingSession.swift:930.
-        infoFlow.value = LinkInfo(firmware = FirmwareInfo(modelName = ring.name.orEmpty()), mac = mac?.let(::formatMac))
+        infoFlow.value = LinkInfo(firmware = FirmwareInfo(modelName = ring.name.orEmpty()), mac = addressMac?.let(::formatMac))
         stateFlow.value = if (standingConnection) LinkState.WaitingForRing else LinkState.Connecting
         queue.add(GattOp.Connect(autoConnect = standingConnection))
     }
 
     private fun sendFeature(event: LinkEvent.Send) {
-        if (stateFlow.value != LinkState.Authenticated) {
-            event.reply.complete(SendResult.Refused(RefusalReason.NOT_AUTHENTICATED))
+        val refusal = refusalOf(event.command, stateFlow.value == LinkState.Authenticated, infoFlow.value)
+        if (refusal != null) {
+            event.reply.complete(SendResult.Refused(refusal))
             return
         }
         queue.add(GattOp.Write(event.command, Purpose.FEATURE, event.reply))
@@ -269,12 +289,18 @@ internal class LinkCore(
                     dropLink(SendFailure.GATT_ERROR) // not the ring's GATT layout
                     return
                 }
+                // With no System ID to read, the device address is the MAC.
+                if (GattPort.SYSTEM_ID !in discovered) settleMac(addressMac)
+                // The bond step (after discovery, before the MTU exchange). A bond state that
+                // cannot be read counts as no bond: data commands stay refused.
+                val bonded = failsClosed { port.bondState() == GattPort.BondState.BONDED }
+                infoFlow.update { it.copy(bonded = bonded) }
                 stateFlow.value = LinkState.Preparing
                 queue.add(GattOp.RequestMtu)
             }
             GattOp.RequestMtu -> {
                 val mtu = (event as GattEvent.MtuChanged).mtu
-                infoFlow.update { it.copy(attMtu = mtu) }
+                infoFlow.update { it.copy(attMtu = mtu, historySafe = mtu >= HISTORY_SAFE_MTU) }
                 queue.add(GattOp.EnableNotifications)
             }
             GattOp.EnableNotifications -> {
@@ -296,23 +322,49 @@ internal class LinkCore(
             answerChallenge(frame.u8(2)) // the link's own exchange: never delivered
             return
         }
+        // Acknowledged by its opcode alone, whatever it holds (a page that fails its checksum
+        // too): the ring waits for this before its next page (RingSession.swift:5130-5249).
+        ackFor(frame.u8(0))?.let { queue.add(GattOp.Write(it, Purpose.ACK)) }
         if (frame.u8(0) != 0x81 && stateFlow.value == LinkState.Authenticating) {
             stateFlow.value = LinkState.Authenticated
         }
-        frameChannel.trySend(frame)
+        frameBuffer.add(frame)
     }
 
+    /**
+     * Answers [challenge] on the link lane, every time one arrives. Until the MAC is settled the
+     * challenge waits (PORTING.md D-188); with no MAC at all it is never answered: no fixed or
+     * guessed reply (PORTING.md D-192).
+     */
     private fun answerChallenge(challenge: Int) {
+        if (!macSettled) {
+            heldChallenges += challenge
+            return
+        }
         val key = mac ?: return
         queue.add(GattOp.Write(RingAuth.authCommand(challenge, key), Purpose.AUTH_REPLY))
     }
 
+    /** The MAC auth uses is now known (or known to be missing); answers the challenges that waited for it. */
+    private fun settleMac(settled: ByteArray?) {
+        mac = settled
+        macSettled = true
+        val waiting = heldChallenges.toList()
+        heldChallenges.clear()
+        waiting.forEach(::answerChallenge)
+    }
+
     private fun applyDeviceInformation(characteristic: GattPort.Characteristic, value: ByteArray) {
         when (characteristic) {
-            GattPort.SYSTEM_ID -> RingAuth.macFromSystemID(value)?.let { fromSystemId ->
-                mac = fromSystemId
-                val text = formatMac(fromSystemId)
-                infoFlow.update { it.copy(mac = text, firmware = it.firmware.copy(mac = text)) }
+            GattPort.SYSTEM_ID -> {
+                // The System ID wins over the device address when they disagree.
+                val fromSystemId = RingAuth.macFromSystemID(value)
+                if (fromSystemId != null) {
+                    val text = formatMac(fromSystemId)
+                    val mismatch = addressMac?.contentEquals(fromSystemId) == false
+                    infoFlow.update { it.copy(mac = text, macMismatch = mismatch, firmware = it.firmware.copy(mac = text)) }
+                }
+                settleMac(fromSystemId ?: addressMac)
             }
             GattPort.FIRMWARE_REVISION -> strictUtf8(value)?.let { v -> infoFlow.update { it.copy(firmware = it.firmware.copy(version = v)) } }
             GattPort.MANUFACTURER_NAME -> strictUtf8(value)?.let { v -> infoFlow.update { it.copy(firmware = it.firmware.copy(manufacturer = v)) } }
@@ -365,8 +417,9 @@ internal class LinkCore(
         cancelTimer(LinkTimer.STABILITY)
         closePort()
         session = null
-        // Frames are not dropped here: they stay queued for the one collector of `frames`.
-        if (connected) teardownChannel.trySend(LinkTeardown(reason, undeliveredFrames = 0))
+        // The buffer is per connection: what its collector never took is dropped and counted.
+        val undelivered = frameBuffer.clear()
+        if (connected) teardownBuffer.add(LinkTeardown(reason, undelivered))
         connected = false
     }
 
@@ -401,6 +454,12 @@ internal class LinkCore(
     }
 
     private companion object {
+        /**
+         * The smallest ATT MTU that carries a 243-byte history frame (`0x50`, `docs/PROTOCOL.md`
+         * §5.5.1) whole: 243 bytes of value + 3 bytes of ATT header.
+         */
+        const val HISTORY_SAFE_MTU = 246
+
         /** Upstream reads these when the ring has them (RingSession.swift:4794-4813). */
         val DEVICE_INFORMATION_READS = listOf(
             GattPort.SYSTEM_ID, GattPort.FIRMWARE_REVISION, GattPort.MANUFACTURER_NAME, GattPort.HARDWARE_REVISION,
@@ -470,3 +529,33 @@ private fun strictUtf8(bytes: ByteArray): String? = try {
 }
 
 private fun ByteArray.u8(index: Int): Int = this[index].toInt() and 0xFF
+
+/**
+ * Why `send` must not write [command], or null when it may (PORTING.md D-191). The rules, in
+ * order: nothing before the link is authenticated; never the link's own auth commands `01 00 00`
+ * and `01 01 …`; no data command (outside the `0x01` status family) without a bond, since the
+ * ring ignores data from an unbonded phone; no history sync open (`0x02 …`) while the ATT MTU is
+ * too small for a whole history frame.
+ */
+internal fun refusalOf(command: ByteArray, authenticated: Boolean, info: LinkInfo): RefusalReason? {
+    val opcode = if (command.isEmpty()) -1 else command.u8(0)
+    val statusFamily = opcode == Opcode.SESSION_SETUP
+    val authCommand = statusFamily && command.size >= 2 &&
+        (command.u8(1) == 0x01 || command.contentEquals(Command.status0))
+    return when {
+        !authenticated -> RefusalReason.NOT_AUTHENTICATED
+        authCommand -> RefusalReason.AUTH_COMMAND_RESERVED
+        !statusFamily && !info.bonded -> RefusalReason.NOT_BONDED
+        opcode == Opcode.SYNC_OPEN && !info.historySafe -> RefusalReason.HISTORY_UNSAFE
+        else -> null
+    }
+}
+
+/** The acknowledgement the ring waits for after a frame with [opcode], or null when it waits for none. */
+private fun ackFor(opcode: Int): ByteArray? = when (opcode) {
+    0x47 -> Command.pageAck47
+    0x4C -> Command.pageAck4C
+    0x4D -> Command.pageAck4D
+    0x11 -> Command.heartbeatAck
+    else -> null
+}

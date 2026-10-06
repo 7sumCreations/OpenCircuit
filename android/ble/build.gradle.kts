@@ -40,6 +40,11 @@ kotlin {
     jvmCompilations.named("test") {
         associateWith(jvmCompilations.getByName("testFixtures"))
     }
+    // The fake link reuses the real link's single-collector buffer (an internal class), so both
+    // keep one contract for `frames` and `teardowns`.
+    jvmCompilations.named("testFixtures") {
+        associateWith(jvmCompilations.getByName("main"))
+    }
 }
 
 // A multiplatform module has no `test` task, so `./gradlew test` would silently skip this module.

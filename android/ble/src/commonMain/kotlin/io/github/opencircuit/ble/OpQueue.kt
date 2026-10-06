@@ -54,30 +54,51 @@ internal sealed interface GattOp {
 
         override val timeout: Duration get() = LinkTimeouts.WRITE
 
-        enum class Purpose { AUTH_START, AUTH_REPLY, FEATURE }
+        enum class Purpose {
+            /** `01 00 00`, which starts the auth exchange (a bring-up step). */
+            AUTH_START,
+
+            /** The answer to the ring's `81 00` challenge (link lane). */
+            AUTH_REPLY,
+
+            /** The acknowledgement of a page or heartbeat (link lane). */
+            ACK,
+
+            /** A command written for a caller of `send`. */
+            FEATURE,
+        }
+
+        /** True for the link's own urgent writes, which go on the link lane. */
+        val onLinkLane: Boolean get() = purpose == Purpose.ACK || purpose == Purpose.AUTH_REPLY
     }
 }
 
 /**
  * The GATT operations waiting to run, at most one of them in flight: Android allows one
  * outstanding operation per connection, so the next starts only after the previous was answered.
+ *
+ * Two lanes, each in arrival order. The link lane holds what the ring is waiting for (page and
+ * heartbeat acknowledgements, the auth reply); the main lane holds the bring-up steps and the
+ * feature writes. When the operation in flight is answered, the next one comes from the link lane
+ * if it holds any; nothing ever cuts into the operation in flight (PORTING.md D-190).
  * Owned by the link's event loop; not thread-safe.
  */
 internal class OpQueue {
-    private val waiting = ArrayDeque<GattOp>()
+    private val link = ArrayDeque<GattOp>()
+    private val main = ArrayDeque<GattOp>()
 
     /** The operation submitted and not yet answered, if any. */
     var inFlight: GattOp? = null
         private set
 
     fun add(op: GattOp) {
-        waiting.addLast(op)
+        if (op is GattOp.Write && op.onLinkLane) link.addLast(op) else main.addLast(op)
     }
 
     /** Takes the next operation and marks it in flight; null while one is in flight or none waits. */
     fun startNext(): GattOp? {
         if (inFlight != null) return null
-        val next = waiting.removeFirstOrNull() ?: return null
+        val next = link.removeFirstOrNull() ?: main.removeFirstOrNull() ?: return null
         inFlight = next
         return next
     }
@@ -89,9 +110,10 @@ internal class OpQueue {
 
     /** Empties the queue; returns every operation it held, the in-flight one first. */
     fun clear(): List<GattOp> {
-        val all = listOfNotNull(inFlight) + waiting
+        val all = listOfNotNull(inFlight) + link + main
         inFlight = null
-        waiting.clear()
+        link.clear()
+        main.clear()
         return all
     }
 }

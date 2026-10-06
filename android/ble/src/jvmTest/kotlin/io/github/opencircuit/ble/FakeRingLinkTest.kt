@@ -50,6 +50,35 @@ class FakeRingLinkTest {
     }
 
     @Test
+    fun aFramesCollectorThatStopsLeavesTheRestAndLaterFramesForTheNextCollector() = runTest {
+        val link = FakeRingLink(Fixtures.ring)
+        link.emitFrame(Fixtures.challengeFrame)
+        link.emitFrame(Fixtures.firstDataFrame)
+
+        val first = link.frames.first()
+        link.emitFrame(Fixtures.sleepPage4c)
+        val rest = link.frames.take(2).toList()
+
+        assertContentEquals(Fixtures.challengeFrame, first)
+        assertContentEquals(Fixtures.firstDataFrame, rest[0])
+        assertContentEquals(Fixtures.sleepPage4c, rest[1])
+    }
+
+    @Test
+    fun aTeardownsCollectorThatStopsLeavesLaterTeardownsForTheNextCollector() = runTest {
+        val link = FakeRingLink(Fixtures.ring)
+        val dropped = LinkTeardown(HistoryDrainPlan.TeardownReason.LINK_DROPPED, undeliveredFrames = 0)
+        val userChoice = LinkTeardown(HistoryDrainPlan.TeardownReason.USER_DISCONNECTED, undeliveredFrames = 1)
+        link.emitTeardown(dropped)
+
+        val first = link.teardowns.first()
+        link.emitTeardown(userChoice)
+
+        assertEquals(dropped, first)
+        assertEquals(userChoice, link.teardowns.first())
+    }
+
+    @Test
     fun teardownsAreDeliveredAsEmitted() = runTest {
         val link = FakeRingLink(Fixtures.ring)
         val teardown = LinkTeardown(HistoryDrainPlan.TeardownReason.LINK_DROPPED, undeliveredFrames = 2)

@@ -44,7 +44,8 @@ class AdapterPowerTest {
         assertEquals(SendResult.Failed(SendFailure.LINK_LOST), write.getCompleted())
         assertEquals("close", ring.log.last())
         assertEquals(LinkState.BluetoothOff, link.state.value)
-        assertEquals(listOf(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 0)), teardowns)
+        // The frame that authenticated the connection was never collected.
+        assertEquals(listOf(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 1)), teardowns)
 
         advance(10 * 60_000)
         assertEquals(1, ring.connects.size, "no attempt while Bluetooth is off")
