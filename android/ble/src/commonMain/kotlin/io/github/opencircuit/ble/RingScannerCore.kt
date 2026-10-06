@@ -53,6 +53,28 @@ internal class RingScannerCore(private val port: ScanPort) : RingScanner, ScanDi
             val rings = LinkedHashMap<String, RememberedRing>()
             var quiet: Job? = null
             var generation = 0
+
+            /** A ring's advertisement: a new ring is reported and re-arms the quiet window. */
+            suspend fun onAdvertisement(event: ScanEvent.Result) {
+                val ring = ringOf(event) ?: return
+                lastMatchFlow.value = ScanDiagnostic(ring.addressType, event.rawScanRecord, event.rssi)
+                val known = rings[ring.address]
+                if (known == null) {
+                    rings[ring.address] = ring
+                    send(ScanUpdate.Found(rings.values.toList()))
+                    quiet?.cancel()
+                    val armed = ++generation
+                    quiet = launch {
+                        delay(QUIET_WINDOW.toMillis())
+                        inbox.trySend(Input.QuietElapsed(armed))
+                    }
+                } else if (ring.name != null && ring.name != known.name) {
+                    // A name in a later advertisement is kept; a frame without one keeps the old.
+                    rings[ring.address] = known.copy(name = ring.name)
+                    send(ScanUpdate.Found(rings.values.toList()))
+                }
+            }
+
             launch {
                 delay(SCAN_TIMEOUT.toMillis())
                 inbox.trySend(Input.TimedOut)
@@ -64,25 +86,7 @@ internal class RingScannerCore(private val port: ScanPort) : RingScanner, ScanDi
                             send(ScanUpdate.Failed(event.errorCode))
                             break@loop
                         }
-                        is ScanEvent.Result -> {
-                            val ring = ringOf(event) ?: continue@loop
-                            lastMatchFlow.value = ScanDiagnostic(ring.addressType, event.rawScanRecord, event.rssi)
-                            val known = rings[ring.address]
-                            if (known == null) {
-                                rings[ring.address] = ring
-                                send(ScanUpdate.Found(rings.values.toList()))
-                                quiet?.cancel()
-                                val armed = ++generation
-                                quiet = launch {
-                                    delay(QUIET_WINDOW.toMillis())
-                                    inbox.trySend(Input.QuietElapsed(armed))
-                                }
-                            } else if (ring.name != null && ring.name != known.name) {
-                                // A name in a later advertisement is kept; a frame without one keeps the old.
-                                rings[ring.address] = known.copy(name = ring.name)
-                                send(ScanUpdate.Found(rings.values.toList()))
-                            }
-                        }
+                        is ScanEvent.Result -> onAdvertisement(event)
                     }
                     is Input.QuietElapsed -> {
                         if (input.generation != generation) continue@loop // a newer ring re-armed it
