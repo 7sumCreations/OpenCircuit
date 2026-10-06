@@ -30,6 +30,21 @@ class BondStateCodeTest {
         assertFailsWith<IllegalStateException> { bondStateFromCode(Int.MIN_VALUE) }
     }
 
+    /**
+     * A bond broadcast whose state extra is missing or unknown says nothing about the bond: it is
+     * ignored, never read as "not bonded", which after `BONDING` would fail the pairing. The bond
+     * timeout's own re-read covers a broadcast that never says anything usable.
+     */
+    @Test
+    fun aBroadcastCodeThatIsMissingOrUnknownIsIgnored() {
+        assertEquals(null, bondStateFromCodeOrNull(null))
+        assertEquals(null, bondStateFromCodeOrNull(13))
+        assertEquals(null, bondStateFromCodeOrNull(Int.MIN_VALUE))
+        assertEquals(GattPort.BondState.BONDED, bondStateFromCodeOrNull(12))
+        assertEquals(GattPort.BondState.BONDING, bondStateFromCodeOrNull(11))
+        assertEquals(GattPort.BondState.NONE, bondStateFromCodeOrNull(10))
+    }
+
     /** Pinned to literals typed here: `BluetoothDevice.BOND_NONE` / `BOND_BONDING` / `BOND_BONDED`. */
     @Test
     fun theCodesAreAndroidsPublicConstants() {

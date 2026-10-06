@@ -39,7 +39,8 @@ internal class AndroidLinkBroadcasts(
         override fun onReceive(context: Context, intent: Intent) {
             val device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
             if (!device.address.equals(ring.address, ignoreCase = true)) return
-            core.onBondState(bondStateOf(intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)))
+            val code = if (intent.hasExtra(BluetoothDevice.EXTRA_BOND_STATE)) intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, 0) else null
+            bondStateFromCodeOrNull(code)?.let(core::onBondState)
         }
     }
 
@@ -95,11 +96,4 @@ private fun adapterStateOf(state: Int): AdapterState? = when (state) {
     BluetoothAdapter.STATE_TURNING_ON -> AdapterState.TURNING_ON
     BluetoothAdapter.STATE_TURNING_OFF -> AdapterState.TURNING_OFF
     else -> null
-}
-
-/** `BluetoothDevice.BOND_*` → [GattPort.BondState]: bonding, bonded, and anything else not bonded. */
-private fun bondStateOf(state: Int): GattPort.BondState = when (state) {
-    BluetoothDevice.BOND_BONDED -> GattPort.BondState.BONDED
-    BluetoothDevice.BOND_BONDING -> GattPort.BondState.BONDING
-    else -> GattPort.BondState.NONE
 }

@@ -24,10 +24,18 @@ internal object BondStateCode {
  *   defines. The state is unknown then, not "not bonded": the link counts a throwing read as a
  *   failed operation and reconnects (PORTING.md D-187), where "not bonded" would ask to bond.
  */
-internal fun bondStateFromCode(code: Int?): GattPort.BondState = when (code) {
+internal fun bondStateFromCode(code: Int?): GattPort.BondState =
+    bondStateFromCodeOrNull(code)
+        ?: throw IllegalStateException(if (code == null) "bond state unreadable: no device" else "bond state unknown: $code")
+
+/**
+ * The bond state for Android's raw [code], or null when [code] is missing or not one of the three
+ * codes Android defines. A bond broadcast with such a state is ignored: it says nothing about the
+ * bond, and reading it as "not bonded" would fail a pairing in progress.
+ */
+internal fun bondStateFromCodeOrNull(code: Int?): GattPort.BondState? = when (code) {
     BondStateCode.BONDED -> GattPort.BondState.BONDED
     BondStateCode.BONDING -> GattPort.BondState.BONDING
     BondStateCode.NONE -> GattPort.BondState.NONE
-    null -> throw IllegalStateException("bond state unreadable: no device")
-    else -> throw IllegalStateException("bond state unknown: $code")
+    else -> null
 }
