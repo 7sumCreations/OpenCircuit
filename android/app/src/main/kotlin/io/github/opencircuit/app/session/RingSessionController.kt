@@ -46,7 +46,7 @@ class RingSessionController(
     val dispatcher = FrameDispatcher(log)
 
     /** The ring's battery and status, from its descriptors. */
-    val deviceStatus = DeviceStatusModel()
+    val deviceStatus = DeviceStatusModel(scope, monotonicMillis)
 
     /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames. */
     val liveMeasure = LiveMeasureController(send = link::send, scope = scope, monotonicMillis = monotonicMillis)
