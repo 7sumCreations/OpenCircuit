@@ -22,9 +22,10 @@ import java.util.UUID
  * Uses the API 33 forms (`writeCharacteristic(c, value, type)`, `writeDescriptor(d, value)`, the
  * value-carrying read and notification callbacks). Every write is a write with response.
  * The app holds `BLUETOOTH_CONNECT`; when it is revoked a call throws [SecurityException], which
- * is caught and reported as a refused operation.
+ * is caught and reported as a refused operation. The bond state read is the exception: it has no
+ * "refused" answer, so its [SecurityException] reaches the link, which counts it as a failed read.
  */
-@SuppressLint("MissingPermission") // the caller holds BLUETOOTH_CONNECT; a revocation is caught below
+@SuppressLint("MissingPermission") // the caller holds BLUETOOTH_CONNECT; a revocation is caught below or by the link
 internal class AndroidGattPort(private val context: Context) : GattPort {
 
     private val adapter: BluetoothAdapter? = context.getSystemService(BluetoothManager::class.java)?.adapter
@@ -65,18 +66,12 @@ internal class AndroidGattPort(private val context: Context) : GattPort {
             BluetoothStatusCodes.SUCCESS
     }
 
-    override fun bondState(): GattPort.BondState {
-        val state = try {
-            device?.bondState
-        } catch (_: SecurityException) {
-            null
-        }
-        return when (state) {
-            BluetoothDevice.BOND_BONDED -> GattPort.BondState.BONDED
-            BluetoothDevice.BOND_BONDING -> GattPort.BondState.BONDING
-            else -> GattPort.BondState.NONE
-        }
-    }
+    /**
+     * Throws when the state cannot be read (no device, a revoked permission, a code Android does
+     * not define): the link counts that as a failed operation and reconnects (PORTING.md D-187).
+     * Reading it as "not bonded" would ask Android to bond and show a pairing failure instead.
+     */
+    override fun bondState(): GattPort.BondState = bondStateFromCode(device?.bondState)
 
     override fun createBond(): Boolean = refusedOnError { device?.createBond() == true }
 
