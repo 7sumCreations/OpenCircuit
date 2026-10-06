@@ -178,3 +178,56 @@ with:
 ```kotlin
 testImplementation(testFixtures(project(":ble")))
 ```
+
+## Installing the app
+
+The app (`:app`, package `io.github.opencircuit.android`) is published as a signed APK on this
+fork's GitHub Releases, as a **pre-release** while it is in early development. The first is
+`android-v0.1.0`: onboarding, finding and pairing the ring, the connection card (battery,
+charging, the ring's state) and a live heart-rate or SpO₂ reading. It does not sync history and
+does not write to Health Connect yet. Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
+and its SHA-256 checksum file, and the release notes give the signing certificate's digest.
+
+> **Not affiliated with, authorized, or endorsed by RingConn or JZ_Tech. Not a medical device.**
+> Readings are estimates from a consumer ring and are not for diagnosis or treatment.
+
+**With Obtainium.** Add the app with these settings, so updates come straight from GitHub:
+
+| Setting | Value |
+|---|---|
+| Source | GitHub, `https://github.com/cpw7776/OpenCircuit` |
+| Include prereleases | **On** (every Android release is a pre-release for now) |
+| Fallback to older releases | **On** (the default) |
+| Filter release titles by regular expression | `^OpenCircuit Android ` (the fork may hold other releases) |
+| Filter APKs by regular expression | `^OpenCircuit-Android-.*\.apk$` |
+| Verify the 'latest' tag | **Off** (GitHub's "latest" never points at a pre-release) |
+| Version detection | the default |
+| Expected signing certificate hashes | the SHA-256 digest from [`android/README.md`](../android/README.md), "Release signing certificate" (filled in at the first release) |
+
+With the expected hash set, Obtainium refuses an APK signed with any other key. Android refuses
+an update signed with a different key anyway, so a first install from the wrong source cannot
+later be updated from this one.
+
+**By hand.** Download the APK and its `.sha256` file from the release, then check both before
+installing:
+
+```sh
+shasum -a 256 -c OpenCircuit-Android-0.1.0.apk.sha256
+apksigner verify --verbose --print-certs OpenCircuit-Android-0.1.0.apk
+```
+
+The first must print `OK`; the second's "Signer #1 certificate SHA-256 digest" must match the
+README. At the APK's minimum Android version `apksigner` reports `v3 … true` and `v2 … false`:
+it checks only the strongest scheme needed there (add `--min-sdk-version 24` to see v2 checked
+too).
+
+**What it asks for.** Android 14 or later. The only permission is "Nearby devices"
+(`BLUETOOTH_SCAN`, declared never to be used for location, and `BLUETOOTH_CONNECT`), asked the
+first time you tap Scan & connect, never at install or during onboarding. The app declares no
+`INTERNET` permission, so it cannot reach any server. When it finds a ring, the app first explains
+Android's companion-device sheet ("Allow OpenCircuit to access …?"), whose wording is Android's
+generic text for any companion device. Allowing it usually lets the pairing finish without another
+prompt. If you cancel the sheet, or it cannot find the ring, "Pair without the system sheet" on the
+"Pairing cancelled" card connects anyway, and Android asks you to confirm the pairing instead (it
+may appear as a notification). "Stop reconnecting" forgets the ring in the app; the phone's own
+Bluetooth pairing is left alone.

@@ -13,11 +13,12 @@ needs no Google Play Services (the target phone runs GrapheneOS).
 
 ## Status
 
-**Early development, no APK yet.** The Gradle project and the `:ringkit` module
-(the pure-Kotlin protocol and decoding core, ported from the iOS `OpenCircuitKit`) are
-being built first. BLE, storage, Health Connect and the app UI come later. Signed APKs
-will be published on GitHub Releases, installable with Obtainium, once the app can
-actually sync a ring.
+**Early development.** The protocol and decoding core (`:ringkit`, ported from the iOS
+`OpenCircuitKit`), the on-device store (`:store`), the Bluetooth link (`:ble`) and a first
+app (`:app`) exist. The app onboards, finds and pairs the ring, shows its connection and
+battery, and takes a live heart-rate or SpO₂ reading. History sync and Health Connect come
+later. Signed APKs are published as pre-releases on GitHub Releases, installable with
+Obtainium: see [`../docs/ANDROID.md`](../docs/ANDROID.md), "Installing the app".
 
 ## Where it comes from
 
@@ -29,7 +30,7 @@ commit it tracks, and how to check for and adopt newer upstream work, are record
 
 ## Building and testing
 
-Requires JDK 17 and the Android SDK (compileSdk 36). Tell Gradle where the SDK is, either
+Requires JDK 17 and the Android SDK (platform 37 for the app, 36 for the libraries). Tell Gradle where the SDK is, either
 with the `ANDROID_HOME` environment variable or with a `local.properties` file in this folder
 holding one line, `sdk.dir=<path to your Android SDK>`. That file is machine-specific and
 ignored by git; never commit it. From this folder (`android/`):
