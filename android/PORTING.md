@@ -637,6 +637,7 @@ One line per row of the table below, in order: number · title · owning epic �
 - **D-179** · DEFERRED: the nap Health-write bookkeeping · E10 (open; raised in E6b)
 - **D-180** · DEFERRED: the pending ring sleep segments kept between drains · E9 (open; raised in E6b)
 - **D-181** · NOT PORTED: a night owned by another device (after the pin) · E19 (open; raised in E6b)
+- **D-182** · DEVIATION (improvement): the naps of a day whose midnight the zone skips end at the next day's midnight · E6b (done)
 - **D-183** · DEVIATION (improvement): auth starts only after the notification descriptor write is confirmed · E7 (done)
 - **D-184** · DEVIATION (improvement): one GATT operation at a time, each finished by its own callback · E7 (in progress: the queue is done; per-operation timeouts and the acknowledgement lane are still to come)
 
