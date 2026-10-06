@@ -50,7 +50,7 @@ class AppContainer(context: Context) {
      * the demo ring; choosing and remembering a real ring is not built yet.
      */
     val ringSession: RingSessionController? by lazy {
-        VariantLinks.demoLink?.invoke()?.let { RingSessionController(it, appScope, monotonicMillis, log) }
+        VariantLinks.demoLink?.invoke(appScope)?.let { RingSessionController(it, appScope, monotonicMillis, log) }
     }
 
     /** The Ring screen's title; debug builds say when the ring is the demo. */

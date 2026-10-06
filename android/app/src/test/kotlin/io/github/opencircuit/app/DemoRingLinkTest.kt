@@ -31,7 +31,7 @@ class DemoRingLinkTest {
 
     @Test
     fun connectingAuthenticatesAndSendsOneDescriptorThroughTheSession() = runTest {
-        val link = DemoRingLink()
+        val link = DemoRingLink(backgroundScope)
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         assertEquals(LinkState.Idle, link.state.value)
         assertEquals("Demo ring", link.ring.name)
@@ -46,7 +46,7 @@ class DemoRingLinkTest {
 
     @Test
     fun connectingAgainWhileConnectedSendsNoMoreFrames() = runTest {
-        val link = DemoRingLink()
+        val link = DemoRingLink(backgroundScope)
         val received = mutableListOf<ByteArray>()
         backgroundScope.launch { link.frames.collect { received += it } }
 
@@ -61,7 +61,7 @@ class DemoRingLinkTest {
 
     @Test
     fun sendIsRefusedBeforeConnectingAndForTheReservedAuthCommands() = runTest {
-        val link = DemoRingLink()
+        val link = DemoRingLink(backgroundScope)
 
         assertEquals(SendResult.Refused(RefusalReason.NOT_AUTHENTICATED), link.send(hex("d00000")))
         link.connect()
@@ -72,7 +72,7 @@ class DemoRingLinkTest {
 
     @Test
     fun disconnectingTearsDownTheConnectionOnceAndGoesIdle() = runTest {
-        val link = DemoRingLink()
+        val link = DemoRingLink(backgroundScope)
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         controller.connect()
         runCurrent()
@@ -89,7 +89,7 @@ class DemoRingLinkTest {
 
     @Test
     fun aHeartRateMeasureOnTheDemoRingWarmsUpThenLocksAndSettles() = runTest {
-        val link = DemoRingLink()
+        val link = DemoRingLink(backgroundScope)
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         controller.connect()
         runCurrent()
@@ -110,7 +110,7 @@ class DemoRingLinkTest {
 
     @Test
     fun anSpo2MeasureOnTheDemoRingReadsAnEstimate() = runTest {
-        val link = DemoRingLink()
+        val link = DemoRingLink(backgroundScope)
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         controller.connect()
         runCurrent()
@@ -125,7 +125,7 @@ class DemoRingLinkTest {
 
     @Test
     fun theDemoRingStartsWarmingUpAgainAfterEachEntryAndIgnoresAPollWithNoMode() = runTest {
-        val link = DemoRingLink()
+        val link = DemoRingLink(backgroundScope)
         val received = mutableListOf<ByteArray>()
         backgroundScope.launch { link.frames.collect { received += it } }
         link.connect()
@@ -146,8 +146,60 @@ class DemoRingLinkTest {
     }
 
     @Test
+    fun whileConnectedTheDemoRingSendsADescriptorEvery30Seconds() = runTest {
+        val link = DemoRingLink(backgroundScope)
+        val received = mutableListOf<ByteArray>()
+        backgroundScope.launch { link.frames.collect { received += it } }
+        fun descriptors() = received.count { it[0] == 0x10.toByte() }
+
+        link.connect()
+        runCurrent()
+        assertEquals(1, descriptors(), "one as it connects")
+        advanceTo(29_999)
+        assertEquals(1, descriptors())
+        advanceTo(30_000)
+        assertEquals(2, descriptors())
+        advanceTo(90_000)
+        assertEquals(4, descriptors())
+
+        link.disconnect()
+        advanceTo(300_000)
+        assertEquals(4, descriptors(), "none after a disconnect")
+        link.connect()
+        advanceTo(330_000)
+        assertEquals(6, descriptors(), "again after a reconnect: one at once, one 30 s later")
+    }
+
+    @Test
+    fun theDemoRingAnswersAStatusQueryWithADescriptorAsTheRingDoes() = runTest {
+        val link = DemoRingLink(backgroundScope)
+        val received = mutableListOf<ByteArray>()
+        backgroundScope.launch { link.frames.collect { received += it } }
+        link.connect()
+        runCurrent()
+        received.clear()
+
+        link.send(hex("d00000"))
+        runCurrent()
+
+        assertEquals(listOf(0x10), received.map { it[0].toInt() and 0xFF })
+    }
+
+    @Test
+    fun throughTheSessionTheDemoBatteryNeverGoesOutOfDate() = runTest {
+        val link = DemoRingLink(backgroundScope)
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
+        controller.connect()
+        advanceTo(10 * 60_000)
+
+        assertNull(controller.deviceStatus.state.value.batteryAgeMillis)
+        assertEquals(72, controller.deviceStatus.state.value.batteryPercent)
+        assertNull(controller.keepalive.problem.value)
+    }
+
+    @Test
     fun eachFlowTakesOneCollection() = runTest {
-        val link = DemoRingLink()
+        val link = DemoRingLink(backgroundScope)
         RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it }).start()
         runCurrent()
 

@@ -10,7 +10,11 @@ import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.Frame
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,14 +32,16 @@ import kotlinx.coroutines.flow.consumeAsFlow
  * meets: each flow takes one collection for the demo's lifetime (the real link lets a new
  * collector take over after one stops), and the app's session collects each flow once.
  * [connect] goes straight to [LinkState.Authenticated] and sends one device-status descriptor
- * with a battery of 72 %; [disconnect] tears the connection down once and goes [LinkState.Idle].
+ * with a battery of 72 %, then another every 30 s in [scope] and one in answer to each
+ * `d0 00 00`, as the ring does; [disconnect] stops them, tears the connection down once and
+ * goes [LinkState.Idle].
  *
  * It answers the live measure like a worn ring: after `06 01 00` / `06 02 00` and `07 00 00`,
  * each `95 00 00` poll gets one `0x15` frame. Heart rate sends the warm-up value 8 for the first
  * two polls after an entry, then made-up resting values; SpO₂ sends one frame without a valid
  * reading, then made-up values in the high 90s. A poll before any mode was chosen gets nothing.
  */
-class DemoRingLink : RingLink {
+class DemoRingLink(private val scope: CoroutineScope) : RingLink {
 
     /** A placeholder address that names no real device. */
     override val ring = RememberedRing("AA:BB:CC:DD:EE:00", AddressType.RANDOM, "Demo ring")
@@ -50,7 +56,8 @@ class DemoRingLink : RingLink {
     override val frames: Flow<ByteArray> = frameChannel.consumeAsFlow()
     override val teardowns: Flow<LinkTeardown> = teardownChannel.consumeAsFlow()
 
-    // The live measure the demo is answering. Guarded by `this`.
+    // The live measure the demo is answering, and the descriptor timer. Guarded by `this`.
+    private var descriptorJob: Job? = null
     private var liveMode: Int? = null
     private var pollsSinceEntry = 0
     private var valueIndex = 0
@@ -70,6 +77,8 @@ class DemoRingLink : RingLink {
         val opcode = command[0].toInt() and 0xFF
         val sub = command[1].toInt() and 0xFF
         when {
+            // The ring answers the status query with its descriptor (PROTOCOL.md §5.4).
+            opcode == 0xd0 -> frameChannel.trySend(demoDescriptor())
             opcode == 0x06 && (sub == HEART_RATE_MODE || sub == SPO2_MODE) -> liveMode = sub
             opcode == 0x07 -> pollsSinceEntry = 0
             opcode == 0x95 -> liveMode?.let { mode ->
@@ -102,11 +111,20 @@ class DemoRingLink : RingLink {
         infoFlow.value = LinkInfo(bonded = true)
         stateFlow.value = LinkState.Authenticated
         frameChannel.trySend(demoDescriptor())
+        // The ring also sends its descriptor on its own every 30–60 s (PROTOCOL.md §5.4).
+        descriptorJob = scope.launch {
+            while (true) {
+                delay(DESCRIPTOR_EVERY_MILLIS)
+                frameChannel.trySend(demoDescriptor())
+            }
+        }
     }
 
     @Synchronized
     override fun disconnect() {
         if (stateFlow.value == LinkState.Idle) return
+        descriptorJob?.cancel()
+        descriptorJob = null
         stateFlow.value = LinkState.Idle
         infoFlow.value = LinkInfo()
         teardownChannel.trySend(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 0))
@@ -116,6 +134,9 @@ class DemoRingLink : RingLink {
         command.size >= 2 && command[0] == 0x01.toByte() && (command[1] == 0x00.toByte() || command[1] == 0x01.toByte())
 
     private companion object {
+        /** How often the demo sends its descriptor unasked while connected. */
+        const val DESCRIPTOR_EVERY_MILLIS = 30_000L
+
         const val HEART_RATE_MODE = 0x01
         const val SPO2_MODE = 0x02
 
