@@ -19,6 +19,8 @@ data class SessionTeardowns(
     val count: Int = 0,
     /** The most recent one, or null if none yet. */
     val last: LinkTeardown? = null,
+    /** Frames the link dropped at those teardowns, in all. */
+    val undeliveredFrames: Int = 0,
 )
 
 /**
@@ -66,6 +68,9 @@ class RingSessionController(
     /** Where the link stands. */
     val state: StateFlow<LinkState> get() = link.state
 
+    /** The app's own timings of this link's connections. */
+    val timer = ConnectionTimer(monotonicMillis)
+
     private val teardownsFlow = MutableStateFlow(SessionTeardowns())
 
     /** The torn-down connections seen so far. */
@@ -87,19 +92,25 @@ class RingSessionController(
         keepalive.start()
         scope.launch {
             link.teardowns.collect { teardown ->
-                teardownsFlow.update { SessionTeardowns(count = it.count + 1, last = teardown) }
+                teardownsFlow.update {
+                    SessionTeardowns(count = it.count + 1, last = teardown, undeliveredFrames = it.undeliveredFrames + teardown.undeliveredFrames)
+                }
                 liveMeasure.onLinkLost()
             }
         }
         // `state` is a StateFlow, so this is not a second collector of anything single-collector.
         scope.launch {
-            link.state.collect { if (it != LinkState.Authenticated) liveMeasure.onLinkLost() }
+            link.state.collect {
+                timer.onState(it)
+                if (it != LinkState.Authenticated) liveMeasure.onLinkLost()
+            }
         }
     }
 
     /** Starts collecting if not yet started, then asks the link to connect. */
     fun connect() {
         start()
+        timer.onConnect()
         link.connect()
     }
 

@@ -1,6 +1,8 @@
 package io.github.opencircuit.app.demo
 
 import io.github.opencircuit.ble.AddressType
+import io.github.opencircuit.ble.LinkDiagnostic
+import io.github.opencircuit.ble.LinkDiagnostics
 import io.github.opencircuit.ble.LinkInfo
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
@@ -41,9 +43,18 @@ import kotlinx.coroutines.flow.consumeAsFlow
  * two polls after an entry, then made-up resting values; SpO₂ sends one frame without a valid
  * reading, then made-up values in the high 90s. A poll before any mode was chosen gets nothing.
  */
-class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable {
+class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable, LinkDiagnostics {
 
     override val ring = RING
+
+    private val diagnosticsFlow = MutableStateFlow<List<LinkDiagnostic>>(emptyList())
+
+    /** What the demo "did", in the real link's words: connect, Authenticated, disconnected, closed. */
+    override val diagnostics: StateFlow<List<LinkDiagnostic>> = diagnosticsFlow.asStateFlow()
+
+    private fun note(event: String, detail: String = "") {
+        diagnosticsFlow.value = (diagnosticsFlow.value + LinkDiagnostic(0, event, detail)).takeLast(DIAGNOSTICS_KEPT)
+    }
 
     // Set by close(): like the real link, a closed demo link never connects again.
     private var closed = false
@@ -110,8 +121,10 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable 
     @Synchronized
     override fun connect() {
         if (closed || stateFlow.value != LinkState.Idle) return
+        note("connect started")
         infoFlow.value = LinkInfo(bonded = true)
         stateFlow.value = LinkState.Authenticated
+        note("Authenticated", "demo ring")
         frameChannel.trySend(demoDescriptor())
         // The ring also sends its descriptor on its own every 30–60 s (PROTOCOL.md §5.4).
         descriptorJob = scope.launch {
@@ -130,6 +143,7 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable 
         stateFlow.value = LinkState.Idle
         infoFlow.value = LinkInfo()
         teardownChannel.trySend(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 0))
+        note("disconnected", "by the user")
     }
 
     /** Ends the demo link for good: disconnects (one user-disconnected teardown if connected) and never connects again. */
@@ -137,6 +151,7 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable 
     override fun close() {
         disconnect()
         closed = true
+        note("closed")
     }
 
     private fun isReservedAuthCommand(command: ByteArray): Boolean =
@@ -148,6 +163,9 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable 
 
         /** How often the demo sends its descriptor unasked while connected. */
         private const val DESCRIPTOR_EVERY_MILLIS = 30_000L
+
+        /** As many diagnostics as the real link keeps. */
+        private const val DIAGNOSTICS_KEPT = 64
 
         private const val HEART_RATE_MODE = 0x01
         private const val SPO2_MODE = 0x02

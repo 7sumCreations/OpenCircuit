@@ -48,6 +48,7 @@ class LaunchReconnectTest {
             scope = backgroundScope,
             log = {},
             pairing = CompanionPairing(FakeCompanionPort()) {},
+            monotonicMillis = { testScheduler.currentTime },
         )
         val viewModel = RingViewModel(under.sessions, title = "Ring", scope = backgroundScope, connectFlow = flow)
         runCurrent()

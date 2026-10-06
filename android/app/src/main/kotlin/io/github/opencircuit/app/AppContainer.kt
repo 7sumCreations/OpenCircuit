@@ -12,11 +12,13 @@ import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.data.PrefsRememberedRingStore
 import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
+import io.github.opencircuit.app.details.DetailsSources
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.RingSessions
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.RingScanner
+import io.github.opencircuit.ble.ScanDiagnostics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -91,12 +93,19 @@ class AppContainer(context: Context) {
     val adapterStates: AndroidAdapterStateSource = AndroidAdapterStateSource(context, log)
 
     /**
-     * Builds the scanner for a Scan & connect: `:ble`'s Android scanner (it needs Nearby devices;
+     * The scanner every Scan & connect uses: `:ble`'s Android scanner (it needs Nearby devices;
      * without it, or with Bluetooth off, the scan fails at once), or in debug builds one that
-     * finds the demo ring.
+     * finds the demo ring. One for the process, so the last ring it matched is kept for
+     * Connection details across scans.
      */
-    val ringScannerFactory: RingScannerFactory = RingScannerFactory {
-        VariantLinks.demoScanner?.invoke() ?: RingScanner(context.applicationContext)
+    val ringScanner: RingScanner by lazy { VariantLinks.demoScanner?.invoke() ?: RingScanner(context.applicationContext) }
+
+    /** Hands each Scan & connect the one scanner. */
+    val ringScannerFactory: RingScannerFactory = RingScannerFactory { ringScanner }
+
+    /** What Connection details reads beyond the session: the pairing sheet's outcome, the scanner's last match. */
+    val detailsSources: DetailsSources by lazy {
+        DetailsSources(pairingOutcome = companionPairing.lastOutcome, scanMatch = (ringScanner as? ScanDiagnostics)?.lastMatch)
     }
 
     /** The Ring screen's title; debug builds say when the ring is the demo. */

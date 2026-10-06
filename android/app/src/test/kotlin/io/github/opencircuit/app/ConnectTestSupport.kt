@@ -92,6 +92,7 @@ internal fun TestScope.connectScreen(
         scope = backgroundScope,
         log = { logLines += it },
         pairing = CompanionPairing(companion) { logLines += it },
+        monotonicMillis = { testScheduler.currentTime },
     )
     val viewModel = RingViewModel(sessions = null, title = "Ring", scope = backgroundScope, connectFlow = flow, adapterState = adapterFlow)
     testScheduler.runCurrent()

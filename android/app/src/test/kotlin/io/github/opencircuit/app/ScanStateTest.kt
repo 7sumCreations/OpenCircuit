@@ -70,6 +70,19 @@ class ScanStateTest {
     }
 
     @Test
+    fun theTimeFromScanToSelectionShowsInConnectionDetails() = runTest {
+        val screen = connectScreen(ScriptedScanner { emit(ScanUpdate.Found(listOf(alpha))); delay(2_500); emit(ScanUpdate.Selected(alpha)) })
+        advanceTo(1_000) // the scan starts at 1 s, not at 0
+        fun scanRow() = screen.viewModel.uiState.value.details.rows.single { it.label == "Scan → selected" }.value
+        assertEquals("not measured", scanRow())
+
+        screen.flow.requestScan(granted)
+        advanceTo(3_500)
+
+        assertEquals("2.5 s", scanRow())
+    }
+
+    @Test
     fun severalRingsShowThePickerWithTheSavedRingFirstThenByNameNotInTheOrderFound() = runTest {
         val values = InMemoryKeyValues()
         // The saved ring is stored upper-case; the scan reports it in another case.

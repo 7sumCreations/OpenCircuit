@@ -7,6 +7,10 @@ import io.github.opencircuit.app.connect.ConnectFlowState
 import io.github.opencircuit.app.connect.PairingSheet
 import io.github.opencircuit.app.connect.PermissionSnapshot
 import io.github.opencircuit.app.connect.ScanStep
+import io.github.opencircuit.app.details.ConnectionDetailsPresenter
+import io.github.opencircuit.app.details.ConnectionDetailsUi
+import io.github.opencircuit.app.details.DetailsInput
+import io.github.opencircuit.app.details.DetailsSources
 import io.github.opencircuit.app.live.LiveMeasureState
 import io.github.opencircuit.app.live.MeasureUi
 import io.github.opencircuit.app.live.measureUi
@@ -14,6 +18,8 @@ import io.github.opencircuit.app.session.KeepaliveProblem
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.SessionHost
 import io.github.opencircuit.ble.AdapterState
+import io.github.opencircuit.ble.LinkDiagnostic
+import io.github.opencircuit.ble.LinkDiagnostics
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -33,6 +39,8 @@ data class RingUiState(
     val card: ConnectionCardUi,
     /** The Measure cards and the Live card; null unless the link is authenticated. */
     val measure: MeasureUi? = null,
+    /** The Connection details card. */
+    val details: ConnectionDetailsUi = ConnectionDetailsPresenter.present(DetailsInput()),
 )
 
 /**
@@ -46,6 +54,10 @@ data class RingUiState(
  * (or there is no link yet), it shows what a Scan & connect tap would do now: ready, Nearby
  * devices not allowed, Bluetooth off, or blocked by a device policy, following [adapterState]
  * live. Any other link state shows the link's own words.
+ *
+ * The Connection details card follows the current session's link facts, timings, counters and
+ * diagnostics (when the link keeps them), the pairing sheet's outcome and the scanner's last
+ * match ([details]).
  */
 class RingViewModel(
     private val sessions: SessionHost?,
@@ -53,6 +65,7 @@ class RingViewModel(
     scope: CoroutineScope,
     private val connectFlow: ConnectFlowController? = null,
     adapterState: StateFlow<AdapterState?> = MutableStateFlow(null),
+    details: DetailsSources = DetailsSources(),
 ) : ViewModel(scope) {
 
     /** The Ring screen's state. */
@@ -62,7 +75,7 @@ class RingViewModel(
     private val controller: RingSessionController? get() = sessions?.current?.value
 
     init {
-        fun render(parts: LinkParts, flow: ConnectFlowState, adapter: AdapterState?): RingUiState {
+        fun render(parts: LinkParts, flow: ConnectFlowState, adapter: AdapterState?, detailsInput: DetailsInput): RingUiState {
             val measuring = parts.live.mode != null
             val flowCard = ConnectFlowPresenter.scan(flow)
                 ?: if (parts.link == LinkState.Idle) ConnectFlowPresenter.availability(flow, adapter) else null
@@ -72,10 +85,29 @@ class RingViewModel(
                 // Measuring needs an authenticated link (upstream draws the buttons only when ready, VT:319-337).
                 // Only the charger byte blocks Measure; an inferred charge never does (PORTING D-242).
                 measure = if (parts.link == LinkState.Authenticated) measureUi(parts.live, onCharger = parts.status.onCharger) else null,
+                details = ConnectionDetailsPresenter.present(detailsInput.copy(scanToSelectedMillis = flow.scanToSelectedMillis)),
             )
         }
 
-        val linkParts: Flow<LinkParts> = (sessions?.current ?: MutableStateFlow(null)).flatMapLatest { session ->
+        val current: StateFlow<RingSessionController?> = sessions?.current ?: MutableStateFlow(null)
+        val sessionDetails: Flow<DetailsInput> = current.flatMapLatest { session ->
+            if (session == null) {
+                flowOf(DetailsInput())
+            } else {
+                // Read through the additive interface the link may offer; never through its toString.
+                val diagnostics: Flow<List<LinkDiagnostic>?> = (session.link as? LinkDiagnostics)?.diagnostics ?: flowOf(null)
+                combine(session.link.info, session.timer.timings, session.dispatcher.counts, session.teardowns, diagnostics) { info, timings, counts, teardowns, lines ->
+                    DetailsInput(ring = session.link.ring, info = info, timings = timings, counts = counts, teardowns = teardowns, diagnostics = lines)
+                }
+            }
+        }
+        val scanKept = details.scanMatch != null
+        val detailsInput: Flow<DetailsInput> =
+            combine(sessionDetails, details.pairingOutcome, details.scanMatch ?: flowOf(null)) { input, pairing, scan ->
+                input.copy(pairing = pairing, scan = scan, scanKept = scanKept)
+            }
+
+        val linkParts: Flow<LinkParts> = current.flatMapLatest { session ->
             if (session == null) {
                 flowOf(LinkParts())
             } else {
@@ -86,8 +118,9 @@ class RingViewModel(
         }
         sessions?.reconnectRemembered()
         val flowState: StateFlow<ConnectFlowState> = connectFlow?.state ?: MutableStateFlow(ConnectFlowState())
-        uiState = combine(linkParts, flowState, adapterState, ::render)
-            .stateIn(scope, SharingStarted.Eagerly, render(LinkParts(), flowState.value, adapterState.value))
+        val initialDetails = DetailsInput(pairing = details.pairingOutcome.value, scanKept = scanKept, scan = details.scanMatch?.value)
+        uiState = combine(linkParts, flowState, adapterState, detailsInput, ::render)
+            .stateIn(scope, SharingStarted.Eagerly, render(LinkParts(), flowState.value, adapterState.value, initialDetails))
     }
 
     /**
@@ -98,6 +131,8 @@ class RingViewModel(
     fun onAction(action: RingAction) {
         when (action) {
             is RingAction.Pick -> connectFlow?.pick(action.ring)
+            // The clipboard is the activity's; the text is uiState's details.copyText.
+            RingAction.CopyDetails -> Unit
             // A ring on its charger is not on a finger: no new measure (the button is disabled too).
             is RingAction.Measure -> controller?.let { if (!it.deviceStatus.state.value.onCharger) it.liveMeasure.start(action.mode) }
             RingAction.StopMeasure -> controller?.liveMeasure?.stop()

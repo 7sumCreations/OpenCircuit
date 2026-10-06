@@ -63,6 +63,8 @@ data class ConnectFlowState(
     val phase: ScanPhase = ScanPhase.Idle,
     /** The saved ring, read when a scan starts: marks "Last used" and adds the no-ring hint. */
     val savedRing: RememberedRing? = null,
+    /** From the last scan's start to its ring being selected or picked; null until one was (Connection details). */
+    val scanToSelectedMillis: Long? = null,
 )
 
 /**
@@ -93,6 +95,8 @@ class ConnectFlowController(
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
     private val pairing: CompanionPairing,
+    /** Monotonic milliseconds, for the scan → selected time; virtual time in tests. */
+    private val monotonicMillis: () -> Long,
 ) {
     private val stateFlow = MutableStateFlow(ConnectFlowState())
     private val sheetFlow = MutableStateFlow<PairingSheet?>(null)
@@ -100,6 +104,7 @@ class ConnectFlowController(
     // Set once this session has asked, even when the flag could not be saved. Main-thread only.
     private var askedThisSession = false
     private var scanJob: Job? = null
+    private var scanStartedAt = 0L
 
     val state: StateFlow<ConnectFlowState> = stateFlow.asStateFlow()
 
@@ -182,7 +187,7 @@ class ConnectFlowController(
         val phase = stateFlow.value.phase as? ScanPhase.Choosing ?: return
         val chosen = phase.rings.firstOrNull { RingAddress.same(it.address, ring.address) } ?: return
         stopScan()
-        stateFlow.update { it.copy(phase = ScanPhase.ConfirmPairing(chosen)) }
+        stateFlow.update { it.copy(phase = ScanPhase.ConfirmPairing(chosen), scanToSelectedMillis = monotonicMillis() - scanStartedAt) }
     }
 
     private val scanning: Boolean
@@ -197,6 +202,7 @@ class ConnectFlowController(
 
     private fun startScan() {
         stopScan()
+        scanStartedAt = monotonicMillis()
         stateFlow.update { it.copy(phase = ScanPhase.Scanning(emptyList()), savedRing = rings.load()) }
         scanJob = scope.launch {
             var answered = false
@@ -211,7 +217,8 @@ class ConnectFlowController(
                         is ScanUpdate.Choose -> stateFlow.update { it.copy(phase = ScanPhase.Choosing(update.rings)) }
                         is ScanUpdate.Selected -> {
                             answered = true
-                            stateFlow.update { it.copy(phase = ScanPhase.ConfirmPairing(update.ring)) }
+                            val took = monotonicMillis() - scanStartedAt
+                            stateFlow.update { it.copy(phase = ScanPhase.ConfirmPairing(update.ring), scanToSelectedMillis = took) }
                         }
                         ScanUpdate.NoRingFound -> {
                             answered = true

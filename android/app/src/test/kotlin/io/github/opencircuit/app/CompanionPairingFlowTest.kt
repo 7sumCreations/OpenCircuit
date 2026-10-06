@@ -76,6 +76,7 @@ class CompanionPairingFlowTest {
             scope = backgroundScope,
             log = { logLines += it },
             pairing = pairing,
+            monotonicMillis = { testScheduler.currentTime },
         )
         val viewModel = RingViewModel(under.sessions, title = "Ring", scope = backgroundScope, connectFlow = flow)
         runCurrent()

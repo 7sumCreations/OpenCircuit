@@ -23,6 +23,7 @@ import io.github.opencircuit.ble.AdapterState
 import io.github.opencircuit.ble.AddressType
 import io.github.opencircuit.ble.BluetoothPermission
 import io.github.opencircuit.ble.LinkState
+import io.github.opencircuit.ble.PairingFailure
 import io.github.opencircuit.ble.RememberedRing
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -33,8 +34,10 @@ import org.junit.runner.RunWith
  * The Ring screen drawn on a device for each first-run state, from hand-built states through the
  * real presenter: Nearby devices not allowed (once, and for good), blocked by policy, Bluetooth
  * off, scanning, the picker (saved ring first, a tap picks), no ring found (with and without the
- * saved-ring hint), a failed scan, and one ring selected and connecting. Each has its own words
- * and its own button. Addresses are synthetic.
+ * saved-ring hint), a failed scan, one ring selected and connecting, the explanation before
+ * Android's pairing sheet, waiting for it, pairing cancelled, pairing needed and failed, a ring
+ * that forgot this phone, not streaming, unreachable and connected. Each has its own words and its
+ * own button. Addresses are synthetic.
  */
 @RunWith(AndroidJUnit4::class)
 class RingStatesRenderTest {
@@ -171,5 +174,94 @@ class RingStatesRenderTest {
 
         compose.onNodeWithText("Connecting to RingConn Alpha…").assertIsDisplayed()
         compose.onNodeWithText("Cancel").assertIsDisplayed()
+    }
+
+    @Test
+    fun aChosenRingIsExplainedBeforeAndroidsPairingSheet() {
+        state = idle(ConnectFlowState(permission = BluetoothPermission.GRANTED, phase = ScanPhase.ConfirmPairing(alpha)))
+        show()
+
+        compose.onNodeWithText("Pair with RingConn Alpha").assertIsDisplayed()
+        compose.onNodeWithText("Android will ask you to allow OpenCircuit", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Continue").performClick()
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals(listOf<RingAction>(RingAction.Link(LinkAction.CONTINUE_PAIRING), RingAction.Link(LinkAction.CANCEL_SCAN)), actions)
+    }
+
+    @Test
+    fun waitingForAndroidsSheetSaysWhatToTap() {
+        state = idle(ConnectFlowState(permission = BluetoothPermission.GRANTED, phase = ScanPhase.Pairing(alpha)))
+        show()
+
+        compose.onNodeWithText("Waiting for Android's pairing sheet…").assertIsDisplayed()
+        compose.onNodeWithText("Tap Allow when Android asks about RingConn Alpha.").assertIsDisplayed()
+    }
+
+    @Test
+    fun aRefusedSheetSaysPairingCancelledAndOffersScanAgain() {
+        state = idle(ConnectFlowState(permission = BluetoothPermission.GRANTED, phase = ScanPhase.PairingCancelled))
+        show()
+
+        compose.onNodeWithText("Pairing cancelled").assertIsDisplayed()
+        compose.onNodeWithText("Scan & connect").performClick()
+        assertEquals(listOf<RingAction>(RingAction.Link(LinkAction.SCAN_AND_CONNECT)), actions)
+    }
+
+    @Test
+    fun pairingNeededAsksToConfirmThePromptWhichMayBeANotification() {
+        state = idle(ConnectFlowState(), link = LinkState.PairingNeeded, ringName = alpha.name)
+        show()
+
+        compose.onNodeWithText("Pairing with RingConn Alpha…").assertIsDisplayed()
+        compose.onNodeWithText("Confirm the pairing request — it may appear as a notification.").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").assertIsDisplayed()
+    }
+
+    @Test
+    fun pairingFailedOffersTryAgain() {
+        state = idle(ConnectFlowState(), link = LinkState.PairingFailed(PairingFailure.BOND_TIMED_OUT), ringName = alpha.name)
+        show()
+
+        compose.onNodeWithText("Pairing didn't finish").assertIsDisplayed()
+        compose.onNodeWithText("Try again").performClick()
+        assertEquals(listOf<RingAction>(RingAction.Link(LinkAction.TRY_AGAIN)), actions)
+    }
+
+    @Test
+    fun aRingThatForgotThisPhoneOffersBluetoothSettings() {
+        state = idle(ConnectFlowState(), link = LinkState.BondLostSuspected, ringName = alpha.name)
+        show()
+
+        compose.onNodeWithText("Ring forgot this phone").assertIsDisplayed()
+        compose.onNodeWithText("Bluetooth settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun aRingThatIsNotStreamingSaysSoAndOffersDisconnect() {
+        state = idle(ConnectFlowState(), link = LinkState.NotStreaming, ringName = alpha.name)
+        show()
+
+        compose.onNodeWithText("Ring isn't streaming").assertIsDisplayed()
+        compose.onNodeWithText("Disconnect").assertIsDisplayed()
+    }
+
+    @Test
+    fun anUnreachableRingOffersStopReconnecting() {
+        state = idle(ConnectFlowState(), link = LinkState.WaitingForRing, ringName = alpha.name)
+        show()
+
+        compose.onNodeWithText("Ring unreachable — reconnecting automatically").assertIsDisplayed()
+        compose.onNodeWithText("Stop reconnecting").performClick()
+        assertEquals(listOf<RingAction>(RingAction.Link(LinkAction.STOP_RECONNECTING)), actions)
+    }
+
+    @Test
+    fun aConnectedRingShowsConnectedAndDisconnect() {
+        state = idle(ConnectFlowState(), link = LinkState.Authenticated, ringName = alpha.name)
+        show()
+
+        compose.onNodeWithText("Connected").assertIsDisplayed()
+        compose.onNodeWithText("RingConn Alpha").assertIsDisplayed()
+        compose.onNodeWithText("Disconnect").assertIsDisplayed()
     }
 }

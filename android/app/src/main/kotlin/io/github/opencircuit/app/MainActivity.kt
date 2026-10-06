@@ -2,6 +2,8 @@ package io.github.opencircuit.app
 
 import android.bluetooth.BluetoothAdapter
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -63,8 +65,16 @@ class MainActivity : ComponentActivity() {
                     scope = scope,
                     log = container.log,
                     pairing = container.companionPairing,
+                    monotonicMillis = container.monotonicMillis,
                 )
-                RingViewModel(container.ringSessions, container.ringTitle, scope, connectFlow, container.adapterStates.state)
+                RingViewModel(
+                    container.ringSessions,
+                    container.ringTitle,
+                    scope,
+                    connectFlow,
+                    container.adapterStates.state,
+                    container.detailsSources,
+                )
             }
         }
     }
@@ -117,6 +127,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onRingAction(action: RingAction) {
+        if (action == RingAction.CopyDetails) {
+            copyConnectionDetails()
+            return
+        }
         if (action !is RingAction.Link) {
             ringViewModel.onAction(action)
             return
@@ -150,6 +164,15 @@ class MainActivity : ComponentActivity() {
         } catch (_: ActivityNotFoundException) {
             ringViewModel.onPairingSheetFailed()
         }
+    }
+
+    /**
+     * Puts Connection details on the clipboard, at the user's tap only. The text already has the
+     * ring's address and name masked; nothing leaves the phone unless the user pastes it.
+     */
+    private fun copyConnectionDetails() {
+        val text = ringViewModel.uiState.value.details.copyText
+        getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("OpenCircuit connection details", text))
     }
 
     /** Android's "Nearby devices" dialog for both permissions; it answers at once if refused for good. */
