@@ -30,7 +30,15 @@ class LiveMeasureStopTest {
         controller.start()
         link.fake.setState(LinkState.Authenticated)
         testScheduler.runCurrent()
+        // The keepalive's d0 as the link authenticates is KeepaliveTickerTest's to judge, not these tests'.
+        link.clear()
         return controller
+    }
+
+    /** After a measure ends the app may still ask for the ring's status (`d0 00 00`), and nothing else. */
+    private fun assertOnlyStatusQueriesAfter(link: TimedRingLink, count: Int, message: String) {
+        val after = link.writes.drop(count)
+        assertTrue(after.all { it.hex == Wire.STATUS_QUERY }, "$message: $after")
     }
 
     @Test
@@ -45,7 +53,8 @@ class LiveMeasureStopTest {
         advanceTo(60_000)
 
         assertFalse(live.isMeasuring.value)
-        assertEquals(writes, link.writes)
+        assertEquals(writes, link.writes.take(writes.size))
+        assertOnlyStatusQueriesAfter(link, writes.size, "no measure write after the stop")
         assertNull(live.state.value.heartRate.failure, "a stop the user asked for is not a failure")
     }
 
@@ -63,7 +72,7 @@ class LiveMeasureStopTest {
         assertFalse(live.isMeasuring.value)
         assertEquals(MeasureFailure.RingDisconnected, live.state.value.heartRate.failure)
         advanceTo(60_000)
-        assertEquals(writes, link.writes, "no poll after the teardown")
+        assertOnlyStatusQueriesAfter(link, writes.size, "no poll after the teardown")
     }
 
     @Test
@@ -76,7 +85,8 @@ class LiveMeasureStopTest {
         link.fake.emitTeardown(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 0))
         advanceTo(10_000)
 
-        assertEquals(listOf(Wire.STATUS_QUERY), link.writes.map { it.hex })
+        assertEquals(listOf(TimedWrite(0, Wire.STATUS_QUERY)), link.writes.filter { it.atMillis < 100 }, "the entry's first write only")
+        assertOnlyStatusQueriesAfter(link, 1, "no mode or 07 00 00 after the teardown")
         assertFalse(live.isMeasuring.value)
     }
 
@@ -97,7 +107,7 @@ class LiveMeasureStopTest {
         advanceTo(120_000)
 
         assertFalse(live.isMeasuring.value, "not resumed")
-        assertEquals(writes, link.writes, "nothing written after the reconnect")
+        assertOnlyStatusQueriesAfter(link, writes.size, "no measure write after the reconnect")
     }
 
     @Test

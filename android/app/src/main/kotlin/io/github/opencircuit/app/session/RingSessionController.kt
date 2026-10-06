@@ -32,7 +32,9 @@ data class SessionTeardowns(
  * Routes: `0x10` / `0x87` descriptors → [deviceStatus]; `0x15` live samples → [liveMeasure];
  * `0x11` heartbeats are ignored (the link already answered them); everything else is counted by
  * the dispatcher. A torn-down connection, or the link leaving [LinkState.Authenticated], stops a
- * running live measure. Every collection runs in [scope], which outlives any one screen.
+ * running live measure. While the link is authenticated and idle, [keepalive] writes the status
+ * query on its cadence and asks for a fresh status after each measure. Every collection runs in
+ * [scope], which outlives any one screen.
  */
 class RingSessionController(
     /** The link to the ring. */
@@ -50,6 +52,16 @@ class RingSessionController(
 
     /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames. */
     val liveMeasure = LiveMeasureController(send = link::send, scope = scope, monotonicMillis = monotonicMillis)
+
+    /** The idle `d0 00 00` keepalive and the status refresh after a measure. */
+    val keepalive = KeepaliveTicker(
+        send = link::send,
+        scope = scope,
+        linkState = link.state,
+        isMeasuring = liveMeasure.isMeasuring,
+        batteryReadings = { deviceStatus.state.value.batteryReadings },
+        log = log,
+    )
 
     /** Where the link stands. */
     val state: StateFlow<LinkState> get() = link.state
@@ -72,6 +84,7 @@ class RingSessionController(
     fun start() {
         if (!started.compareAndSet(false, true)) return
         scope.launch { link.frames.collect { dispatcher.dispatch(it) } }
+        keepalive.start()
         scope.launch {
             link.teardowns.collect { teardown ->
                 teardownsFlow.update { SessionTeardowns(count = it.count + 1, last = teardown) }

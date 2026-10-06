@@ -24,6 +24,9 @@ internal class TimedRingLink(val fake: FakeRingLink, private val now: () -> Long
     /** The times of the writes of [hex]. */
     fun timesOf(hex: String): List<Long> = writes.filter { it.hex == hex }.map { it.atMillis }
 
+    /** Forgets the writes so far, so a test judges only what follows. */
+    fun clear() = log.clear()
+
     override suspend fun send(command: ByteArray): SendResult {
         log += TimedWrite(now(), command.toPlainHex())
         return fake.send(command)

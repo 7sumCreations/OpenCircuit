@@ -79,6 +79,8 @@ class RingSessionTracerTest {
         assertNull(viewModel.uiState.value.measure, "no Measure cards before the ring is authenticated")
         link.fake.setState(LinkState.Authenticated)
         runCurrent()
+        assertEquals(listOf(Wire.STATUS_QUERY), link.writes.map { it.hex }, "the keepalive's d0 as the link authenticates")
+        link.clear()
         assertEquals("No reading yet", viewModel.uiState.value.measure?.heartRate?.caption)
 
         viewModel.onAction(RingAction.Measure(LiveMode.HEART_RATE))
