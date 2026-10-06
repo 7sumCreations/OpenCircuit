@@ -46,6 +46,9 @@ class RingViewModel(
             }.stateIn(scope, SharingStarted.Eagerly, initial)
         }
     }
+
+    /** Handles a Ring-screen action. The screen has none yet; the connection card adds them. */
+    fun onAction(action: RingAction) = Unit
 }
 
 /** A short line for each link state; the full copy and actions per state come with the connection card. */

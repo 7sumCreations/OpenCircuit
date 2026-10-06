@@ -1,0 +1,49 @@
+package io.github.opencircuit.app.ring
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+
+/** What the user can do on the Ring screen. The connection card's actions are added here. */
+sealed interface RingAction
+
+/**
+ * The Ring screen: the connection card (link state and battery). Takes its whole state as a value
+ * so it renders the same from the app or from a hand-built state in a test.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Modifier = Modifier) {
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        topBar = { TopAppBar(title = { Text(state.title) }) },
+    ) { padding ->
+        Column(
+            modifier = Modifier.padding(padding).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ConnectionCard(state)
+        }
+    }
+}
+
+@Composable
+private fun ConnectionCard(state: RingUiState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(state.status, style = MaterialTheme.typography.titleMedium)
+            state.batteryPercent?.let { Text("🔋 $it%", style = MaterialTheme.typography.bodyLarge) }
+        }
+    }
+}

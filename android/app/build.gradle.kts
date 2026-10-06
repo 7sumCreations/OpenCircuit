@@ -84,6 +84,9 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    // ui-test-junit4 alone brings Espresso 3.5.0, which fails on API 36 before any test runs
+    // ("NoSuchMethodException: android.hardware.input.InputManager.getInstance").
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }
 
 tasks.withType<Test>().configureEach {
