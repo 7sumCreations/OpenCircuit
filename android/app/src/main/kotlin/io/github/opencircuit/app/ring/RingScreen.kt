@@ -3,13 +3,10 @@ package io.github.opencircuit.app.ring
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -19,13 +16,16 @@ import androidx.compose.ui.unit.dp
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.live.MeasureSection
 
-/** What the user can do on the Ring screen. The connection card's actions are added here. */
+/** What the user can do on the Ring screen. */
 sealed interface RingAction {
     /** Tapped Measure on the [mode] card: start, re-tap or switch to it. */
     data class Measure(val mode: LiveMode) : RingAction
 
     /** Tapped Stop. */
     data object StopMeasure : RingAction
+
+    /** Tapped the connection card's button. */
+    data class Link(val action: LinkAction) : RingAction
 }
 
 /**
@@ -45,7 +45,7 @@ fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Mod
             modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ConnectionCard(state)
+            ConnectionCard(state.card, onAction = { onAction(RingAction.Link(it)) })
             state.measure?.let { measure ->
                 MeasureSection(
                     measure = measure,
@@ -54,16 +54,6 @@ fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Mod
                     onStop = { onAction(RingAction.StopMeasure) },
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun ConnectionCard(state: RingUiState) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(state.status, style = MaterialTheme.typography.titleMedium)
-            state.batteryPercent?.let { Text("🔋 $it%", style = MaterialTheme.typography.bodyLarge) }
         }
     }
 }

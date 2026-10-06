@@ -1,5 +1,6 @@
 package io.github.opencircuit.app
 
+import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -20,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingScreen
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.ui.OpenCircuitTheme
@@ -52,12 +54,30 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         val state by ringViewModel.uiState.collectAsStateWithLifecycle()
-                        RingScreen(state = state, onAction = ringViewModel::onAction, pulse = !reducedMotion())
+                        RingScreen(
+                            state = state,
+                            onAction = { action ->
+                                if (action is RingAction.Link && action.action.opensSystemSettings) {
+                                    openBluetoothSettings()
+                                } else {
+                                    ringViewModel.onAction(action)
+                                }
+                            },
+                            pulse = !reducedMotion(),
+                        )
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * Opens Android's Bluetooth settings: where a ring that forgot this phone is forgotten in turn,
+ * and where Bluetooth is turned on. Both are the user's own tap, never automatic.
+ */
+private fun ComponentActivity.openBluetoothSettings() {
+    startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
 }
 
 /**

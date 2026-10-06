@@ -12,7 +12,10 @@ import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.live.LivePoint
 import io.github.opencircuit.app.live.MeasureCardUi
 import io.github.opencircuit.app.live.MeasureUi
+import io.github.opencircuit.app.ring.DeviceStatusState
 import io.github.opencircuit.app.ring.RingAction
+import io.github.opencircuit.app.ring.connectionCardUi
+import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.app.ring.RingScreen
 import io.github.opencircuit.app.ring.RingUiState
 import io.github.opencircuit.app.ui.OpenCircuitTheme
@@ -60,7 +63,11 @@ class LiveCardRenderTest {
         compose.setContent {
             OpenCircuitTheme {
                 RingScreen(
-                    state = RingUiState(title = "Ring", status = "Connected", batteryPercent = 72, measure = measure),
+                    state = RingUiState(
+                        title = "Ring",
+                        card = connectionCardUi(LinkState.Authenticated, "Demo ring", DeviceStatusState(batteryPercent = 72), measuring = true, keepaliveProblem = null),
+                        measure = measure,
+                    ),
                     onAction = { actions += it },
                     pulse = pulse,
                 )

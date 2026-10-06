@@ -17,6 +17,8 @@ data class MeasureCardUi(
     val measuring: Boolean,
     /** What the card's button does, in words (also its accessibility label). */
     val actionLabel: String,
+    /** The button can be tapped: false for Measure while the ring charges; Stop always can. */
+    val enabled: Boolean = true,
 )
 
 /** The Live card shown while a measure runs. */
@@ -40,10 +42,13 @@ data class LiveCardUi(
 /** The Measure section of the Ring screen. */
 data class MeasureUi(val heartRate: MeasureCardUi, val spo2: MeasureCardUi, val live: LiveCardUi?)
 
-/** The words and numbers for [state]; pure, so it is tested on the JVM. */
-fun measureUi(state: LiveMeasureState): MeasureUi = MeasureUi(
-    heartRate = card(state, LiveMode.HEART_RATE),
-    spo2 = card(state, LiveMode.SPO2),
+/**
+ * The words and numbers for [state]; pure, so it is tested on the JVM. While [charging] no new
+ * measure can start (a ring on its charger is not on a finger); a running one can still be stopped.
+ */
+fun measureUi(state: LiveMeasureState, charging: Boolean = false): MeasureUi = MeasureUi(
+    heartRate = card(state, LiveMode.HEART_RATE, charging),
+    spo2 = card(state, LiveMode.SPO2, charging),
     live = state.mode?.let { liveCard(state, it) },
 )
 
@@ -62,7 +67,7 @@ fun MeasureFailure.message(): String = when (this) {
     is MeasureFailure.CommandFailed -> "Measurement stopped — the ring stopped answering."
 }
 
-private fun card(state: LiveMeasureState, mode: LiveMode): MeasureCardUi {
+private fun card(state: LiveMeasureState, mode: LiveMode, charging: Boolean): MeasureCardUi {
     val result = if (mode == LiveMode.HEART_RATE) state.heartRate else state.spo2
     val measuring = state.mode == mode
     val caption = when {
@@ -82,6 +87,7 @@ private fun card(state: LiveMeasureState, mode: LiveMode): MeasureCardUi {
         failure = result.failure?.message(),
         measuring = measuring,
         actionLabel = if (measuring) "Stop measuring $name" else "Measure $name",
+        enabled = measuring || !charging,
     )
 }
 

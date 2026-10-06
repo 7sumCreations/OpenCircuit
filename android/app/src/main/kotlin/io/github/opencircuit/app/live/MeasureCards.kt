@@ -66,6 +66,7 @@ fun MeasureCard(card: MeasureCardUi, onMeasure: (LiveMode) -> Unit, onStop: () -
             } else {
                 FilledTonalButton(
                     onClick = { onMeasure(card.mode) },
+                    enabled = card.enabled,
                     modifier = Modifier.semantics { contentDescription = card.actionLabel },
                 ) { Text("Measure") }
             }

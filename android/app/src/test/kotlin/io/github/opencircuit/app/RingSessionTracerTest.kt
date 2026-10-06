@@ -2,7 +2,7 @@ package io.github.opencircuit.app
 
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.ring.RingAction
-import io.github.opencircuit.app.ring.RingUiState
+import io.github.opencircuit.app.ring.LinkAction
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.ble.AddressType
@@ -31,21 +31,23 @@ class RingSessionTracerTest {
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         val viewModel = RingViewModel(controller, title = "Ring", scope = backgroundScope)
         runCurrent()
-        assertEquals(RingUiState(title = "Ring", status = "Not connected", batteryPercent = null), viewModel.uiState.value)
+        assertEquals("Ready", viewModel.uiState.value.card.link.headline)
+        assertNull(viewModel.uiState.value.card.battery)
         assertEquals(1, link.connectCalls, "opening the Ring screen connects the link")
 
         link.setState(LinkState.Connecting)
         runCurrent()
-        assertEquals("Connecting…", viewModel.uiState.value.status)
+        assertEquals("Connecting to Test ring…", viewModel.uiState.value.card.link.headline)
 
         link.setState(LinkState.Authenticated)
         link.emitFrame(TestFrames.wornDescriptor)
         runCurrent()
 
-        assertEquals(
-            RingUiState(title = "Ring", status = "Connected", batteryPercent = 66),
-            viewModel.uiState.value.copy(measure = null),
-        )
+        val state = viewModel.uiState.value
+        assertEquals("Ring", state.title)
+        assertEquals("Test ring", state.card.ringName)
+        assertEquals("Connected", state.card.link.headline)
+        assertEquals(66, state.card.battery?.percent)
         assertEquals("Measure heart rate", viewModel.uiState.value.measure?.heartRate?.actionLabel, "Measure cards once connected")
     }
 
@@ -100,10 +102,16 @@ class RingSessionTracerTest {
     }
 
     @Test
-    fun withoutALinkTheScreenSaysNotConnected() = runTest {
+    fun withoutALinkTheScreenSaysReadyToScan() = runTest {
         val viewModel = RingViewModel(controller = null, title = "Ring", scope = backgroundScope)
         runCurrent()
 
-        assertEquals(RingUiState(title = "Ring", status = "Not connected", batteryPercent = null), viewModel.uiState.value)
+        val state = viewModel.uiState.value
+        assertEquals("Ring", state.title)
+        assertNull(state.card.ringName)
+        assertEquals("Ready", state.card.link.headline)
+        assertEquals(LinkAction.SCAN_AND_CONNECT, state.card.link.action)
+        assertNull(state.card.battery)
+        assertNull(state.measure)
     }
 }
