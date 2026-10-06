@@ -3,6 +3,9 @@ package io.github.opencircuit.app
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import io.github.opencircuit.app.connect.AndroidAdapterStateSource
+import io.github.opencircuit.app.connect.RingConnector
+import io.github.opencircuit.app.connect.RingScannerFactory
 import io.github.opencircuit.app.data.AppPrefs
 import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.data.PrefsRememberedRingStore
@@ -11,6 +14,7 @@ import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
+import io.github.opencircuit.ble.RingScanner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -65,6 +69,29 @@ class AppContainer(context: Context) {
      */
     val ringSession: RingSessionController? by lazy {
         VariantLinks.demoLink?.invoke(appScope)?.let { RingSessionController(it, appScope, monotonicMillis, log) }
+    }
+
+    /** The Bluetooth adapter's state; the activity starts and stops it as it shows and hides. */
+    val adapterStates: AndroidAdapterStateSource = AndroidAdapterStateSource(context, log)
+
+    /**
+     * Builds the scanner for a Scan & connect: `:ble`'s Android scanner (it needs Nearby devices;
+     * without it, or with Bluetooth off, the scan fails at once), or in debug builds one that
+     * finds the demo ring.
+     */
+    val ringScannerFactory: RingScannerFactory = RingScannerFactory {
+        val demoRing = ringSession?.link?.ring
+        if (demoRing != null) VariantLinks.demoScanner?.invoke(demoRing) ?: RingScanner(context.applicationContext)
+        else RingScanner(context.applicationContext)
+    }
+
+    /**
+     * Connects the ring a scan selected or the user picked. For now the only link the app holds is
+     * the session's (the demo ring in debug builds), so a selection connects that session; a link
+     * built for the chosen ring, remembered and reconnected on launch, replaces this.
+     */
+    val ringConnector: RingConnector = RingConnector { _ ->
+        ringSession?.connect() ?: log("A ring was chosen, but this build has no link to connect it with yet")
     }
 
     /** The Ring screen's title; debug builds say when the ring is the demo. */

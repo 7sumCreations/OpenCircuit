@@ -51,7 +51,7 @@ class LinkStatePresenterTest {
         allStates.forEach { state ->
             val ui = LinkStatePresenter.present(state, name)
             assertTrue(ui.headline.isNotBlank(), "headline for ${state::class.simpleName}")
-            assertTrue(ui.action.label.isNotBlank(), "action for ${state::class.simpleName}")
+            assertTrue(ui.action!!.label.isNotBlank(), "action for ${state::class.simpleName}")
             assertFalse("LinkState" in ui.headline || "(" in ui.headline, "no type name in the copy: ${ui.headline}")
         }
     }
@@ -69,7 +69,7 @@ class LinkStatePresenterTest {
         val ui = LinkStatePresenter.present(LinkState.Idle, name)
         assertEquals("Ready", ui.headline)
         assertEquals(LinkAction.SCAN_AND_CONNECT, ui.action)
-        assertEquals("Scan & connect", ui.action.label)
+        assertEquals("Scan & connect", ui.action!!.label)
     }
 
     @Test
@@ -95,7 +95,7 @@ class LinkStatePresenterTest {
             val ui = LinkStatePresenter.present(LinkState.PairingFailed(reason), name)
             assertEquals("Pairing didn't finish", ui.headline)
             assertEquals(LinkAction.TRY_AGAIN, ui.action)
-            assertEquals("Try again", ui.action.label)
+            assertEquals("Try again", ui.action!!.label)
             val detail = ui.detail.orEmpty()
             assertFalse(reason.name in detail, "no enum name in the copy: $detail")
             assertTrue("try again" in detail, detail)
@@ -119,7 +119,7 @@ class LinkStatePresenterTest {
             val ui = LinkStatePresenter.present(state, name)
             assertEquals("Ring unreachable — reconnecting automatically", ui.headline)
             assertEquals(LinkAction.STOP_RECONNECTING, ui.action)
-            assertEquals("Stop reconnecting", ui.action.label)
+            assertEquals("Stop reconnecting", ui.action!!.label)
         }
     }
 
@@ -130,7 +130,7 @@ class LinkStatePresenterTest {
         assertTrue("Bluetooth settings" in ui.detail.orEmpty(), ui.detail)
         assertTrue("keeps trying to reconnect" in ui.detail.orEmpty(), ui.detail)
         assertEquals(LinkAction.BLUETOOTH_SETTINGS, ui.action)
-        assertTrue(ui.action.opensSystemSettings)
+        assertTrue(ui.action!!.opensSystemSettings)
     }
 
     @Test
@@ -138,7 +138,7 @@ class LinkStatePresenterTest {
         val ui = LinkStatePresenter.present(LinkState.BluetoothOff, name)
         assertEquals("Bluetooth off", ui.headline)
         assertEquals(LinkAction.TURN_ON_BLUETOOTH, ui.action)
-        assertTrue(ui.action.opensSystemSettings)
+        assertTrue(ui.action!!.opensSystemSettings)
     }
 
     @Test

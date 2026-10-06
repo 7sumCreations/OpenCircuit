@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.live.MeasureSection
+import io.github.opencircuit.ble.RememberedRing
 
 /** What the user can do on the Ring screen. */
 sealed interface RingAction {
@@ -24,8 +25,11 @@ sealed interface RingAction {
     /** Tapped Stop. */
     data object StopMeasure : RingAction
 
-    /** Tapped the connection card's button. */
+    /** Tapped one of the connection card's buttons. */
     data class Link(val action: LinkAction) : RingAction
+
+    /** Picked [ring] from the list of rings found. */
+    data class Pick(val ring: RememberedRing) : RingAction
 }
 
 /**
@@ -45,7 +49,7 @@ fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Mod
             modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ConnectionCard(state.card, onAction = { onAction(RingAction.Link(it)) })
+            ConnectionCard(state.card, onAction = { onAction(RingAction.Link(it)) }, onPick = { onAction(RingAction.Pick(it)) })
             state.measure?.let { measure ->
                 MeasureSection(
                     measure = measure,

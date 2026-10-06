@@ -2,16 +2,32 @@ package io.github.opencircuit.app.ring
 
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.PairingFailure
+import io.github.opencircuit.ble.RememberedRing
 
-/** The one thing the connection card offers for a link state. */
+/** What the connection card offers for a link state or a step of finding a ring. */
 enum class LinkAction(
     /** The button's words (also its accessibility label). */
     val label: String,
-    /** The button leaves the app for a system screen; the activity handles it, not the view model. */
+    /** The button opens a system screen or dialog; the activity handles it, not the view model. */
     val opensSystemSettings: Boolean = false,
 ) {
-    /** Find a ring and connect to it. */
+    /** Find a ring and connect to it (asks for Nearby devices first when needed). */
     SCAN_AND_CONNECT("Scan & connect"),
+
+    /** Show Android's Nearby-devices dialog again after one refusal. */
+    ALLOW_NEARBY("Allow Nearby devices"),
+
+    /** Refused for good: open this app's page in Android's settings. */
+    OPEN_APP_SETTINGS("Open settings", opensSystemSettings = true),
+
+    /** Try the Nearby-devices dialog once more (Android answers at once if it was refused for good). */
+    ASK_AGAIN("Ask again"),
+
+    /** Stop the scan. */
+    CANCEL_SCAN("Cancel"),
+
+    /** Scan again after nothing was found or the scan failed. */
+    SEARCH_AGAIN("Search again"),
 
     /** Stop a connection that is being made. */
     CANCEL("Cancel"),
@@ -25,22 +41,41 @@ enum class LinkAction(
     /** Open Android's Bluetooth settings, where a lost bond is forgotten. */
     BLUETOOTH_SETTINGS("Bluetooth settings", opensSystemSettings = true),
 
-    /** Bluetooth is off: send the user to turn it on. */
+    /** Bluetooth is off: ask Android to turn it on (its own confirmation dialog). */
     TURN_ON_BLUETOOTH("Turn on Bluetooth", opensSystemSettings = true),
 
     /** Close the connection. */
     DISCONNECT("Disconnect"),
 }
 
-/** The connection card's words for a link state, and its one action. */
+/** The connection card's words for a link state or a step of finding a ring, and its actions. */
 data class LinkStateUi(
     /** The status line. */
     val headline: String,
     /** A sentence that explains it, or null when the headline says enough. */
     val detail: String?,
-    val action: LinkAction,
+    /** The main button, or null when there is nothing the user can do here. */
+    val action: LinkAction?,
     /** The status dot is green: the ring is connected and its data flows. */
     val connected: Boolean,
+    /** A second, quieter button, or null. */
+    val secondary: LinkAction? = null,
+    /** Bulleted hints under the detail, in order. */
+    val hints: List<String> = emptyList(),
+    /** The rings to pick from, in the order shown; empty unless several rings were found. */
+    val choices: List<RingChoiceUi> = emptyList(),
+    /** A scan is running: drawn with a progress indicator. */
+    val searching: Boolean = false,
+)
+
+/** One row of the ring picker. */
+data class RingChoiceUi(
+    /** The ring a tap connects to. */
+    val ring: RememberedRing,
+    /** The ring's advertised name, or "RingConn" when it had none (upstream's fallback, CV:1373). */
+    val label: String,
+    /** The ring the app last used: marked "Last used" and listed first. */
+    val lastUsed: Boolean,
 )
 
 /**

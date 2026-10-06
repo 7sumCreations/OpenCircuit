@@ -1,23 +1,32 @@
 package io.github.opencircuit.app.ring
 
 import androidx.lifecycle.ViewModel
+import io.github.opencircuit.app.connect.ConnectFlowController
+import io.github.opencircuit.app.connect.ConnectFlowPresenter
+import io.github.opencircuit.app.connect.ConnectFlowState
+import io.github.opencircuit.app.connect.PermissionSnapshot
+import io.github.opencircuit.app.connect.ScanStep
+import io.github.opencircuit.app.live.LiveMeasureState
 import io.github.opencircuit.app.live.MeasureUi
 import io.github.opencircuit.app.live.measureUi
+import io.github.opencircuit.app.session.KeepaliveProblem
 import io.github.opencircuit.app.session.RingSessionController
+import io.github.opencircuit.ble.AdapterState
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
 /** Everything the Ring screen shows. */
 data class RingUiState(
     /** The screen title. */
     val title: String,
-    /** The connection card: the link's state, its action, the battery. */
+    /** The connection card: the link's state or the scan's, its actions, the battery. */
     val card: ConnectionCardUi,
     /** The Measure cards and the Live card; null unless the link is authenticated. */
     val measure: MeasureUi? = null,
@@ -25,13 +34,21 @@ data class RingUiState(
 
 /**
  * Hosts the Ring screen's state: maps the session's link state, device status, keepalive and
- * live measure into one [RingUiState]. [scope] becomes the view model's scope (the app passes a
- * main-thread scope; tests pass a virtual-time one). Opening the screen connects the link.
+ * live measure, and the Scan & connect flow, into one [RingUiState]. [scope] becomes the view
+ * model's scope (the app passes a main-thread scope; tests pass a virtual-time one). Opening the
+ * screen connects the session's link, when there is one.
+ *
+ * While a scan runs or has just ended, the card shows the scan. Otherwise, while the link is idle
+ * (or there is no link yet), it shows what a Scan & connect tap would do now: ready, Nearby
+ * devices not allowed, Bluetooth off, or blocked by a device policy, following [adapterState]
+ * live. Any other link state shows the link's own words.
  */
 class RingViewModel(
     private val controller: RingSessionController?,
     title: String,
     scope: CoroutineScope,
+    private val connectFlow: ConnectFlowController? = null,
+    adapterState: StateFlow<AdapterState?> = MutableStateFlow(null),
 ) : ViewModel(scope) {
 
     /** The Ring screen's state. */
@@ -39,51 +56,84 @@ class RingViewModel(
 
     init {
         val ringName = controller?.link?.ring?.name
-        val initial = RingUiState(
-            title = title,
-            card = connectionCardUi(LinkState.Idle, ringName, DeviceStatusState(), measuring = false, keepaliveProblem = null),
-        )
-        uiState = if (controller == null) {
-            MutableStateFlow(initial).asStateFlow()
+
+        fun render(parts: LinkParts, flow: ConnectFlowState, adapter: AdapterState?): RingUiState {
+            val measuring = parts.live.mode != null
+            val flowCard = ConnectFlowPresenter.scan(flow)
+                ?: if (parts.link == LinkState.Idle) ConnectFlowPresenter.availability(flow, adapter) else null
+            return RingUiState(
+                title = title,
+                card = connectionCardUi(parts.link, ringName, parts.status, measuring, parts.problem, flowCard),
+                // Measuring needs an authenticated link (upstream draws the buttons only when ready, VT:319-337).
+                // Only the charger byte blocks Measure; an inferred charge never does (PORTING D-242).
+                measure = if (parts.link == LinkState.Authenticated) measureUi(parts.live, onCharger = parts.status.onCharger) else null,
+            )
+        }
+
+        val linkParts: Flow<LinkParts> = if (controller == null) {
+            flowOf(LinkParts())
         } else {
             controller.connect()
-            combine(
-                controller.state,
-                controller.deviceStatus.state,
-                controller.liveMeasure.state,
-                controller.keepalive.problem,
-            ) { link, status, live, problem ->
-                val measuring = live.mode != null
-                RingUiState(
-                    title = title,
-                    card = connectionCardUi(link, ringName, status, measuring, problem),
-                    // Measuring needs an authenticated link (upstream draws the buttons only when ready, VT:319-337).
-                    // Only the charger byte blocks Measure; an inferred charge never does (PORTING D-242).
-                    measure = if (link == LinkState.Authenticated) measureUi(live, onCharger = status.onCharger) else null,
-                )
-            }.stateIn(scope, SharingStarted.Eagerly, initial)
+            combine(controller.state, controller.deviceStatus.state, controller.liveMeasure.state, controller.keepalive.problem, ::LinkParts)
         }
+        val flowState: StateFlow<ConnectFlowState> = connectFlow?.state ?: MutableStateFlow(ConnectFlowState())
+        uiState = combine(linkParts, flowState, adapterState, ::render)
+            .stateIn(scope, SharingStarted.Eagerly, render(LinkParts(), flowState.value, adapterState.value))
     }
 
     /**
-     * Handles a Ring-screen action. A link action that opens a system screen is the activity's;
-     * it does nothing here.
+     * Handles a Ring-screen action. The actions that need a fresh permission read or open a
+     * system screen or dialog are the activity's (it calls [requestScan] and the result hooks);
+     * they do nothing here.
      */
     fun onAction(action: RingAction) {
-        val controller = controller ?: return
         when (action) {
+            is RingAction.Pick -> connectFlow?.pick(action.ring)
             // A ring on its charger is not on a finger: no new measure (the button is disabled too).
-            is RingAction.Measure -> if (!controller.deviceStatus.state.value.onCharger) controller.liveMeasure.start(action.mode)
-            RingAction.StopMeasure -> controller.liveMeasure.stop()
+            is RingAction.Measure -> controller?.let { if (!it.deviceStatus.state.value.onCharger) it.liveMeasure.start(action.mode) }
+            RingAction.StopMeasure -> controller?.liveMeasure?.stop()
             is RingAction.Link -> when (action.action) {
-                LinkAction.SCAN_AND_CONNECT, LinkAction.TRY_AGAIN -> controller.connect()
-                LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT -> {
+                LinkAction.CANCEL_SCAN -> connectFlow?.cancelScan()
+                LinkAction.TRY_AGAIN -> controller?.connect()
+                LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT -> controller?.let {
                     // The user's own disconnect ends a running measure as a Stop, not as a lost ring.
-                    controller.liveMeasure.stop()
-                    controller.link.disconnect()
+                    it.liveMeasure.stop()
+                    it.link.disconnect()
                 }
-                LinkAction.BLUETOOTH_SETTINGS, LinkAction.TURN_ON_BLUETOOTH -> Unit
+                LinkAction.SCAN_AND_CONNECT, LinkAction.ALLOW_NEARBY, LinkAction.ASK_AGAIN, LinkAction.SEARCH_AGAIN,
+                LinkAction.OPEN_APP_SETTINGS, LinkAction.BLUETOOTH_SETTINGS, LinkAction.TURN_ON_BLUETOOTH,
+                -> Unit
             }
         }
     }
+
+    /** Scan & connect, Search again or Allow Nearby devices; null when this screen has no connect flow. */
+    fun requestScan(snapshot: PermissionSnapshot): ScanStep? = connectFlow?.requestScan(snapshot)
+
+    /** The Nearby-devices dialog answered. */
+    fun onPermissionResult(snapshot: PermissionSnapshot) {
+        connectFlow?.onPermissionResult(snapshot)
+    }
+
+    /** The activity resumed: the permission may have changed in Settings. */
+    fun onResume(snapshot: PermissionSnapshot) {
+        connectFlow?.onResume(snapshot)
+    }
+
+    /**
+     * Android turned Bluetooth on at the user's request. With no active link the user was on the
+     * way to a scan, so it goes on; a link that exists reconnects on its own.
+     */
+    fun onBluetoothEnabled(snapshot: PermissionSnapshot) {
+        val link = controller?.state?.value ?: LinkState.Idle
+        if (link == LinkState.Idle) connectFlow?.onBluetoothEnabled(snapshot)
+    }
+
+    /** The parts of the screen the ring session drives; an idle link when there is none. */
+    private data class LinkParts(
+        val link: LinkState = LinkState.Idle,
+        val status: DeviceStatusState = DeviceStatusState(),
+        val live: LiveMeasureState = LiveMeasureState(),
+        val problem: KeepaliveProblem? = null,
+    )
 }

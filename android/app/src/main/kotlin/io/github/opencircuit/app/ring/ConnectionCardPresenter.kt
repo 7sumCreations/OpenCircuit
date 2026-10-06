@@ -65,9 +65,11 @@ fun connectionCardUi(
     status: DeviceStatusState,
     measuring: Boolean,
     keepaliveProblem: KeepaliveProblem?,
+    /** The Scan & connect flow's words, shown instead of the link's while it has something to say. */
+    flowCard: LinkStateUi? = null,
 ): ConnectionCardUi = ConnectionCardUi(
     ringName = ringName,
-    link = LinkStatePresenter.present(linkState, ringName ?: "the ring"),
+    link = flowCard ?: LinkStatePresenter.present(linkState, ringName ?: "the ring"),
     battery = status.batteryPercent?.let { batteryUi(it, status) },
     chargerHint = if (linkState == LinkState.Authenticated && status.onCharger && !measuring) ON_THE_CHARGER else null,
     problem = keepaliveProblem?.let { "Couldn't ask the ring for its status — ${it.words()}." },

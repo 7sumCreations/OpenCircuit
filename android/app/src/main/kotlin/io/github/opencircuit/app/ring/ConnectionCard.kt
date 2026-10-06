@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import io.github.opencircuit.ble.RememberedRing
 
 /**
  * The connection card: a status dot and the link's words, the ring's name, the battery with its
@@ -32,7 +35,12 @@ import androidx.compose.ui.unit.dp
  * (`ios/OpenCircuit/ContentView.swift:1105-1258` @ b1c2fdd). Drawn from [card] alone.
  */
 @Composable
-fun ConnectionCard(card: ConnectionCardUi, onAction: (LinkAction) -> Unit, modifier: Modifier = Modifier) {
+fun ConnectionCard(
+    card: ConnectionCardUi,
+    onAction: (LinkAction) -> Unit,
+    modifier: Modifier = Modifier,
+    onPick: (RememberedRing) -> Unit = {},
+) {
     Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -41,20 +49,33 @@ fun ConnectionCard(card: ConnectionCardUi, onAction: (LinkAction) -> Unit, modif
                     card.ringName?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
                     Text(card.link.headline, style = MaterialTheme.typography.bodyMedium)
                 }
+                if (card.link.searching) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp).semantics { contentDescription = "Searching" },
+                        strokeWidth = 2.dp,
+                    )
+                }
                 card.battery?.let { BatteryColumn(it) }
             }
             card.link.detail?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            card.link.hints.forEach {
+                Text("• $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            card.link.choices.forEach { choice -> RingChoiceRow(choice, onPick) }
             card.chargerHint?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
             }
             card.problem?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Spacer(modifier = Modifier.weight(1f))
-                LinkActionButton(card.link.action, onAction)
+            if (card.link.action != null || card.link.secondary != null) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    card.link.secondary?.let { TextButton(onClick = { onAction(it) }) { Text(it.label) } }
+                    card.link.action?.let { LinkActionButton(it, onAction) }
+                }
             }
         }
     }
@@ -63,10 +84,25 @@ fun ConnectionCard(card: ConnectionCardUi, onAction: (LinkAction) -> Unit, modif
 @Composable
 private fun LinkActionButton(action: LinkAction, onAction: (LinkAction) -> Unit) {
     when (action) {
-        LinkAction.SCAN_AND_CONNECT, LinkAction.TRY_AGAIN, LinkAction.TURN_ON_BLUETOOTH, LinkAction.BLUETOOTH_SETTINGS ->
-            FilledTonalButton(onClick = { onAction(action) }) { Text(action.label) }
-        LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT ->
+        LinkAction.SCAN_AND_CONNECT, LinkAction.TRY_AGAIN, LinkAction.TURN_ON_BLUETOOTH, LinkAction.BLUETOOTH_SETTINGS,
+        LinkAction.ALLOW_NEARBY, LinkAction.OPEN_APP_SETTINGS, LinkAction.SEARCH_AGAIN,
+        -> FilledTonalButton(onClick = { onAction(action) }) { Text(action.label) }
+        LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT, LinkAction.CANCEL_SCAN, LinkAction.ASK_AGAIN ->
             TextButton(onClick = { onAction(action) }) { Text(action.label) }
+    }
+}
+
+/** One ring in the picker: its name, "Last used" for the saved ring; a tap connects it. */
+@Composable
+private fun RingChoiceRow(choice: RingChoiceUi, onPick: (RememberedRing) -> Unit) {
+    OutlinedButton(
+        onClick = { onPick(choice.ring) },
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Connect to ${choice.label}" },
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(choice.label, style = MaterialTheme.typography.bodyMedium)
+            if (choice.lastUsed) Text("Last used", style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 

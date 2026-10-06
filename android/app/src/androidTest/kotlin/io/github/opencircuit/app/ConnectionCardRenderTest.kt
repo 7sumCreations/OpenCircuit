@@ -80,7 +80,7 @@ class ConnectionCardRenderTest {
             val words = LinkStatePresenter.present(link, RING)
             compose.onNodeWithText(words.headline).assertIsDisplayed()
             words.detail?.let { compose.onNodeWithText(it).assertIsDisplayed() }
-            compose.onNodeWithText(words.action.label).assertIsDisplayed()
+            compose.onNodeWithText(words.action!!.label).assertIsDisplayed()
         }
         compose.onNodeWithText("Pairing with $RING…").assertDoesNotExist()
     }
