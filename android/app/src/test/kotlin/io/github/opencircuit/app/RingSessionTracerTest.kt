@@ -1,5 +1,7 @@
 package io.github.opencircuit.app
 
+import io.github.opencircuit.app.live.LiveMode
+import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingUiState
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.session.RingSessionController
@@ -11,6 +13,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /**
  * End to end on the JVM: a frame the fake ring sends crosses the link's `frames`, the session
@@ -39,7 +42,11 @@ class RingSessionTracerTest {
         link.emitFrame(TestFrames.wornDescriptor)
         runCurrent()
 
-        assertEquals(RingUiState(title = "Ring", status = "Connected", batteryPercent = 66), viewModel.uiState.value)
+        assertEquals(
+            RingUiState(title = "Ring", status = "Connected", batteryPercent = 66),
+            viewModel.uiState.value.copy(measure = null),
+        )
+        assertEquals("Measure heart rate", viewModel.uiState.value.measure?.heartRate?.actionLabel, "Measure cards once connected")
     }
 
     @Test
@@ -61,6 +68,33 @@ class RingSessionTracerTest {
         assertEquals(1, controller.dispatcher.counts.value.ignored)
         assertEquals(mapOf(0x47 to 1, 0xee to 1), controller.dispatcher.counts.value.unhandled)
         assertEquals(2, logLines.size, "one line per unhandled frame: $logLines")
+    }
+
+    @Test
+    fun aMeasureTapPollsTheRingAndItsLiveFramesShowInTheReadout() = runTest {
+        val link = timedLink()
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
+        val viewModel = RingViewModel(controller, title = "Ring", scope = backgroundScope)
+        runCurrent()
+        assertNull(viewModel.uiState.value.measure, "no Measure cards before the ring is authenticated")
+        link.fake.setState(LinkState.Authenticated)
+        runCurrent()
+        assertEquals("No reading yet", viewModel.uiState.value.measure?.heartRate?.caption)
+
+        viewModel.onAction(RingAction.Measure(LiveMode.HEART_RATE))
+        advanceTo(2_750)
+        assertEquals(listOf(Wire.STATUS_QUERY, Wire.HR_MODE, Wire.FETCH, Wire.POLL), link.writes.map { it.hex })
+        assertEquals("—", viewModel.uiState.value.measure?.live?.readout)
+
+        link.fake.emitFrame(TestFrames.liveHeartRate) // the ring answers the poll: 91 bpm
+        runCurrent()
+        assertEquals("91", viewModel.uiState.value.measure?.live?.readout)
+
+        viewModel.onAction(RingAction.StopMeasure)
+        runCurrent()
+        assertNull(viewModel.uiState.value.measure?.live, "the Live card closes")
+        advanceTo(20_000)
+        assertEquals(1, link.timesOf(Wire.POLL).size, "no poll after Stop")
     }
 
     @Test

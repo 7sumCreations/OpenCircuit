@@ -1,6 +1,8 @@
 package io.github.opencircuit.app.ring
 
 import androidx.lifecycle.ViewModel
+import io.github.opencircuit.app.live.MeasureUi
+import io.github.opencircuit.app.live.measureUi
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.CoroutineScope
@@ -19,15 +21,17 @@ data class RingUiState(
     val status: String,
     /** Ring battery %, or null while unknown. */
     val batteryPercent: Int?,
+    /** The Measure cards and the Live card; null unless the link is authenticated. */
+    val measure: MeasureUi? = null,
 )
 
 /**
- * Hosts the Ring screen's state: maps the session's link state and device status into one
- * [RingUiState]. [scope] becomes the view model's scope (the app passes a main-thread scope;
- * tests pass a virtual-time one). Opening the screen connects the link.
+ * Hosts the Ring screen's state: maps the session's link state, device status and live measure
+ * into one [RingUiState]. [scope] becomes the view model's scope (the app passes a main-thread
+ * scope; tests pass a virtual-time one). Opening the screen connects the link.
  */
 class RingViewModel(
-    controller: RingSessionController?,
+    private val controller: RingSessionController?,
     title: String,
     scope: CoroutineScope,
 ) : ViewModel(scope) {
@@ -41,14 +45,26 @@ class RingViewModel(
             MutableStateFlow(initial).asStateFlow()
         } else {
             controller.connect()
-            combine(controller.state, controller.deviceStatus.state) { link, status ->
-                RingUiState(title = title, status = link.statusLine(), batteryPercent = status.batteryPercent)
+            combine(controller.state, controller.deviceStatus.state, controller.liveMeasure.state) { link, status, live ->
+                RingUiState(
+                    title = title,
+                    status = link.statusLine(),
+                    batteryPercent = status.batteryPercent,
+                    // Measuring needs an authenticated link (upstream draws the buttons only when ready, VT:319-337).
+                    measure = if (link == LinkState.Authenticated) measureUi(live) else null,
+                )
             }.stateIn(scope, SharingStarted.Eagerly, initial)
         }
     }
 
-    /** Handles a Ring-screen action. The screen has none yet; the connection card adds them. */
-    fun onAction(action: RingAction) = Unit
+    /** Handles a Ring-screen action. */
+    fun onAction(action: RingAction) {
+        val live = controller?.liveMeasure ?: return
+        when (action) {
+            is RingAction.Measure -> live.start(action.mode)
+            RingAction.StopMeasure -> live.stop()
+        }
+    }
 }
 
 /** A short line for each link state; the full copy and actions per state come with the connection card. */

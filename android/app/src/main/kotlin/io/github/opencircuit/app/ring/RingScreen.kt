@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -14,26 +16,44 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import io.github.opencircuit.app.live.LiveMode
+import io.github.opencircuit.app.live.MeasureSection
 
 /** What the user can do on the Ring screen. The connection card's actions are added here. */
-sealed interface RingAction
+sealed interface RingAction {
+    /** Tapped Measure on the [mode] card: start, re-tap or switch to it. */
+    data class Measure(val mode: LiveMode) : RingAction
+
+    /** Tapped Stop. */
+    data object StopMeasure : RingAction
+}
 
 /**
- * The Ring screen: the connection card (link state and battery). Takes its whole state as a value
- * so it renders the same from the app or from a hand-built state in a test.
+ * The Ring screen: the connection card (link state and battery), then — once the ring is
+ * authenticated — the Measure section. Takes its whole state as a value so it renders the same
+ * from the app or from a hand-built state in a test. [pulse] animates the live chart's endpoint;
+ * the app turns it off when the system asks for reduced motion, tests turn it off.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Modifier = Modifier) {
+fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Modifier = Modifier, pulse: Boolean = true) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = { TopAppBar(title = { Text(state.title) }) },
     ) { padding ->
         Column(
-            modifier = Modifier.padding(padding).padding(16.dp),
+            modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ConnectionCard(state)
+            state.measure?.let { measure ->
+                MeasureSection(
+                    measure = measure,
+                    pulse = pulse,
+                    onMeasure = { onAction(RingAction.Measure(it)) },
+                    onStop = { onAction(RingAction.StopMeasure) },
+                )
+            }
         }
     }
 }

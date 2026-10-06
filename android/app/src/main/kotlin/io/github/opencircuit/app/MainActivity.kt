@@ -1,6 +1,7 @@
 package io.github.opencircuit.app
 
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -51,13 +52,20 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         val state by ringViewModel.uiState.collectAsStateWithLifecycle()
-                        RingScreen(state = state, onAction = ringViewModel::onAction)
+                        RingScreen(state = state, onAction = ringViewModel::onAction, pulse = !reducedMotion())
                     }
                 }
             }
         }
     }
 }
+
+/**
+ * True when the system asks for less motion: "Remove animations" sets the animator duration scale
+ * to 0 (the same switch Android's own animations follow).
+ */
+private fun ComponentActivity.reducedMotion(): Boolean =
+    Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
 
 /** Stands in for the onboarding pages until they are built. */
 @Composable

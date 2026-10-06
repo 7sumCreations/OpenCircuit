@@ -8,6 +8,7 @@ import io.github.opencircuit.ble.RefusalReason
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.SendResult
+import io.github.opencircuit.ringkit.Frame
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -28,6 +29,11 @@ import kotlinx.coroutines.flow.consumeAsFlow
  * collector take over after one stops), and the app's session collects each flow once.
  * [connect] goes straight to [LinkState.Authenticated] and sends one device-status descriptor
  * with a battery of 72 %; [disconnect] tears the connection down once and goes [LinkState.Idle].
+ *
+ * It answers the live measure like a worn ring: after `06 01 00` / `06 02 00` and `07 00 00`,
+ * each `95 00 00` poll gets one `0x15` frame. Heart rate sends the warm-up value 8 for the first
+ * two polls after an entry, then made-up resting values; SpO₂ sends one frame without a valid
+ * reading, then made-up values in the high 90s. A poll before any mode was chosen gets nothing.
  */
 class DemoRingLink : RingLink {
 
@@ -44,11 +50,51 @@ class DemoRingLink : RingLink {
     override val frames: Flow<ByteArray> = frameChannel.consumeAsFlow()
     override val teardowns: Flow<LinkTeardown> = teardownChannel.consumeAsFlow()
 
+    // The live measure the demo is answering. Guarded by `this`.
+    private var liveMode: Int? = null
+    private var pollsSinceEntry = 0
+    private var valueIndex = 0
+
     override suspend fun send(command: ByteArray): SendResult = when {
         isReservedAuthCommand(command) -> SendResult.Refused(RefusalReason.AUTH_COMMAND_RESERVED)
         stateFlow.value != LinkState.Authenticated -> SendResult.Refused(RefusalReason.NOT_AUTHENTICATED)
-        else -> SendResult.Sent
+        else -> {
+            answerLive(command)
+            SendResult.Sent
+        }
     }
+
+    @Synchronized
+    private fun answerLive(command: ByteArray) {
+        if (command.size < 2) return
+        val opcode = command[0].toInt() and 0xFF
+        val sub = command[1].toInt() and 0xFF
+        when {
+            opcode == 0x06 && (sub == HEART_RATE_MODE || sub == SPO2_MODE) -> liveMode = sub
+            opcode == 0x07 -> pollsSinceEntry = 0
+            opcode == 0x95 -> liveMode?.let { mode ->
+                frameChannel.trySend(if (mode == HEART_RATE_MODE) nextHeartRateFrame() else nextSpO2Frame())
+                pollsSinceEntry++
+            }
+        }
+    }
+
+    private fun nextHeartRateFrame(): ByteArray {
+        val bpm = if (pollsSinceEntry < WARM_UP_POLLS) WARM_UP_VALUE else DEMO_HEART_RATES[valueIndex++ % DEMO_HEART_RATES.size]
+        return withTrailer(byteArrayOf(0x15, 0x00, bpm.toByte(), 0x0a, 0xb0.toByte()))
+    }
+
+    private fun nextSpO2Frame(): ByteArray {
+        // Byte 14 carries the value; 0 is outside 70…100, i.e. no reading yet.
+        val spo2 = if (pollsSinceEntry < 1) 0 else DEMO_SPO2[valueIndex++ % DEMO_SPO2.size]
+        val body = ByteArray(16)
+        body[0] = 0x15
+        body[1] = 0x01
+        body[14] = spo2.toByte()
+        return withTrailer(body)
+    }
+
+    private fun withTrailer(body: ByteArray): ByteArray = body + Frame.xorTrailer(body).toByte()
 
     @Synchronized
     override fun connect() {
@@ -70,6 +116,19 @@ class DemoRingLink : RingLink {
         command.size >= 2 && command[0] == 0x01.toByte() && (command[1] == 0x00.toByte() || command[1] == 0x01.toByte())
 
     private companion object {
+        const val HEART_RATE_MODE = 0x01
+        const val SPO2_MODE = 0x02
+
+        /** Polls answered with the warm-up sentinel after each entry (PROTOCOL.md §5.1). */
+        const val WARM_UP_POLLS = 2
+        const val WARM_UP_VALUE = 8
+
+        /** Made-up resting heart rates, cycled. */
+        val DEMO_HEART_RATES = intArrayOf(64, 66, 65, 68, 63, 62, 64, 67, 65, 61)
+
+        /** Made-up SpO₂ values, cycled. */
+        val DEMO_SPO2 = intArrayOf(97, 96, 97, 98, 97)
+
         /**
          * A made-up `0x10` descriptor in the layout of PROTOCOL.md §5.4: battery 72 % (`[1]`),
          * worn and idle (`[2]` = 0x02), skin temperature 30.0 °C on both channels, 4000 mV,
