@@ -66,6 +66,59 @@ class FakeGattTest {
     }
 
     @Test
+    fun aDroppedConnectionReportsTheDisconnectAndNeverAnswersItsOutstandingOperation() = runTest {
+        val ring = FakeGatt(backgroundScope, Fixtures.acceptingRing())
+        val session = SessionToken(1)
+        ring.connect(session, Fixtures.ring, autoConnect = false) { received += it }
+        runCurrent()
+        ring.hold(FakeGatt.Operation.DISCOVER_SERVICES)
+        ring.discoverServices()
+
+        ring.dropConnection(8)
+        ring.release(FakeGatt.Operation.DISCOVER_SERVICES)
+        runCurrent()
+
+        val last = received.last() as GattEvent.ConnectionChanged
+        assertEquals(8, last.status)
+        assertEquals(false, last.connected)
+        assertTrue(received.none { it is GattEvent.ServicesDiscovered }, "the dropped connection's discovery never answers")
+    }
+
+    @Test
+    fun connectsAreRecordedWithTheirAddressAndOpenConnectionsAreCountedUntilClosed() = runTest {
+        val ring = FakeGatt(backgroundScope, Fixtures.acceptingRing())
+        val first = SessionToken(1)
+        val second = SessionToken(2)
+        ring.connect(first, Fixtures.ring, autoConnect = false) { received += it }
+        runCurrent()
+        ring.dropConnection(8)
+        ring.connect(second, Fixtures.ring, autoConnect = true) { received += it }
+        runCurrent()
+
+        assertEquals(
+            listOf(FakeGatt.ConnectCall(Fixtures.RING_ADDRESS, false), FakeGatt.ConnectCall(Fixtures.RING_ADDRESS, true)),
+            ring.connects,
+        )
+        assertEquals(listOf(first, second), ring.sessions)
+        assertEquals(2, ring.maxOpenConnections, "the dropped connection was never closed")
+    }
+
+    @Test
+    fun aClearedFailureAnswersWithSuccessAgain() = runTest {
+        val ring = FakeGatt(backgroundScope, Fixtures.acceptingRing())
+        ring.failWith(FakeGatt.Operation.CONNECT, 133)
+        ring.connect(SessionToken(1), Fixtures.ring, autoConnect = false) { received += it }
+        runCurrent()
+        ring.close()
+        ring.clearFailure(FakeGatt.Operation.CONNECT)
+        ring.connect(SessionToken(2), Fixtures.ring, autoConnect = false) { received += it }
+        runCurrent()
+
+        assertEquals(listOf(133, 0), received.map { (it as GattEvent.ConnectionChanged).status })
+        assertEquals(1, ring.maxOpenConnections)
+    }
+
+    @Test
     fun everyEventCarriesTheSessionOfItsConnection() = runTest {
         val ring = FakeGatt(backgroundScope, Fixtures.acceptingRing())
         val session = SessionToken(7)

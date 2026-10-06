@@ -10,8 +10,9 @@ import kotlinx.coroutines.launch
  * on [scope] as Android does. Like Android, it allows ONE outstanding operation: an operation
  * submitted before the previous one's callback is delivered is recorded in [violations] and
  * throws [AssertionError], failing the test. A test can [hold] the callbacks of an operation
- * (the ring never answers), [release] them, make an operation [failWith] a GATT status, or
- * [notify] any bytes.
+ * (the ring never answers), [release] them, make an operation [failWith] a GATT status,
+ * [dropConnection] with a status, or [notify] any bytes. [connects], [sessions] and
+ * [maxOpenConnections] record how the link opened and closed its connections.
  *
  * The ring itself answers `01 00 00` with [Script.challengeFrame], and answers a write equal to
  * [Script.acceptedAuthReply] with [Script.firstFrameAfterAuth]; any other reply gets nothing,
@@ -60,21 +61,45 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
         WRITE,
     }
 
+    /** One `connect` call: the ring's address and whether it was a standing (`autoConnect`) connection. */
+    data class ConnectCall(
+        /** The address the connection was opened to. */
+        val address: String,
+        /** True for a standing connection that waits for the ring with no timeout. */
+        val autoConnect: Boolean,
+    )
+
     private val calls = mutableListOf<String>()
     private val problems = mutableListOf<String>()
     private val held = mutableSetOf<Operation>()
     private val heldCallbacks = mutableListOf<Pair<Operation, () -> Unit>>()
     private val failures = mutableMapOf<Operation, Int>()
+    private val connectCalls = mutableListOf<ConnectCall>()
+    private val tokens = mutableListOf<SessionToken>()
     private var outstanding: Operation? = null
     private var sink: GattPort.EventSink? = null
     private var current: SessionToken? = null
     private var generation = 0
+    private var open = 0
+    private var mostOpen = 0
 
     /** Every call the link made, in order, one line each (UUIDs shortened to their first group). */
     val log: List<String> get() = calls.toList()
 
     /** Every broken GATT rule, in order. Empty when the link kept the rules. */
     val violations: List<String> get() = problems.toList()
+
+    /** Every `connect` call, in order, with the address it was made to. */
+    val connects: List<ConnectCall> get() = connectCalls.toList()
+
+    /** The session token of every `connect` call, in order: the last one is the current connection's. */
+    val sessions: List<SessionToken> get() = tokens.toList()
+
+    /**
+     * The most connections that were ever open at once: a connection is open from its `connect`
+     * until its `close`, even after it dropped (Android keeps the client until it is closed).
+     */
+    val maxOpenConnections: Int get() = mostOpen
 
     /** Holds the callbacks of [operation]: it stays outstanding until [release]. */
     fun hold(operation: Operation) {
@@ -94,6 +119,23 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
         failures[operation] = status
     }
 
+    /** Answers every later [operation] with success again (undoes [failWith]). */
+    fun clearFailure(operation: Operation) {
+        failures -= operation
+    }
+
+    /**
+     * The ring drops the current connection: Android reports a disconnect with [status] (an HCI
+     * reason such as 8, supervision timeout) and the callbacks of any operation still outstanding
+     * never come. The connection stays open, as on Android, until the link closes it.
+     */
+    fun dropConnection(status: Int) {
+        val session = current ?: return
+        generation++
+        heldCallbacks.clear()
+        sink?.deliver(GattEvent.ConnectionChanged(session, status, connected = false))
+    }
+
     /** The ring sends [value] on its notify characteristic, on the latest connection. */
     fun notify(value: ByteArray) {
         val session = current ?: return
@@ -108,6 +150,10 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
     override fun connect(session: SessionToken, ring: RememberedRing, autoConnect: Boolean, events: GattPort.EventSink): Boolean {
         sink = events
         current = session
+        tokens += session
+        connectCalls += ConnectCall(ring.address, autoConnect)
+        open++
+        mostOpen = maxOf(mostOpen, open)
         return begin(Operation.CONNECT, "connect autoConnect=$autoConnect") { status ->
             GattEvent.ConnectionChanged(session, status, connected = status == GattPort.GATT_SUCCESS)
         }
@@ -161,6 +207,7 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
 
     override fun close() {
         calls += "close"
+        if (open > 0) open--
         outstanding = null
         heldCallbacks.clear()
         generation++ // callbacks already scheduled for the closed connection are dropped
