@@ -59,7 +59,7 @@ sealed interface LinkState {
     /**
      * The phone reports the ring bonded, but connections keep dropping right away: the bond was
      * probably lost on the ring's side. Recovery is a user action in system Settings; the app never
-     * removes a bond itself.
+     * removes a bond itself. The link keeps reconnecting after the usual delay meanwhile.
      */
     data object BondLostSuspected : LinkState
 

@@ -46,4 +46,7 @@ internal enum class LinkTimer {
 
     /** The wait, from the confirmed notifications, for the ring's first data frame. */
     NOT_STREAMING,
+
+    /** Marks a connection as up long enough that a drop no longer counts as early. */
+    EARLY_DROP,
 }

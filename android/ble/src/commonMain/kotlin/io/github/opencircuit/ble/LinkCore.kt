@@ -94,6 +94,12 @@ internal class LinkCore(
     /** Whether the scheduled attempt is the standing connection. */
     private var nextIsStanding = false
 
+    /**
+     * Connections in a row to a bonded ring that Android disconnected early (before discovery was
+     * done or within [EARLY_DROP_WINDOW] of connecting), across connections; a healthy one resets it.
+     */
+    private var earlyDrops = 0
+
     // Per connection, reset by open().
     private var standing = false
     private var connected = false
@@ -108,6 +114,12 @@ internal class LinkCore(
 
     /** `01 00 00` was written on this connection. */
     private var authStarted = false
+
+    /** This connection's service discovery was answered. */
+    private var discoveryDone = false
+
+    /** This connection has been up [EARLY_DROP_WINDOW]. */
+    private var pastEarlyWindow = false
 
     override val state: StateFlow<LinkState> = stateFlow.asStateFlow()
     override val info: StateFlow<LinkInfo> = infoFlow.asStateFlow()
@@ -205,6 +217,8 @@ internal class LinkCore(
         connectIsLate = false
         awaitingBond = false
         authStarted = false
+        discoveryDone = false
+        pastEarlyWindow = false
         discovered = emptySet()
         addressMac = macFromAddress(ring.address)
         mac = null
@@ -281,7 +295,7 @@ internal class LinkCore(
         }
         when (event) {
             is GattEvent.Notification -> onNotification(event)
-            is GattEvent.ConnectionChanged -> if (!event.connected) dropLink(SendFailure.LINK_LOST)
+            is GattEvent.ConnectionChanged -> if (!event.connected) dropLink(SendFailure.LINK_LOST, disconnected = true)
             else -> Unit // an answer no operation is waiting for
         }
     }
@@ -302,10 +316,13 @@ internal class LinkCore(
                 connected = true
                 cancelTimer(LinkTimer.LATE_CONNECT)
                 startTimer(LinkTimer.STABILITY, ReconnectPolicy.STABLE_AFTER)
+                startTimer(LinkTimer.EARLY_DROP, EARLY_DROP_WINDOW)
                 stateFlow.value = LinkState.Discovering
                 queue.add(GattOp.DiscoverServices)
             }
             GattOp.DiscoverServices -> {
+                discoveryDone = true
+                if (pastEarlyWindow) earlyDrops = 0 // a healthy connection
                 discovered = (event as GattEvent.ServicesDiscovered).characteristics
                 if (GattPort.NOTIFY !in discovered || GattPort.WRITE !in discovered) {
                     dropLink(SendFailure.GATT_ERROR) // not the ring's GATT layout
@@ -495,6 +512,10 @@ internal class LinkCore(
             LinkTimer.RECONNECT -> open(standingConnection = nextIsStanding)
             LinkTimer.BOND -> if (awaitingBond) pairingFailed(PairingFailure.BOND_TIMED_OUT)
             LinkTimer.NOT_STREAMING -> stateFlow.value = LinkState.NotStreaming
+            LinkTimer.EARLY_DROP -> {
+                pastEarlyWindow = true
+                if (discoveryDone) earlyDrops = 0 // a healthy connection
+            }
         }
     }
 
@@ -502,15 +523,40 @@ internal class LinkCore(
      * The connection failed or dropped: the operation in flight fails with [inFlight], the
      * connection is closed and the next attempt is scheduled by address.
      */
-    private fun dropLink(inFlight: SendFailure, failure: ReconnectPolicy.Failure = ReconnectPolicy.Failure.FAILED) {
+    private fun dropLink(
+        inFlight: SendFailure,
+        failure: ReconnectPolicy.Failure = ReconnectPolicy.Failure.FAILED,
+        disconnected: Boolean = false,
+    ) {
         if (session == null) return
         val ended = if (standing && !connected) ReconnectPolicy.Failure.STANDING_FAILED else failure
+        val bondLost = disconnected && countEarlyDrop()
         closeSession(inFlight, TeardownReason.LINK_DROPPED)
         val plan = ReconnectPolicy.next(attempts, ended)
         attempts = plan.attempt
         nextIsStanding = plan.standing
-        stateFlow.value = LinkState.Reconnecting(plan.attempt, plan.delay)
+        // Reconnecting goes on either way: the bond may be fine and the drops something else.
+        stateFlow.value = if (bondLost) LinkState.BondLostSuspected else LinkState.Reconnecting(plan.attempt, plan.delay)
         startTimer(LinkTimer.RECONNECT, plan.delay)
+    }
+
+    /**
+     * Counts the connection Android just reported disconnected if it dropped early: it had
+     * connected, and it either never finished discovery or was up less than [EARLY_DROP_WINDOW].
+     * Only a ring Android still reports bonded counts; any other early drop starts the count
+     * again. True when this drop makes [BOND_LOST_AFTER] in a row: Android 16 keeps a bond the
+     * ring has lost and disconnects every connection at once, so this is all the link can see of
+     * it. The link's own timeouts and error statuses are not drops: a slow ring is no lost bond.
+     * The bond is never removed here.
+     */
+    private fun countEarlyDrop(): Boolean {
+        if (!connected || (discoveryDone && pastEarlyWindow)) return false
+        if (readBondState() != GattPort.BondState.BONDED) {
+            earlyDrops = 0
+            return false
+        }
+        earlyDrops++
+        return earlyDrops >= BOND_LOST_AFTER
     }
 
     /**
@@ -530,6 +576,7 @@ internal class LinkCore(
         cancelTimer(LinkTimer.STABILITY)
         cancelTimer(LinkTimer.BOND)
         cancelTimer(LinkTimer.NOT_STREAMING)
+        cancelTimer(LinkTimer.EARLY_DROP)
         closePort()
         session = null
         // The buffer is per connection: what its collector never took is dropped and counted.
@@ -581,6 +628,12 @@ internal class LinkCore(
          * `NotStreaming` (upstream `firstFrameTimeout`, RingSession.swift:264).
          */
         val NOT_STREAMING_AFTER: Duration = Duration.ofSeconds(10)
+
+        /** A connection that drops this soon after connecting (or before discovery) dropped early. */
+        val EARLY_DROP_WINDOW: Duration = Duration.ofSeconds(2)
+
+        /** Early drops in a row of a bonded ring that show `BondLostSuspected`. */
+        const val BOND_LOST_AFTER = 3
 
         /** Upstream reads these when the ring has them (RingSession.swift:4794-4813). */
         val DEVICE_INFORMATION_READS = listOf(
