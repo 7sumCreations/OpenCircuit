@@ -76,7 +76,11 @@ class RingViewModel(
             RingAction.StopMeasure -> controller.liveMeasure.stop()
             is RingAction.Link -> when (action.action) {
                 LinkAction.SCAN_AND_CONNECT, LinkAction.TRY_AGAIN -> controller.connect()
-                LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT -> controller.link.disconnect()
+                LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT -> {
+                    // The user's own disconnect ends a running measure as a Stop, not as a lost ring.
+                    controller.liveMeasure.stop()
+                    controller.link.disconnect()
+                }
                 LinkAction.BLUETOOTH_SETTINGS, LinkAction.TURN_ON_BLUETOOTH -> Unit
             }
         }

@@ -3,14 +3,17 @@ package io.github.opencircuit.app
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.ring.BatteryBand
 import io.github.opencircuit.app.ring.ConnectionCardUi
+import io.github.opencircuit.app.ring.LinkAction
 import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.ring.batteryBand
 import io.github.opencircuit.app.ring.durationWords
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.ble.LinkState
+import io.github.opencircuit.ble.LinkTeardown
 import io.github.opencircuit.ble.RefusalReason
 import io.github.opencircuit.ble.SendResult
+import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -178,6 +181,23 @@ class ConnectionCardStateTest {
         assertTrue(heartRate.measuring)
         assertTrue(heartRate.enabled, "the running card's Stop stays usable")
         assertFalse(screen.viewModel.uiState.value.measure!!.spo2.enabled, "no switch to SpO₂ on the charger")
+    }
+
+    @Test
+    fun disconnectingDuringAMeasureStopsItWithoutAFailureLine() = runTest {
+        val screen = screen()
+        screen.viewModel.onAction(RingAction.Measure(LiveMode.HEART_RATE))
+        advanceTo(5_000)
+
+        screen.viewModel.onAction(RingAction.Link(LinkAction.DISCONNECT))
+        // What the link does on disconnect(): Idle and one user-disconnected teardown.
+        screen.link.fake.setState(LinkState.Idle)
+        screen.link.fake.emitTeardown(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 0))
+        testScheduler.runCurrent()
+
+        assertEquals(1, screen.link.fake.disconnectCalls)
+        assertFalse(screen.controller.liveMeasure.isMeasuring.value)
+        assertNull(screen.controller.liveMeasure.state.value.heartRate.failure, "the user's own disconnect is not a failure")
     }
 
     @Test
