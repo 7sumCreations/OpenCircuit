@@ -3,6 +3,11 @@ package io.github.opencircuit.app
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import io.github.opencircuit.app.data.AppPrefs
+import io.github.opencircuit.app.data.PrefsAppPrefs
+import io.github.opencircuit.app.data.PrefsRememberedRingStore
+import io.github.opencircuit.app.data.RememberedRingStore
+import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
@@ -45,6 +50,15 @@ class AppContainer(context: Context) {
     /** One line to the system log. Callers never pass frame bytes or an address. */
     val log: (String) -> Unit = { Log.i(LOG_TAG, it) }
 
+    /** The app's private preferences file: the remembered ring and two flags. */
+    private val keyValues = SharedPreferencesKeyValues(context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE))
+
+    /** Onboarding done, Nearby devices asked. */
+    val appPrefs: AppPrefs = PrefsAppPrefs(keyValues)
+
+    /** The ring the app reconnects to. */
+    val rememberedRings: RememberedRingStore = PrefsRememberedRingStore(keyValues)
+
     /**
      * The session with the ring, or null when there is no ring to talk to yet. Debug builds use
      * the demo ring; choosing and remembering a real ring is not built yet.
@@ -58,5 +72,6 @@ class AppContainer(context: Context) {
 
     private companion object {
         const val LOG_TAG = "OpenCircuit"
+        const val PREFS_FILE = "opencircuit"
     }
 }

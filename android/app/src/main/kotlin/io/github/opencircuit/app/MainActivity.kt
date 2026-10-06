@@ -6,21 +6,15 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.opencircuit.app.onboarding.Destination
+import io.github.opencircuit.app.onboarding.LaunchFlow
+import io.github.opencircuit.app.onboarding.OnboardingScreen
 import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingScreen
 import io.github.opencircuit.app.ring.RingViewModel
@@ -29,9 +23,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
-/** The app's screens. No navigation library: two destinations, one `when`. */
-enum class Destination { Onboarding, Ring }
-
 /** The single activity. */
 class MainActivity : ComponentActivity() {
 
@@ -39,12 +30,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val container = (application as OpenCircuitApp).container
+        // Read synchronously, before the first frame, so onboarding never flashes.
+        val launch = LaunchFlow(container.appPrefs, container.log)
         setContent {
             OpenCircuitTheme {
-                // Onboarding is not built yet, so the app opens on the Ring screen.
-                var destination by rememberSaveable { mutableStateOf(Destination.Ring) }
+                var destination by rememberSaveable { mutableStateOf(launch.start) }
                 when (destination) {
-                    Destination.Onboarding -> OnboardingPlaceholder(onDone = { destination = Destination.Ring })
+                    Destination.Onboarding -> OnboardingScreen(onDone = { destination = launch.finishOnboarding() })
                     Destination.Ring -> {
                         val ringViewModel = viewModel {
                             RingViewModel(
@@ -86,15 +78,3 @@ private fun ComponentActivity.openBluetoothSettings() {
  */
 private fun ComponentActivity.reducedMotion(): Boolean =
     Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-
-/** Stands in for the onboarding pages until they are built. */
-@Composable
-private fun OnboardingPlaceholder(onDone: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text("Welcome to OpenCircuit")
-        Button(onClick = onDone) { Text("Get started") }
-    }
-}
