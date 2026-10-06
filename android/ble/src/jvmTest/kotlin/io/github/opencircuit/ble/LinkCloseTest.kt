@@ -1,5 +1,6 @@
 package io.github.opencircuit.ble
 
+import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -56,5 +57,38 @@ class LinkCloseTest {
         runCurrent()
         assertEquals(1, ring.log.count { it.startsWith("connect") }, "a closed link never connects again")
         assertEquals(SendResult.Failed(SendFailure.LINK_LOST), link.send(Fixtures.hex("950000")))
+    }
+
+    @Test
+    fun aLinkWhoseScopeEndedPublishesTheTeardownAndCountsTheFramesNobodyTook() = runTest {
+        val linkScope = CoroutineScope(coroutineContext + Job())
+        val ring = FakeGatt(backgroundScope, Fixtures.acceptingRing())
+        val link = RingLink(Fixtures.ring, ring, linkScope)
+        val teardowns = recordTeardowns(link)
+        link.connect()
+        runCurrent()
+        assertEquals(LinkState.Authenticated, link.state.value)
+
+        linkScope.cancel()
+        runCurrent()
+
+        // The frame that authenticated the connection was never collected.
+        assertEquals(listOf(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 1)), teardowns)
+    }
+
+    @Test
+    fun closingALinkThatOwnsItsScopePublishesExactlyOneTeardown() = runTest {
+        val owner = Job()
+        val ring = FakeGatt(backgroundScope, Fixtures.acceptingRing())
+        val link: RingLink = OwnedRingLink(LinkCore(Fixtures.ring, ring, CoroutineScope(coroutineContext + owner)), owner)
+        val teardowns = recordTeardowns(link)
+        link.connect()
+        runCurrent()
+        assertEquals(LinkState.Authenticated, link.state.value)
+
+        (link as AutoCloseable).close()
+        runCurrent()
+
+        assertEquals(listOf(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 1)), teardowns)
     }
 }

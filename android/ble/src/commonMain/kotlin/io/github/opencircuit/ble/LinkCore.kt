@@ -632,7 +632,11 @@ internal class LinkCore(
             // Checked once, as upstream RingScanner.swift:977-986: a later frame does not reopen it.
             LinkTimer.STABILITY -> if (frameSeen) attempts = 0
             LinkTimer.RECONNECT -> open(standingConnection = nextIsStanding)
-            LinkTimer.BOND -> if (awaitingBond) pairingFailed(PairingFailure.BOND_TIMED_OUT)
+            // The bond broadcast can be lost (or its receiver refused): ask Android once more
+            // before calling the pairing failed, so a bond the user accepted is never reported as one.
+            LinkTimer.BOND -> if (awaitingBond) {
+                if (readBondState() == GattPort.BondState.BONDED) continueAfterBond() else pairingFailed(PairingFailure.BOND_TIMED_OUT)
+            }
             LinkTimer.NOT_STREAMING -> {
                 stateFlow.value = LinkState.NotStreaming
                 note("not streaming", "no data frame ${NOT_STREAMING_AFTER.toMillis()} ms after the CCCD")
@@ -716,14 +720,20 @@ internal class LinkCore(
 
     /**
      * The loop ended (its scope was cancelled): close what is open, answer every waiting caller and
-     * show `Idle`, so nobody watching sees a live link that is gone. Runs once the loop has
-     * finished, so it is the only code touching these fields.
+     * show `Idle`, so nobody watching sees a live link that is gone. A connection that had
+     * connected publishes its teardown as a deliberate stop, with the frames nobody took counted,
+     * exactly as a `disconnect()` would: ending the link's scope is how its owner stops it, and the
+     * queued `disconnect()` of `close()` may never be handled once the scope is cancelled. Runs
+     * once the loop has finished, so it is the only code touching these fields.
      */
     private fun abandon() {
         if (session != null) {
             closePort()
             session = null
             queue.clear().forEach { (it as? GattOp.Write)?.reply?.complete(SendResult.Failed(SendFailure.LINK_LOST)) }
+            val undelivered = frameBuffer.clear()
+            if (connected) teardownBuffer.add(LinkTeardown(TeardownReason.USER_DISCONNECTED, undelivered))
+            connected = false
         }
         stateFlow.value = LinkState.Idle
     }

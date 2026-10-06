@@ -167,6 +167,24 @@ class BondFailureTest {
     }
 
     @Test
+    fun aBondMadeWhoseBroadcastNeverArrivedIsFoundAtTheTimeoutAndTheBringUpGoesOn() = runTest {
+        // No bond listener: Android's bond broadcast never reaches the link.
+        val ring = FakeGatt(backgroundScope, unbondedRing())
+        val link = LinkCore(Fixtures.ring, ring, backgroundScope)
+        link.connect()
+        runCurrent()
+        assertEquals(LinkState.PairingNeeded, link.state.value)
+
+        ring.changeBondState(BondState.BONDED) // the user accepted the pairing prompt
+        runCurrent()
+        assertEquals(LinkState.PairingNeeded, link.state.value, "nothing told the link yet")
+
+        advance(40_000)
+        assertEquals(LinkState.Authenticated, link.state.value)
+        assertEquals(1, ring.connects.size, "the same connection went on")
+    }
+
+    @Test
     fun aBondThatArrivesAfterThePairingFailedDoesNotReopenTheLink() = runTest {
         val (ring, link) = waitingForTheBond()
         advance(40_000)

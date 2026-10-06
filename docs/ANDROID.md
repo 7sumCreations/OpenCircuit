@@ -86,8 +86,9 @@ the ring sends except the auth challenge the link answers itself; `send(command)
 command. A `RememberedRing` is the ring's upper-case address, its address type and its advertised
 name; the app stores it. When the app is done with a link for good (the ring is forgotten or
 replaced), it ends it with `(link as? AutoCloseable)?.close()`, which closes the connection and
-unregisters the link's Bluetooth receivers; a closed link shows `Idle`, answers every `send()`
-with `Failed(LINK_LOST)` and ignores `connect()`. A link dropped without `close()` keeps its
+unregisters the link's Bluetooth receivers; a connection open at the time publishes one
+`LinkTeardown` (`USER_DISCONNECTED`, with the frames nobody took counted); a closed link shows
+`Idle`, answers every `send()` with `Failed(LINK_LOST)` and ignores `connect()`. A link dropped without `close()` keeps its
 receivers registered for the life of the process.
 
 **Bring-up order.** Each connection goes connect → service discovery → bond → ATT MTU exchange
@@ -104,7 +105,8 @@ for a direct connect, 10 s for discovery, 40 s for the bond, 5 s for the rest).
 discovery: an already bonded ring goes on, a ring already bonding is waited for, and otherwise the
 link calls `createBond()` once and waits while Android shows its pairing prompt. A bond that is
 refused, falls back to "not bonded" or is not made in 40 s shows `PairingFailed(reason)` and is
-not retried until the next `connect()`. Bond changes on a live connection keep `LinkInfo.bonded`
+not retried until the next `connect()`; at 40 s the link reads the bond state once more first, so
+a bond made while its broadcast was lost lets the bring-up go on. Bond changes on a live connection keep `LinkInfo.bonded`
 current. Ten seconds with only `0x81` frames after notifications are on shows `NotStreaming` (the
 ring has not accepted this phone); the first data frame clears it. Three connections in a row to
 a bonded ring that Android drops within 2 s or before discovery is done show
