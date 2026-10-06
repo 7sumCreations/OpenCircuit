@@ -39,7 +39,11 @@ internal class AndroidLinkBroadcasts(
         override fun onReceive(context: Context, intent: Intent) {
             val device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
             if (!device.address.equals(ring.address, ignoreCase = true)) return
-            val code = if (intent.hasExtra(BluetoothDevice.EXTRA_BOND_STATE)) intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, 0) else null
+            val code = if (intent.hasExtra(BluetoothDevice.EXTRA_BOND_STATE)) {
+                intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, 0)
+            } else {
+                null
+            }
             bondStateFromCodeOrNull(code)?.let(core::onBondState)
         }
     }
