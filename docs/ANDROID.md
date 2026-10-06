@@ -84,7 +84,9 @@ keeps it for every connection to that ring. `connect()` and `disconnect()` start
 `state` (a `LinkState`) and `info` (a `LinkInfo`) are `StateFlow`s; `frames` delivers every frame
 the ring sends except the auth challenge the link answers itself; `send(command)` writes a
 command. A `RememberedRing` is the ring's upper-case address, its address type and its advertised
-name; the app stores it.
+name; the app stores it. When the app is done with a link for good (the ring is forgotten or
+replaced), it ends it with `(link as? AutoCloseable)?.close()`, which closes the connection and
+unregisters the link's Bluetooth receivers; a closed link does nothing more.
 
 **Bring-up order.** Each connection goes connect → service discovery → bond → ATT MTU exchange
 (517 asked for) → notifications on, waiting until the descriptor write is confirmed → Device
@@ -151,7 +153,10 @@ for Bluetooth power and bond changes with receivers registered at run time and n
 **Diagnostics.** The phone is never on a cable, so a connection-details screen reads what the link
 and the scanner record: `(link as? LinkDiagnostics)?.diagnostics` (the last 64 steps of the link,
 with times) and `(scanner as? ScanDiagnostics)?.lastMatch` (the last matched advertisement's bytes,
-address type and signal strength). Neither holds the ring's address, its MAC or frame contents.
+address type and signal strength). Neither holds the ring's address or frame contents; the
+advertisement's bytes do carry the ring's name, which ends with two bytes of its MAC, so they are
+shown on the user's own screen and never logged or stored. The text form of a `RememberedRing`
+or a `LinkInfo` shows neither the address nor the MAC.
 They are outside the `RingLink` and `RingScanner` interfaces and may grow.
 
 **Tests.** `:ble` publishes its test doubles as test fixtures: `FakeRingLink`, a link the test

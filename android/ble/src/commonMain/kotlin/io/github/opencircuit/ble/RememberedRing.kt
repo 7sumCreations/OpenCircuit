@@ -16,7 +16,13 @@ data class RememberedRing(
     val addressType: AddressType,
     /** The advertised name when the ring was found, if it had one. */
     val name: String?,
-)
+) {
+    /**
+     * For logs: the address type only. The address is the ring's MAC and its advertised name ends
+     * with two bytes of it, so neither is shown.
+     */
+    override fun toString(): String = "RememberedRing(addressType=$addressType, name=${if (name == null) "none" else "set"})"
+}
 
 /** The Bluetooth LE address type of a [RememberedRing]. */
 enum class AddressType {

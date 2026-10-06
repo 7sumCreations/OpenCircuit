@@ -26,4 +26,15 @@ data class LinkInfo(
     val historySafe: Boolean = false,
     /** True when the phone holds a bond with the ring. */
     val bonded: Boolean = false,
-)
+) {
+    /**
+     * For logs: never the MAC, nor the model name (the advertised name, which ends with two bytes
+     * of the MAC); only whether each is known.
+     */
+    override fun toString(): String =
+        "LinkInfo(firmware=${firmware.version}/${firmware.manufacturer}/${firmware.hardwareRevision ?: "none"}, " +
+            "model=${known(firmware.modelName.isNotEmpty())}, mac=${known(mac != null)}, macMismatch=$macMismatch, " +
+            "attMtu=$attMtu, historySafe=$historySafe, bonded=$bonded)"
+
+    private fun known(isKnown: Boolean): String = if (isKnown) "set" else "none"
+}

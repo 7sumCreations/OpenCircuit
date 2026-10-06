@@ -670,12 +670,18 @@ internal class LinkCore(
         awaitingBond = false
     }
 
-    /** The loop ended (its scope was cancelled): close what is open and answer every waiting caller. */
+    /**
+     * The loop ended (its scope was cancelled): close what is open, answer every waiting caller and
+     * show `Idle`, so nobody watching sees a live link that is gone. Runs once the loop has
+     * finished, so it is the only code touching these fields.
+     */
     private fun abandon() {
-        if (session == null) return
-        closePort()
-        session = null
-        queue.clear().forEach { (it as? GattOp.Write)?.reply?.complete(SendResult.Failed(SendFailure.LINK_LOST)) }
+        if (session != null) {
+            closePort()
+            session = null
+            queue.clear().forEach { (it as? GattOp.Write)?.reply?.complete(SendResult.Failed(SendFailure.LINK_LOST)) }
+        }
+        stateFlow.value = LinkState.Idle
     }
 
     private fun closePort() {

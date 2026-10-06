@@ -15,18 +15,25 @@ import kotlinx.coroutines.SupervisorJob
  * The device is rebuilt from the ring's address and address type on every connection
  * (`BluetoothAdapter.getRemoteLeDevice`), so reconnecting never needs a scan. The link also offers
  * [LinkDiagnostics]: `(link as? LinkDiagnostics)?.diagnostics`.
+ *
+ * When the app is done with the link for good (the ring is forgotten or replaced), it ends it with
+ * `(link as? AutoCloseable)?.close()`: the connection is closed, both receivers are unregistered
+ * and the link does nothing more. A link that is dropped without `close()` keeps its receivers
+ * registered for the life of the process.
  */
 fun RingLink(context: Context, ring: RememberedRing): RingLink =
     androidRingLink(context.applicationContext, ring, CoroutineScope(SupervisorJob() + Dispatchers.Default))
 
 /**
- * The Android link in [scope]: the link core over the Android GATT port, with the adapter-state
- * and bond receivers registered before the first `connect()` and unregistered when [scope] ends.
+ * The Android link in [scope] (which must hold a [Job]): the link core over the Android GATT port,
+ * with the adapter-state and bond receivers registered before the first `connect()` and
+ * unregistered when [scope] ends, which `close()` on the returned link does.
  */
 internal fun androidRingLink(context: Context, ring: RememberedRing, scope: CoroutineScope): RingLink {
+    val owner = checkNotNull(scope.coroutineContext[Job]) { "the link's scope needs a Job to end it" }
     val core = LinkCore(ring, AndroidGattPort(context), scope)
     val broadcasts = AndroidLinkBroadcasts(context, ring, core)
     broadcasts.start()
-    scope.coroutineContext[Job]?.invokeOnCompletion { broadcasts.stop() }
-    return core
+    owner.invokeOnCompletion { broadcasts.stop() }
+    return OwnedRingLink(core, owner)
 }

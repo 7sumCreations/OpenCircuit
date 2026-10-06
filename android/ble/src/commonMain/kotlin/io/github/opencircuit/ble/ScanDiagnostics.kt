@@ -9,7 +9,9 @@ import kotlinx.coroutines.flow.StateFlow
  * Not part of [RingScanner]: a scanner that keeps it offers it as well, and the app reaches it
  * with `(scanner as? ScanDiagnostics)`. The scanner this module's Android factory builds does.
  *
- * Nothing in it holds the ring's address.
+ * It holds no address field, but the advertisement's bytes carry the ring's advertised name, which
+ * ends with two bytes of its MAC (`RingConn Gen2-XXXX`), and may carry manufacturer data: show
+ * them on the user's own screen if needed, and never log or store them.
  */
 interface ScanDiagnostics {
     /**
