@@ -32,7 +32,7 @@ See §5 for full decode + validation results, §6 for streaming tools.
 | Device Info | — | standard | `0x2A23` = System ID (used for MAC → SM3 auth) |
 | Secondary | 0x0900 | `1d14d6ee-fd63-4fa1-bfa4-8f47b42119f0` | **DFU/OTA only** — zero response to all probes |
 
-**Auth (SM3):** `SM3([V, challenge])[-3:]` where `V = mac[3] ^ mac[4] ^ mac[5]`. MAC is derived from 0x2A23 System ID (`sysid[5::-1]`). This replaces standard BLE bonding — the ring gates all data commands behind this challenge-response.
+**Auth (SM3):** `SM3([V, challenge])[-3:]` where `V = mac[3] ^ mac[4] ^ mac[5]`. MAC is derived from 0x2A23 System ID (`sysid[5::-1]`). This replaces standard BLE bonding — the ring gates all data commands behind this challenge-response. **Correction (see `PROTOCOL.md` §0, §5.8):** SM3 auth does not replace bonding. Both are required: the ring gates data commands on the LE bond, and the SM3 reply is the per-connection step on top of it.
 
 ---
 

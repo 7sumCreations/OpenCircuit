@@ -69,3 +69,112 @@ It must end with `GATE A: declared N, executed N, failed 0 — PASS`. Any other 
 skipped test, or a test that never ran) is a `FAIL` with exit status 1, and the change does not
 ship. The count matters because a test can drop out without failing: JUnit 5 silently ignores a
 test function that returns a value, and Gradle reports a skipped test as a success.
+
+## Bluetooth link (`:ble`)
+
+`:ble` is the conversation with the ring over Bluetooth LE: it finds the ring, bonds with it,
+proves who it is on every connection, acknowledges the ring's data pages and reconnects when the
+link drops. It uses Android's own Bluetooth APIs only (no third-party BLE library) and runs its
+whole state machine on the JVM in tests, against a scripted ring. The protocol itself (frames,
+auth, decoding) is `:ringkit`'s; `:ble` routes frames by their first byte and passes them on
+unchanged.
+
+**The link.** The app builds one `RingLink` per remembered ring with `RingLink(context, ring)` and
+keeps it for every connection to that ring. `connect()` and `disconnect()` start and stop it;
+`state` (a `LinkState`) and `info` (a `LinkInfo`) are `StateFlow`s; `frames` delivers every frame
+the ring sends except the auth challenge the link answers itself; `send(command)` writes a
+command. A `RememberedRing` is the ring's upper-case address, its address type and its advertised
+name; the app stores it. When the app is done with a link for good (the ring is forgotten or
+replaced), it ends it with `(link as? AutoCloseable)?.close()`, which closes the connection and
+unregisters the link's Bluetooth receivers; a connection open at the time publishes one
+`LinkTeardown` (`USER_DISCONNECTED`, with the frames nobody took counted); a closed link shows
+`Idle`, answers every `send()` with `Failed(LINK_LOST)` and ignores `connect()`. A link dropped without `close()` keeps its
+receivers registered for the life of the process.
+
+**Bring-up order.** Each connection goes connect → service discovery → bond → ATT MTU exchange
+(517 asked for) → notifications on, waiting until the descriptor write is confirmed → Device
+Information reads (System ID, firmware, manufacturer, hardware) → `01 00 00` → the answer to the
+ring's `81 00 <challenge>`, computed from the ring's MAC → the first frame other than `0x81`. The
+link shows `Connecting`, `Discovering`, `PairingNeeded` (while a bond is being made), `Preparing`,
+`Authenticating` and then `Authenticated`. Auth starts only once notifications are confirmed, and
+a challenge that arrives before the MAC is known waits for it. Android runs one GATT operation at
+a time, so every operation waits for the previous one's answer, each with its own timeout (35 s
+for a direct connect, 10 s for discovery, 40 s for the bond, 5 s for the rest).
+
+**Bonding.** The ring ignores data from a phone it is not bonded to, so the link bonds after
+discovery: an already bonded ring goes on, a ring already bonding is waited for, and otherwise the
+link calls `createBond()` once and waits while Android shows its pairing prompt. A bond that is
+refused, falls back to "not bonded" or is not made in 40 s shows `PairingFailed(reason)` and is
+not retried until the next `connect()`; at 40 s the link reads the bond state once more first, so
+a bond made while its broadcast was lost lets the bring-up go on (if that read fails too, the
+bond counts as not made). If Android cannot report the bond state when the link first checks it,
+the connection fails and reconnects as below; a bond broadcast with a missing or unrecognised
+state is ignored. Bond changes on a live connection keep `LinkInfo.bonded` current. Ten seconds with only `0x81` frames after notifications are on shows `NotStreaming` (the
+ring has not accepted this phone); the first data frame clears it. Three connections in a row to
+a bonded ring that Android drops within 2 s or before discovery is done show
+`BondLostSuspected`: the user should forget the ring in Settings and pair again. Only drops that
+Android reports count, never the link's own timeouts, and the link keeps reconnecting meanwhile.
+The app never removes a bond.
+
+**Sending.** `send()` never throws; it answers `Sent`, `Failed(reason)` or `Refused(reason)` and
+writes nothing when it refuses: before `Authenticated` (`NOT_AUTHENTICATED`); the link's own auth
+commands `01 00 00` and `01 01 …` (`AUTH_COMMAND_RESERVED`); any command outside the `0x01` status
+family without a bond (`NOT_BONDED`); a history sync open while the ATT MTU is below 246, too small
+for a whole history frame (`HISTORY_UNSAFE`, the MTU gate; `LinkInfo.historySafe`).
+Acknowledgements of the ring's pages (`0x47`, `0x4C`, `0x4D`) and heartbeats (`0x11`) are the
+link's job: each is written once, in arrival order, ahead of any waiting `send()`. If the
+coroutine calling `send()` is cancelled while its write still waits its turn, the write is dropped
+and never reaches the ring; a write already under way completes.
+
+**One collector at a time.** `frames` and `teardowns` each take one collector at a time: a second
+collection while one runs throws `IllegalStateException`. Frames wait in order while nobody
+collects, and a collector that stops or is cancelled leaves what it did not take for the next.
+The app should collect `frames` once and hand each frame on from there. When a connection is torn
+down, the frames still waiting are dropped and counted in the `LinkTeardown` it publishes.
+
+**Reconnecting.** A failure (a timeout, an error status, a refused call, or an unexpected error
+inside the link itself) or a drop closes the connection and tries again by the ring's address, never by scanning: `Reconnecting(attempt,
+delay)` after 1 s, 5 s, then 30 s, and after three failed attempts (or once the ring is plainly out
+of reach) a standing connection that waits for the ring to come back (`WaitingForRing`). The count
+resets once a connection has stayed up 6 s and delivered a frame. Bluetooth turning off shows
+`BluetoothOff` and closes everything; turning on connects again if a connection was wanted.
+Callbacks from a closed connection change nothing. An unexpected error never stops the link or
+crashes the app: it fails the current connection, which then reconnects as above.
+
+**Scanning.** `RingScanner(context).scan()` is a cold flow of `ScanUpdate`s: each collection starts
+one scan and cancelling it stops the scan (Android throttles apps that start more than five scans
+in 30 s). A ring matches by its name prefix or by advertising its data service. Each new ring is
+reported with `Found(rings)`; 2.5 s after the latest new ring, one ring gives `Selected(ring)` and
+the scan ends, several give `Choose(rings)` and the scan goes on until the app cancels it; 15 s
+with no ring gives `NoRingFound`; a scan error gives `Failed(errorCode)`, and `-1` means Android
+refused to start the scan. The address type comes from the scan result on Android 15 and later,
+else from the address's top two bits.
+
+**Availability.** `BTAvailability.of(permission, adapterState)` tells the connect screen what to
+offer: `READY`, `POWERED_OFF` ("Turn on Bluetooth"), `DENIED` ("Allow in Settings") or
+`NOT_DETERMINED` (ask for the permission). The app maps Android's permission state to
+`BluetoothPermission` and the adapter's state to `AdapterState` (`null` when not read yet).
+
+**Permissions.** The `:ble` library declares none. The app declares `BLUETOOTH_SCAN` (with
+`neverForLocation`) and `BLUETOOTH_CONNECT` and holds them before scanning or connecting; a
+missing or revoked permission fails the operation and never crashes the link. The link listens
+for Bluetooth power and bond changes with receivers registered at run time and not exported.
+
+**Diagnostics.** The phone is never on a cable, so a connection-details screen reads what the link
+and the scanner record: `(link as? LinkDiagnostics)?.diagnostics` (the last 64 steps of the link,
+with times) and `(scanner as? ScanDiagnostics)?.lastMatch` (the last matched advertisement's bytes,
+address type and signal strength). Neither holds the ring's address or frame contents; the
+advertisement's bytes do carry the ring's name, which ends with two bytes of its MAC, so they are
+shown on the user's own screen and never logged or stored. The text form of a `RememberedRing`
+or a `LinkInfo` shows neither the address nor the MAC.
+They are outside the `RingLink` and `RingScanner` interfaces and may grow.
+
+**Tests.** `:ble` publishes its test doubles as test fixtures: `FakeRingLink`, a link the test
+drives by hand (states, info, frames, teardowns, scripted `send()` answers and diagnostics, with
+the same one-collector rule), and `FakeGatt`, a scripted ring that fails a test the moment a
+second GATT operation is started before the first one's answer. Another module's tests use them
+with:
+
+```kotlin
+testImplementation(testFixtures(project(":ble")))
+```

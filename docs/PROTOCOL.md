@@ -48,6 +48,12 @@ phones, so this doesn't disturb the Android pairing.
 > **Operational requirement:** any device running OpenCircuit must already be bonded to
 > the ring (pair via the official app once). This is the make-or-break unknown — answered:
 > offline decode works, *direct ring access* just needs a one-time bond.
+>
+> **Cross-reference (§5.8):** the "pair via the official app once" step is no longer needed. The
+> bond is a local LE Secure Connections "Just Works" pairing (§5.8 *Bonding* 🟢), and a
+> factory-fresh ring streamed with OpenCircuit before the official app was ever installed
+> (§5.8, issue #106 🟢). What stands is the bond itself: an unbonded central still gets only
+> the `0x01` replies.
 
 ## 1. Connection & GATT layout
 
@@ -101,6 +107,12 @@ phone the app needs no further auth, but an unbonded central gets only the `0x01
 handshake — data commands (`0x02`/`0x07`/`0x95`) are silently dropped until the link
 is bonded. So the "no auth" above is conditional on a bonded link.
 
+> **Superseded by §5.8 🟢:** there *is* a per-connection app-layer handshake. On every connect the
+> host writes `01 00 00`, the ring answers `81 00 <chal> <xor>`, and the host must reply
+> `01 01 <r0> <r1> <r2> 00`, computed with SM3 from the challenge and the ring's MAC. The
+> `01 01 …` write that looked like a second status read (§4) is that reply. Both gates apply:
+> the LE bond (§0) and the challenge reply (§5.8).
+
 ## 3. Framing 🟢 (verified live on the Mac)
 
 **Commands and responses use DIFFERENT trailers — this corrects an earlier error.**
@@ -135,6 +147,11 @@ Bulk frames (`0x47`/`0x4c`) pack fixed-size records, each prefixed by delimiter
 | **Vibrate motor** | `0b 03 <pattern> 64 00` | `8b 00 8b` | **drive the Gen 3 haptic motor** (§5.9) | 🟡 |
 | **BP / dense-PPG mode** | `06 05 00` | `86 00 86` | mode 5 → pushes 100 Hz `0x12` raw PPG (§5.10) | 🟢 |
 | Sensor/temp readout | `29 00 00` | `a9 ..` (10B) | descriptor `[6:14]` slice; app sends it before every BP run | 🟡 |
+
+> **Note (§5.8 🟢):** `01 01 31 82 67 00` is not a fixed command. It is the auth reply for
+> challenge `0xb0` on one particular ring, so it only works when that ring happens to send
+> `0xb0`. A client computes `01 01 <r0> <r1> <r2> 00` from each `81 00 <chal>` and the ring's MAC
+> (`RingAuth.authCommand`). The same applies to the live-HR sequence below.
 
 **The `02` arg is a sync CURSOR, not a timestamp** (🟢, this was the key unlock). The cursor
 is *seconds since 2019* (§5.6). ⚠️ **`02 00 FF FF FF FF 00 01 00` does NOT mean "sync
@@ -235,6 +252,8 @@ Be the **sole** syncer — stop running the official app, which races us for the
 07 00 00                  -> 15 ..        (first live sample)
 95 00 00  (repeat)        -> 15 00 <hr> 0a b0 <xor>   (one HR sample per poll)
 ```
+(The `01 01 31 82 67 00` line is that ring's reply to challenge `0xb0`; compute it per challenge,
+§5.8.)
 Caveats (🟡): live `15` frames require the ring **worn with good skin contact** and
 a few seconds of PPG warm-up; and the ring sleeps/stops advertising seconds after
 disconnect (wake via charger contact or motion). Metric-specific sync commands
