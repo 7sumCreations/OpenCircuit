@@ -4,7 +4,8 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import io.github.opencircuit.app.connect.AndroidAdapterStateSource
-import io.github.opencircuit.app.connect.RingConnector
+import io.github.opencircuit.app.connect.AndroidCompanionPort
+import io.github.opencircuit.app.connect.CompanionPairing
 import io.github.opencircuit.app.connect.RingScannerFactory
 import io.github.opencircuit.app.data.AppPrefs
 import io.github.opencircuit.app.data.PrefsAppPrefs
@@ -12,6 +13,7 @@ import io.github.opencircuit.app.data.PrefsRememberedRingStore
 import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.session.RingSessionController
+import io.github.opencircuit.app.session.RingSessions
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.RingScanner
@@ -33,9 +35,9 @@ fun interface RingLinkFactory {
  * The app's object graph, built once in [OpenCircuitApp.onCreate] and kept for the process
  * lifetime (no dependency-injection framework).
  *
- * The session controller lives here, not in a screen: it is the one collector of its link's
- * frames, a link's frames take one collector at a time, and the session holds its collection for
- * as long as it lives, so it must outlive any activity.
+ * The ring sessions live here, not in a screen: a session controller is the one collector of its
+ * link's frames, a link's frames take one collector at a time, and the session holds its
+ * collection for as long as it lives, so it must outlive any activity.
  */
 class AppContainer(context: Context) {
 
@@ -45,11 +47,16 @@ class AppContainer(context: Context) {
     /** Milliseconds since boot, counting sleep; never jumps when the user changes the clock. */
     val monotonicMillis: () -> Long = { SystemClock.elapsedRealtime() }
 
-    /** Links to a real ring over the phone's Bluetooth (`:ble`'s Android factory). */
-    val ringLinkFactory: RingLinkFactory = RingLinkFactory { ring -> RingLink(context.applicationContext, ring) }
-
-    /** Process-lifetime scope for the session's frame and teardown collections. */
+    /** Process-lifetime scope for the sessions' frame and teardown collections. */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Links to a ring over the phone's Bluetooth (`:ble`'s Android factory). In debug builds the
+     * demo ring gets the demo link instead.
+     */
+    val ringLinkFactory: RingLinkFactory = RingLinkFactory { ring ->
+        VariantLinks.demoLinkFor(ring, appScope) ?: RingLink(context.applicationContext, ring)
+    }
 
     /** One line to the system log. Callers never pass frame bytes or an address. */
     val log: (String) -> Unit = { Log.i(LOG_TAG, it) }
@@ -63,13 +70,22 @@ class AppContainer(context: Context) {
     /** The ring the app reconnects to. */
     val rememberedRings: RememberedRingStore = PrefsRememberedRingStore(keyValues)
 
+    /** Android's companion-device manager: the pairing sheet before the first bond, and forgetting. */
+    val companionPairing: CompanionPairing = CompanionPairing(AndroidCompanionPort(context), log)
+
     /**
-     * The session with the ring, or null when there is no ring to talk to yet. Debug builds use
-     * the demo ring; choosing and remembering a real ring is not built yet.
+     * The sessions with the remembered ring: one link per ring, kept for the process (the Android
+     * link listens for Bluetooth and bond changes from the moment it is built). A pairing hands its
+     * ring here; launch reconnects the saved one without a scan; Stop reconnecting forgets it.
      */
-    val ringSession: RingSessionController? by lazy {
-        VariantLinks.demoLink?.invoke(appScope)?.let { RingSessionController(it, appScope, monotonicMillis, log) }
-    }
+    val ringSessions: RingSessions = RingSessions(
+        links = ringLinkFactory,
+        rings = rememberedRings,
+        companion = companionPairing,
+        scope = appScope,
+        newSession = { link, scope -> RingSessionController(link, scope, monotonicMillis, log) },
+        log = log,
+    )
 
     /** The Bluetooth adapter's state; the activity starts and stops it as it shows and hides. */
     val adapterStates: AndroidAdapterStateSource = AndroidAdapterStateSource(context, log)
@@ -80,18 +96,7 @@ class AppContainer(context: Context) {
      * finds the demo ring.
      */
     val ringScannerFactory: RingScannerFactory = RingScannerFactory {
-        val demoRing = ringSession?.link?.ring
-        if (demoRing != null) VariantLinks.demoScanner?.invoke(demoRing) ?: RingScanner(context.applicationContext)
-        else RingScanner(context.applicationContext)
-    }
-
-    /**
-     * Connects the ring a scan selected or the user picked. For now the only link the app holds is
-     * the session's (the demo ring in debug builds), so a selection connects that session; a link
-     * built for the chosen ring, remembered and reconnected on launch, replaces this.
-     */
-    val ringConnector: RingConnector = RingConnector { _ ->
-        ringSession?.connect() ?: log("A ring was chosen, but this build has no link to connect it with yet")
+        VariantLinks.demoScanner?.invoke() ?: RingScanner(context.applicationContext)
     }
 
     /** The Ring screen's title; debug builds say when the ring is the demo. */

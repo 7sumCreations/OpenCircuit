@@ -29,6 +29,9 @@ enum class LinkAction(
     /** Scan again after nothing was found or the scan failed. */
     SEARCH_AGAIN("Search again"),
 
+    /** Go on from the app's explanation to Android's pairing sheet. */
+    CONTINUE_PAIRING("Continue"),
+
     /** Stop a connection that is being made. */
     CANCEL("Cancel"),
 

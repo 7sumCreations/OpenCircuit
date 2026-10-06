@@ -1,5 +1,6 @@
 package io.github.opencircuit.app
 
+import io.github.opencircuit.app.connect.CompanionPairing
 import io.github.opencircuit.app.connect.ConnectFlowController
 import io.github.opencircuit.app.connect.PermissionSnapshot
 import io.github.opencircuit.app.data.PrefsAppPrefs
@@ -60,8 +61,17 @@ internal class ConnectScreen(
     val logLines: MutableList<String>,
     val flow: ConnectFlowController,
     val viewModel: RingViewModel,
+    val companion: FakeCompanionPort,
 ) {
     val link get() = viewModel.uiState.value.card.link
+
+    /** The chosen ring's explanation → Continue → Android's sheet → Allow: the ring is handed to the connector. */
+    fun approvePairing() {
+        flow.continuePairing()
+        companion.showSheet()
+        flow.onPairingSheetShown()
+        flow.onPairingSheetResult(-1)
+    }
 }
 
 internal fun TestScope.connectScreen(
@@ -72,6 +82,7 @@ internal fun TestScope.connectScreen(
     val adapterFlow = MutableStateFlow(adapter)
     val connected = mutableListOf<RememberedRing>()
     val logLines = mutableListOf<String>()
+    val companion = FakeCompanionPort()
     val flow = ConnectFlowController(
         prefs = PrefsAppPrefs(values),
         rings = PrefsRememberedRingStore(values),
@@ -80,8 +91,9 @@ internal fun TestScope.connectScreen(
         adapterState = adapterFlow,
         scope = backgroundScope,
         log = { logLines += it },
+        pairing = CompanionPairing(companion) { logLines += it },
     )
-    val viewModel = RingViewModel(controller = null, title = "Ring", scope = backgroundScope, connectFlow = flow, adapterState = adapterFlow)
+    val viewModel = RingViewModel(sessions = null, title = "Ring", scope = backgroundScope, connectFlow = flow, adapterState = adapterFlow)
     testScheduler.runCurrent()
-    return ConnectScreen(scanner, values, adapterFlow, connected, logLines, flow, viewModel)
+    return ConnectScreen(scanner, values, adapterFlow, connected, logLines, flow, viewModel, companion)
 }

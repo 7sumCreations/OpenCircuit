@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import io.github.opencircuit.app.connect.ConnectFlowController
 import io.github.opencircuit.app.connect.ConnectFlowPresenter
 import io.github.opencircuit.app.connect.ConnectFlowState
+import io.github.opencircuit.app.connect.PairingSheet
 import io.github.opencircuit.app.connect.PermissionSnapshot
 import io.github.opencircuit.app.connect.ScanStep
 import io.github.opencircuit.app.live.LiveMeasureState
@@ -11,6 +12,7 @@ import io.github.opencircuit.app.live.MeasureUi
 import io.github.opencircuit.app.live.measureUi
 import io.github.opencircuit.app.session.KeepaliveProblem
 import io.github.opencircuit.app.session.RingSessionController
+import io.github.opencircuit.app.session.SessionHost
 import io.github.opencircuit.ble.AdapterState
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.CoroutineScope
@@ -19,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
@@ -33,10 +36,11 @@ data class RingUiState(
 )
 
 /**
- * Hosts the Ring screen's state: maps the session's link state, device status, keepalive and
- * live measure, and the Scan & connect flow, into one [RingUiState]. [scope] becomes the view
+ * Hosts the Ring screen's state: maps the current session's link state, device status, keepalive
+ * and live measure, and the Scan & connect flow, into one [RingUiState]. [scope] becomes the view
  * model's scope (the app passes a main-thread scope; tests pass a virtual-time one). Opening the
- * screen connects the session's link, when there is one.
+ * screen reconnects the remembered ring, by its address, with no scan. The session can come and
+ * go while the screen is open: a pairing starts one, Stop reconnecting ends it.
  *
  * While a scan runs or has just ended, the card shows the scan. Otherwise, while the link is idle
  * (or there is no link yet), it shows what a Scan & connect tap would do now: ready, Nearby
@@ -44,7 +48,7 @@ data class RingUiState(
  * live. Any other link state shows the link's own words.
  */
 class RingViewModel(
-    private val controller: RingSessionController?,
+    private val sessions: SessionHost?,
     title: String,
     scope: CoroutineScope,
     private val connectFlow: ConnectFlowController? = null,
@@ -54,28 +58,33 @@ class RingViewModel(
     /** The Ring screen's state. */
     val uiState: StateFlow<RingUiState>
 
-    init {
-        val ringName = controller?.link?.ring?.name
+    /** The session the screen shows now, or null. */
+    private val controller: RingSessionController? get() = sessions?.current?.value
 
+    init {
         fun render(parts: LinkParts, flow: ConnectFlowState, adapter: AdapterState?): RingUiState {
             val measuring = parts.live.mode != null
             val flowCard = ConnectFlowPresenter.scan(flow)
                 ?: if (parts.link == LinkState.Idle) ConnectFlowPresenter.availability(flow, adapter) else null
             return RingUiState(
                 title = title,
-                card = connectionCardUi(parts.link, ringName, parts.status, measuring, parts.problem, flowCard),
+                card = connectionCardUi(parts.link, parts.ringName, parts.status, measuring, parts.problem, flowCard),
                 // Measuring needs an authenticated link (upstream draws the buttons only when ready, VT:319-337).
                 // Only the charger byte blocks Measure; an inferred charge never does (PORTING D-242).
                 measure = if (parts.link == LinkState.Authenticated) measureUi(parts.live, onCharger = parts.status.onCharger) else null,
             )
         }
 
-        val linkParts: Flow<LinkParts> = if (controller == null) {
-            flowOf(LinkParts())
-        } else {
-            controller.connect()
-            combine(controller.state, controller.deviceStatus.state, controller.liveMeasure.state, controller.keepalive.problem, ::LinkParts)
+        val linkParts: Flow<LinkParts> = (sessions?.current ?: MutableStateFlow(null)).flatMapLatest { session ->
+            if (session == null) {
+                flowOf(LinkParts())
+            } else {
+                combine(session.state, session.deviceStatus.state, session.liveMeasure.state, session.keepalive.problem) { link, status, live, problem ->
+                    LinkParts(link, status, live, problem, session.link.ring.name)
+                }
+            }
         }
+        sessions?.reconnectRemembered()
         val flowState: StateFlow<ConnectFlowState> = connectFlow?.state ?: MutableStateFlow(ConnectFlowState())
         uiState = combine(linkParts, flowState, adapterState, ::render)
             .stateIn(scope, SharingStarted.Eagerly, render(LinkParts(), flowState.value, adapterState.value))
@@ -94,17 +103,39 @@ class RingViewModel(
             RingAction.StopMeasure -> controller?.liveMeasure?.stop()
             is RingAction.Link -> when (action.action) {
                 LinkAction.CANCEL_SCAN -> connectFlow?.cancelScan()
+                LinkAction.CONTINUE_PAIRING -> connectFlow?.continuePairing()
+                // Asks for the bond again on the same link (the link does not retry a failed bond itself).
                 LinkAction.TRY_AGAIN -> controller?.connect()
-                LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT -> controller?.let {
+                LinkAction.CANCEL, LinkAction.DISCONNECT -> controller?.let {
                     // The user's own disconnect ends a running measure as a Stop, not as a lost ring.
                     it.liveMeasure.stop()
                     it.link.disconnect()
                 }
+                // Forgets the ring (the measure is stopped first there too); the card goes back to Ready.
+                LinkAction.STOP_RECONNECTING -> sessions?.stopReconnecting()
                 LinkAction.SCAN_AND_CONNECT, LinkAction.ALLOW_NEARBY, LinkAction.ASK_AGAIN, LinkAction.SEARCH_AGAIN,
                 LinkAction.OPEN_APP_SETTINGS, LinkAction.BLUETOOTH_SETTINGS, LinkAction.TURN_ON_BLUETOOTH,
                 -> Unit
             }
         }
+    }
+
+    /** Android's companion-device sheet, waiting for the activity to show it; null when there is none. */
+    val pairingSheet: StateFlow<PairingSheet?> = connectFlow?.pairingSheet ?: MutableStateFlow(null)
+
+    /** The activity showed the pairing sheet. */
+    fun onPairingSheetShown() {
+        connectFlow?.onPairingSheetShown()
+    }
+
+    /** The pairing sheet closed with [resultCode]. */
+    fun onPairingSheetResult(resultCode: Int) {
+        connectFlow?.onPairingSheetResult(resultCode)
+    }
+
+    /** The activity could not show the pairing sheet. */
+    fun onPairingSheetFailed() {
+        connectFlow?.onPairingSheetFailed()
     }
 
     /** Scan & connect, Search again or Allow Nearby devices; null when this screen has no connect flow. */
@@ -135,5 +166,6 @@ class RingViewModel(
         val status: DeviceStatusState = DeviceStatusState(),
         val live: LiveMeasureState = LiveMeasureState(),
         val problem: KeepaliveProblem? = null,
+        val ringName: String? = null,
     )
 }

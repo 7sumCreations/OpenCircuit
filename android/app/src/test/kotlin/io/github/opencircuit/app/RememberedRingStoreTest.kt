@@ -2,8 +2,15 @@ package io.github.opencircuit.app
 
 import io.github.opencircuit.app.data.PrefsRememberedRingStore
 import io.github.opencircuit.app.data.RingAddress
+import io.github.opencircuit.app.live.LiveMode
+import io.github.opencircuit.app.ring.LinkAction
+import io.github.opencircuit.app.ring.RingAction
+import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.ble.AddressType
+import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.RememberedRing
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import java.util.Base64
 import java.util.Locale
 import kotlin.test.Test
@@ -158,6 +165,89 @@ class RememberedRingStoreTest {
     @Test
     fun nothingSavedReadsAsNoRing() {
         assertNull(store.load())
+    }
+
+    // Stop reconnecting: the link is disconnected and retired, the saved ring is forgotten and the
+    // ring's CDM associations are removed. The phone's bond is left alone (only Android's
+    // Bluetooth settings remove it); the seam has no call that could remove it.
+
+    @Test
+    fun stopReconnectingDisconnectsClosesForgetsAndDisassociatesInThatOrder() = runTest {
+        val under = sessionsUnderTest(values)
+        store.save(RememberedRing(FF, AddressType.RANDOM, "R"))
+        under.sessions.reconnectRemembered()
+        val link = under.factory.built.single()
+
+        under.sessions.stopReconnecting()
+
+        assertEquals(listOf("build", "connect", "disconnect", "close", "disassociate"), under.events)
+        assertTrue(link.closed)
+        assertNull(store.load())
+        assertEquals(listOf(FF), under.companion.addresses)
+        assertNull(under.sessions.current.value)
+    }
+
+    @Test
+    fun afterStopReconnectingTheNextLaunchConnectsNothing() = runTest {
+        store.save(RememberedRing(FF, AddressType.RANDOM, "R"))
+        val first = sessionsUnderTest(values)
+        first.sessions.reconnectRemembered()
+        first.sessions.stopReconnecting()
+
+        val relaunched = sessionsUnderTest(values)
+        relaunched.sessions.reconnectRemembered()
+
+        assertTrue(relaunched.factory.built.isEmpty())
+    }
+
+    @Test
+    fun stopReconnectingDuringAMeasureShowsTheReadyCardAndNoFailure() = runTest {
+        store.save(RememberedRing(FF, AddressType.RANDOM, "R"))
+        val under = sessionsUnderTest(values)
+        val viewModel = RingViewModel(under.sessions, title = "Ring", scope = backgroundScope)
+        runCurrent()
+        val link = under.factory.built.single()
+        link.fake.setState(LinkState.Authenticated)
+        runCurrent()
+        viewModel.onAction(RingAction.Measure(LiveMode.HEART_RATE))
+        advanceTo(5_000)
+        val session = under.sessions.current.value!!
+
+        viewModel.onAction(RingAction.Link(LinkAction.STOP_RECONNECTING))
+        runCurrent()
+
+        val state = viewModel.uiState.value
+        assertEquals("Ready", state.card.link.headline)
+        assertEquals(LinkAction.SCAN_AND_CONNECT, state.card.link.action)
+        assertNull(state.card.ringName)
+        assertNull(state.measure)
+        assertFalse(session.liveMeasure.isMeasuring.value)
+        assertNull(session.liveMeasure.state.value.heartRate.failure, "the user's own stop is not a lost ring")
+    }
+
+    @Test
+    fun stopReconnectingWithNoLinkStillForgetsAndDisassociatesTheSavedRing() = runTest {
+        store.save(RememberedRing(FF, AddressType.RANDOM, "R"))
+        val under = sessionsUnderTest(values)
+
+        under.sessions.stopReconnecting()
+
+        assertNull(store.load())
+        assertEquals(listOf(FF), under.companion.addresses)
+        assertTrue(under.factory.built.isEmpty())
+    }
+
+    @Test
+    fun stopReconnectingWhenTheFileCannotBeWrittenStillDisconnectsAndDisassociates() = runTest {
+        store.save(RememberedRing(FF, AddressType.RANDOM, "R"))
+        val under = sessionsUnderTest(values)
+        under.sessions.reconnectRemembered()
+        values.failWrites = true
+
+        under.sessions.stopReconnecting()
+
+        assertTrue(under.factory.built.single().closed)
+        assertEquals(listOf(FF), under.companion.addresses)
     }
 
     private companion object {

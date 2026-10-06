@@ -29,7 +29,7 @@ class RingSessionTracerTest {
     fun anAuthenticatedRingAndOneDescriptorShowAsConnectedWithItsBattery() = runTest {
         val link = FakeRingLink(ring)
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
-        val viewModel = RingViewModel(controller, title = "Ring", scope = backgroundScope)
+        val viewModel = RingViewModel(sessionsOf(controller), title = "Ring", scope = backgroundScope)
         runCurrent()
         assertEquals("Ready", viewModel.uiState.value.card.link.headline)
         assertNull(viewModel.uiState.value.card.battery)
@@ -76,7 +76,7 @@ class RingSessionTracerTest {
     fun aMeasureTapPollsTheRingAndItsLiveFramesShowInTheReadout() = runTest {
         val link = timedLink()
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
-        val viewModel = RingViewModel(controller, title = "Ring", scope = backgroundScope)
+        val viewModel = RingViewModel(sessionsOf(controller), title = "Ring", scope = backgroundScope)
         runCurrent()
         assertNull(viewModel.uiState.value.measure, "no Measure cards before the ring is authenticated")
         link.fake.setState(LinkState.Authenticated)
@@ -103,7 +103,7 @@ class RingSessionTracerTest {
 
     @Test
     fun withoutALinkTheScreenSaysReadyToScan() = runTest {
-        val viewModel = RingViewModel(controller = null, title = "Ring", scope = backgroundScope)
+        val viewModel = RingViewModel(sessions = null, title = "Ring", scope = backgroundScope)
         runCurrent()
 
         val state = viewModel.uiState.value

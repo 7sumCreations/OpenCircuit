@@ -29,7 +29,7 @@ class ChargingInferenceWiringTest {
     private fun TestScope.screen(firstByte: Int = 0x02): Pair<RingSessionController, RingViewModel> {
         val link = timedLink()
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
-        val viewModel = RingViewModel(controller, title = "Ring", scope = backgroundScope)
+        val viewModel = RingViewModel(sessionsOf(controller), title = "Ring", scope = backgroundScope)
         testScheduler.runCurrent()
         link.fake.setState(LinkState.Authenticated)
         link.fake.emitFrame(descriptor(battery = 66, state = firstByte))

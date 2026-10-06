@@ -78,7 +78,39 @@ object ConnectFlowPresenter {
             LinkAction.SEARCH_AGAIN,
             connected = false,
         )
+        is ScanPhase.ConfirmPairing -> LinkStateUi(
+            "Pair with ${label(phase.ring)}",
+            PAIRING_EXPLAINED,
+            LinkAction.CONTINUE_PAIRING,
+            connected = false,
+            secondary = LinkAction.CANCEL_SCAN,
+        )
+        is ScanPhase.Pairing -> LinkStateUi(
+            "Waiting for Android's pairing sheet…",
+            "Tap Allow when Android asks about ${label(phase.ring)}.",
+            LinkAction.CANCEL_SCAN,
+            connected = false,
+            searching = true,
+        )
+        ScanPhase.PairingCancelled -> LinkStateUi(
+            "Pairing cancelled",
+            "OpenCircuit didn't connect to the ring. Tap Scan & connect to try again.",
+            LinkAction.SCAN_AND_CONNECT,
+            connected = false,
+        )
     }
+
+    /** The ring's advertised name, or "RingConn" when it had none. */
+    private fun label(ring: RememberedRing): String = ring.name?.takeIf(String::isNotEmpty) ?: UNNAMED
+
+    /**
+     * Said before Android's companion-device sheet opens: the sheet's own summary is Android's
+     * generic text for any companion device and cannot be changed.
+     */
+    private const val PAIRING_EXPLAINED =
+        "Android will ask you to allow OpenCircuit to access this ring. Its message mentions syncing info like the " +
+            "name of someone calling: that is Android's standard wording for any companion device. OpenCircuit only " +
+            "reads the ring's own data, on this phone. Allowing it usually lets the pairing finish without another prompt."
 
     /**
      * The picker's rows: the saved ring first (marked "Last used"), then by name, then by
@@ -90,7 +122,7 @@ object ConnectFlowPresenter {
         fun isSaved(ring: RememberedRing) = savedRing != null && RingAddress.same(ring.address, savedRing.address)
         return rings
             .sortedWith(compareBy<RememberedRing> { !isSaved(it) }.thenBy { it.name.orEmpty() }.thenBy { RingAddress.normalized(it.address) ?: it.address })
-            .map { RingChoiceUi(ring = it, label = it.name?.takeIf(String::isNotEmpty) ?: UNNAMED, lastUsed = isSaved(it)) }
+            .map { RingChoiceUi(ring = it, label = label(it), lastUsed = isSaved(it)) }
     }
 
     private const val NOT_ALLOWED = "Bluetooth not allowed"

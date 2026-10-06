@@ -9,8 +9,10 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -22,6 +24,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.opencircuit.app.connect.AndroidPermissionReader
 import io.github.opencircuit.app.connect.ConnectFlowController
+import io.github.opencircuit.app.connect.IntentSenderSheet
+import io.github.opencircuit.app.connect.PairingSheet
 import io.github.opencircuit.app.connect.ScanStep
 import io.github.opencircuit.app.onboarding.Destination
 import io.github.opencircuit.app.onboarding.LaunchFlow
@@ -54,12 +58,13 @@ class MainActivity : ComponentActivity() {
                     prefs = container.appPrefs,
                     rings = container.rememberedRings,
                     scanners = container.ringScannerFactory,
-                    connector = container.ringConnector,
+                    connector = container.ringSessions,
                     adapterState = container.adapterStates.state,
                     scope = scope,
                     log = container.log,
+                    pairing = container.companionPairing,
                 )
-                RingViewModel(container.ringSession, container.ringTitle, scope, connectFlow, container.adapterStates.state)
+                RingViewModel(container.ringSessions, container.ringTitle, scope, connectFlow, container.adapterStates.state)
             }
         }
     }
@@ -71,6 +76,11 @@ class MainActivity : ComponentActivity() {
 
     private val bluetoothEnableRequest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) ringViewModel.onBluetoothEnabled(permissionReader.read())
+    }
+
+    // Android's companion-device sheet; its result code is the pairing's answer.
+    private val pairingSheetRequest = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        ringViewModel.onPairingSheetResult(result.resultCode)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,6 +97,8 @@ class MainActivity : ComponentActivity() {
                         // A grant or refusal made in Settings has no callback: read it on every resume.
                         LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { ringViewModel.onResume(permissionReader.read()) }
                         val state by ringViewModel.uiState.collectAsStateWithLifecycle()
+                        val sheet by ringViewModel.pairingSheet.collectAsStateWithLifecycle()
+                        LaunchedEffect(sheet) { sheet?.let(::showPairingSheet) }
                         RingScreen(state = state, onAction = ::onRingAction, pulse = !reducedMotion())
                     }
                 }
@@ -116,8 +128,27 @@ class MainActivity : ComponentActivity() {
             LinkAction.TURN_ON_BLUETOOTH -> askToTurnOnBluetooth()
             LinkAction.BLUETOOTH_SETTINGS -> openBluetoothSettings()
             LinkAction.OPEN_APP_SETTINGS -> openAppSettings()
-            LinkAction.CANCEL_SCAN, LinkAction.TRY_AGAIN, LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT ->
-                ringViewModel.onAction(action)
+            LinkAction.CANCEL_SCAN, LinkAction.CONTINUE_PAIRING, LinkAction.TRY_AGAIN, LinkAction.CANCEL,
+            LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT,
+            -> ringViewModel.onAction(action)
+        }
+    }
+
+    /**
+     * Shows Android's companion-device sheet ("Allow OpenCircuit to access …?"). If it cannot be
+     * shown, the pairing goes on without it (Android's own pairing prompt follows).
+     */
+    private fun showPairingSheet(sheet: PairingSheet) {
+        val sender = (sheet as? IntentSenderSheet)?.intentSender
+        if (sender == null) {
+            ringViewModel.onPairingSheetFailed()
+            return
+        }
+        try {
+            pairingSheetRequest.launch(IntentSenderRequest.Builder(sender).build())
+            ringViewModel.onPairingSheetShown()
+        } catch (_: ActivityNotFoundException) {
+            ringViewModel.onPairingSheetFailed()
         }
     }
 

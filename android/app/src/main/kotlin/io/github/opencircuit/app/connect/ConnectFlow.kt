@@ -43,6 +43,15 @@ sealed interface ScanPhase {
 
     /** Android refused to start the scan (-1) or reported a scan error. */
     data class Failed(val errorCode: Int) : ScanPhase
+
+    /** A ring was chosen: the app says what Android's pairing sheet is for before it opens. */
+    data class ConfirmPairing(val ring: RememberedRing) : ScanPhase
+
+    /** Waiting for Android's companion-device sheet and its answer. */
+    data class Pairing(val ring: RememberedRing) : ScanPhase
+
+    /** The user refused or closed Android's sheet: nothing was remembered or connected. */
+    data object PairingCancelled : ScanPhase
 }
 
 /** Everything the Ring screen needs to show about finding a ring. */
@@ -66,10 +75,14 @@ data class ConnectFlowState(
  * resume and every dialog answer. A tap goes through [ScanGate]: a device policy, the dialog, a
  * refusal for good and Bluetooth off each stop it with their own state; only a ready phone scans.
  *
- * One scan runs at a time, collected in [scope]. Selected ends it and connects that ring; after
- * Choose the scan goes on and the picker follows each new list until the user picks a ring or
- * cancels, which cancels the collection. A scan that throws or ends without an answer is shown,
- * never silently dropped.
+ * One scan runs at a time, collected in [scope]. Selected ends it; after Choose the scan goes on
+ * and the picker follows each new list until the user picks a ring or cancels, which cancels the
+ * collection. A scan that throws or ends without an answer is shown, never silently dropped.
+ *
+ * A chosen ring is not connected at once: the card first says what Android's companion-device
+ * sheet is for (its own wording is generic), and Continue hands the ring to [pairing]. The sheet
+ * it returns is published on [pairingSheet] for the activity to show; the answer remembers and
+ * connects the ring through [connector], or ends as "Pairing cancelled".
  */
 class ConnectFlowController(
     private val prefs: AppPrefs,
@@ -79,14 +92,50 @@ class ConnectFlowController(
     private val adapterState: StateFlow<AdapterState?>,
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
+    private val pairing: CompanionPairing,
 ) {
     private val stateFlow = MutableStateFlow(ConnectFlowState())
+    private val sheetFlow = MutableStateFlow<PairingSheet?>(null)
 
     // Set once this session has asked, even when the flag could not be saved. Main-thread only.
     private var askedThisSession = false
     private var scanJob: Job? = null
 
     val state: StateFlow<ConnectFlowState> = stateFlow.asStateFlow()
+
+    /** Android's pairing sheet, waiting for the activity to show it; null when there is none. */
+    val pairingSheet: StateFlow<PairingSheet?> = sheetFlow.asStateFlow()
+
+    /** Continue on the explanation: ask Android's companion-device manager for the chosen ring. */
+    fun continuePairing() {
+        val ring = (stateFlow.value.phase as? ScanPhase.ConfirmPairing)?.ring ?: return
+        stateFlow.update { it.copy(phase = ScanPhase.Pairing(ring)) }
+        pairing.begin(ring, showSheet = { sheetFlow.value = it }) { outcome ->
+            sheetFlow.value = null
+            if (outcome.connects) {
+                stateFlow.update { it.copy(phase = ScanPhase.Idle) }
+                connector.connect(ring)
+            } else {
+                stateFlow.update { it.copy(phase = ScanPhase.PairingCancelled) }
+            }
+        }
+    }
+
+    /** The activity showed the sheet: it is not shown again. */
+    fun onPairingSheetShown() {
+        sheetFlow.value = null
+    }
+
+    /** The sheet closed with [resultCode] (the activity result's code). */
+    fun onPairingSheetResult(resultCode: Int) {
+        pairing.onSheetResult(resultCode)
+    }
+
+    /** The activity could not show the sheet. */
+    fun onPairingSheetFailed() {
+        sheetFlow.value = null
+        pairing.onSheetNotShown()
+    }
 
     /** The activity resumed: re-read the permission (a grant made in Settings has no callback). */
     fun onResume(snapshot: PermissionSnapshot) {
@@ -122,19 +171,18 @@ class ConnectFlowController(
         requestScan(snapshot)
     }
 
-    /** Cancel: stop the scan; nothing is connected. */
+    /** Cancel: stop the scan, or the pairing that followed it; nothing is connected. */
     fun cancelScan() {
         stopScan()
         stateFlow.update { it.copy(phase = ScanPhase.Idle) }
     }
 
-    /** The user picked [ring] from the list: stop the scan and connect it. A ring not on the list is ignored. */
+    /** The user picked [ring] from the list: stop the scan and pair it. A ring not on the list is ignored. */
     fun pick(ring: RememberedRing) {
         val phase = stateFlow.value.phase as? ScanPhase.Choosing ?: return
         val chosen = phase.rings.firstOrNull { RingAddress.same(it.address, ring.address) } ?: return
         stopScan()
-        stateFlow.update { it.copy(phase = ScanPhase.Idle) }
-        connector.connect(chosen)
+        stateFlow.update { it.copy(phase = ScanPhase.ConfirmPairing(chosen)) }
     }
 
     private val scanning: Boolean
@@ -163,8 +211,7 @@ class ConnectFlowController(
                         is ScanUpdate.Choose -> stateFlow.update { it.copy(phase = ScanPhase.Choosing(update.rings)) }
                         is ScanUpdate.Selected -> {
                             answered = true
-                            stateFlow.update { it.copy(phase = ScanPhase.Idle) }
-                            connector.connect(update.ring)
+                            stateFlow.update { it.copy(phase = ScanPhase.ConfirmPairing(update.ring)) }
                         }
                         ScanUpdate.NoRingFound -> {
                             answered = true
@@ -188,9 +235,12 @@ class ConnectFlowController(
         }
     }
 
+    /** Ends whatever runs: the scan's collection, and a pairing request still waiting (a late answer changes nothing). */
     private fun stopScan() {
         scanJob?.cancel()
         scanJob = null
+        pairing.abandon()
+        sheetFlow.value = null
     }
 
     private companion object {

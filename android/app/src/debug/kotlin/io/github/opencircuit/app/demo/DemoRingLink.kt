@@ -34,17 +34,19 @@ import kotlinx.coroutines.flow.consumeAsFlow
  * [connect] goes straight to [LinkState.Authenticated] and sends one device-status descriptor
  * with a battery of 72 %, then another every 30 s in [scope] and one in answer to each
  * `d0 00 00`, as the ring does; [disconnect] stops them, tears the connection down once and
- * goes [LinkState.Idle].
+ * goes [LinkState.Idle]. [close] does the same and retires the link, as the real link's does.
  *
  * It answers the live measure like a worn ring: after `06 01 00` / `06 02 00` and `07 00 00`,
  * each `95 00 00` poll gets one `0x15` frame. Heart rate sends the warm-up value 8 for the first
  * two polls after an entry, then made-up resting values; SpO₂ sends one frame without a valid
  * reading, then made-up values in the high 90s. A poll before any mode was chosen gets nothing.
  */
-class DemoRingLink(private val scope: CoroutineScope) : RingLink {
+class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable {
 
-    /** A placeholder address that names no real device. */
-    override val ring = RememberedRing("AA:BB:CC:DD:EE:00", AddressType.RANDOM, "Demo ring")
+    override val ring = RING
+
+    // Set by close(): like the real link, a closed demo link never connects again.
+    private var closed = false
 
     private val stateFlow = MutableStateFlow<LinkState>(LinkState.Idle)
     private val infoFlow = MutableStateFlow(LinkInfo())
@@ -107,7 +109,7 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink {
 
     @Synchronized
     override fun connect() {
-        if (stateFlow.value != LinkState.Idle) return
+        if (closed || stateFlow.value != LinkState.Idle) return
         infoFlow.value = LinkInfo(bonded = true)
         stateFlow.value = LinkState.Authenticated
         frameChannel.trySend(demoDescriptor())
@@ -130,32 +132,42 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink {
         teardownChannel.trySend(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 0))
     }
 
+    /** Ends the demo link for good: disconnects (one user-disconnected teardown if connected) and never connects again. */
+    @Synchronized
+    override fun close() {
+        disconnect()
+        closed = true
+    }
+
     private fun isReservedAuthCommand(command: ByteArray): Boolean =
         command.size >= 2 && command[0] == 0x01.toByte() && (command[1] == 0x00.toByte() || command[1] == 0x01.toByte())
 
-    private companion object {
-        /** How often the demo sends its descriptor unasked while connected. */
-        const val DESCRIPTOR_EVERY_MILLIS = 30_000L
+    companion object {
+        /** The demo ring: a placeholder address that names no real device. */
+        val RING = RememberedRing("AA:BB:CC:DD:EE:00", AddressType.RANDOM, "Demo ring")
 
-        const val HEART_RATE_MODE = 0x01
-        const val SPO2_MODE = 0x02
+        /** How often the demo sends its descriptor unasked while connected. */
+        private const val DESCRIPTOR_EVERY_MILLIS = 30_000L
+
+        private const val HEART_RATE_MODE = 0x01
+        private const val SPO2_MODE = 0x02
 
         /** Polls answered with the warm-up sentinel after each entry (PROTOCOL.md §5.1). */
-        const val WARM_UP_POLLS = 2
-        const val WARM_UP_VALUE = 8
+        private const val WARM_UP_POLLS = 2
+        private const val WARM_UP_VALUE = 8
 
         /** Made-up resting heart rates, cycled. */
-        val DEMO_HEART_RATES = intArrayOf(64, 66, 65, 68, 63, 62, 64, 67, 65, 61)
+        private val DEMO_HEART_RATES = intArrayOf(64, 66, 65, 68, 63, 62, 64, 67, 65, 61)
 
         /** Made-up SpO₂ values, cycled. */
-        val DEMO_SPO2 = intArrayOf(97, 96, 97, 98, 97)
+        private val DEMO_SPO2 = intArrayOf(97, 96, 97, 98, 97)
 
         /**
          * A made-up `0x10` descriptor in the layout of PROTOCOL.md §5.4: battery 72 % (`[1]`),
          * worn and idle (`[2]` = 0x02), skin temperature 30.0 °C on both channels, 4000 mV,
          * not in the charging case (`[17]` = 0xff).
          */
-        fun demoDescriptor(): ByteArray = byteArrayOf(
+        private fun demoDescriptor(): ByteArray = byteArrayOf(
             0x10, 0x48, 0x02, 0x00, 0x00, 0x00, 0x01, 0x2c, 0x01, 0x2c,
             0x00, 0x00, 0x00, 0x00, 0x0f, 0xa0.toByte(), 0x00, 0xff.toByte(), 0x00,
         )

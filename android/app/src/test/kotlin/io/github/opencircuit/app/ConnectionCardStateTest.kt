@@ -40,7 +40,7 @@ class ConnectionCardStateTest {
     private fun TestScope.screen(): Screen {
         val link = timedLink()
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
-        val viewModel = RingViewModel(controller, title = "Ring", scope = backgroundScope)
+        val viewModel = RingViewModel(sessionsOf(controller), title = "Ring", scope = backgroundScope)
         testScheduler.runCurrent()
         link.fake.setState(LinkState.Authenticated)
         testScheduler.runCurrent()
@@ -205,7 +205,7 @@ class ConnectionCardStateTest {
         val link = timedLink()
         link.fake.answerSendsWith(SendResult.Refused(RefusalReason.NOT_BONDED))
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
-        val viewModel = RingViewModel(controller, title = "Ring", scope = backgroundScope)
+        val viewModel = RingViewModel(sessionsOf(controller), title = "Ring", scope = backgroundScope)
         testScheduler.runCurrent()
         link.fake.setState(LinkState.Authenticated)
         testScheduler.runCurrent()

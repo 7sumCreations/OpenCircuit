@@ -57,9 +57,15 @@ class ScanStateTest {
         assertTrue(screen.connected.isEmpty())
 
         advanceTo(2_500)
+        assertEquals(0, screen.scanner.running)
+        assertEquals("Pair with RingConn Alpha", screen.link.headline, "pairing is explained before it is asked for")
+        assertTrue(screen.connected.isEmpty())
+
+        screen.approvePairing()
+        runCurrent()
 
         assertEquals(listOf(alpha), screen.connected)
-        assertEquals(0, screen.scanner.running)
+        assertEquals(listOf(alpha), screen.companion.requests)
         assertEquals("Ready", screen.link.headline, "the link's own state shows next")
     }
 
@@ -115,11 +121,15 @@ class ScanStateTest {
 
         screen.viewModel.onAction(RingAction.Pick(screen.link.choices.first { it.label == "RingConn Zulu" }.ring))
         runCurrent()
-
-        assertEquals(listOf(zulu), screen.connected)
         assertEquals(0, screen.scanner.running)
         assertEquals(1, screen.scanner.cancelled)
         assertTrue(screen.link.choices.isEmpty())
+        assertEquals("Pair with RingConn Zulu", screen.link.headline)
+
+        screen.approvePairing()
+        runCurrent()
+
+        assertEquals(listOf(zulu), screen.connected)
     }
 
     @Test
