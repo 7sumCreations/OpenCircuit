@@ -28,7 +28,7 @@ class DemoRingLinkTest {
     @Test
     fun connectingAuthenticatesAndSendsOneDescriptorThroughTheSession() = runTest {
         val link = DemoRingLink()
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         assertEquals(LinkState.Idle, link.state.value)
         assertEquals("Demo ring", link.ring.name)
 
@@ -69,7 +69,7 @@ class DemoRingLinkTest {
     @Test
     fun disconnectingTearsDownTheConnectionOnceAndGoesIdle() = runTest {
         val link = DemoRingLink()
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         controller.connect()
         runCurrent()
 
@@ -86,7 +86,7 @@ class DemoRingLinkTest {
     @Test
     fun eachFlowTakesOneCollection() = runTest {
         val link = DemoRingLink()
-        RingSessionController(link, backgroundScope, log = { logLines += it }).start()
+        RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it }).start()
         runCurrent()
 
         assertFailsWith<IllegalStateException> { withTimeout(1_000) { link.frames.collect() } }

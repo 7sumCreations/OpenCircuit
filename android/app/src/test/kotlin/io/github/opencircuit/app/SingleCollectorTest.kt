@@ -29,7 +29,7 @@ class SingleCollectorTest {
     @Test
     fun theControllerHoldsTheOnlyCollectionOfBothFlows() = runTest {
         val link = FakeRingLink(ring)
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
 
         controller.start()
         runCurrent()
@@ -43,7 +43,7 @@ class SingleCollectorTest {
     @Test
     fun startingAndConnectingAgainDoesNotCollectAgain() = runTest {
         val link = FakeRingLink(ring)
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
 
         controller.start()
         controller.connect()
@@ -59,7 +59,7 @@ class SingleCollectorTest {
     @Test
     fun framesQueuedBeforeTheStartAreRoutedInOrderAfterIt() = runTest {
         val link = FakeRingLink(ring)
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         link.emitFrame(TestFrames.wornDescriptor)
         link.emitFrame(TestFrames.chargingDescriptor)
 
@@ -72,7 +72,7 @@ class SingleCollectorTest {
     @Test
     fun eachTeardownIsCollectedAndKept() = runTest {
         val link = FakeRingLink(ring)
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         controller.start()
         runCurrent()
         assertNull(controller.teardowns.value.last)
@@ -88,7 +88,7 @@ class SingleCollectorTest {
     @Test
     fun aThrowingHandlerDoesNotEndTheCollection() = runTest {
         val link = FakeRingLink(ring)
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         controller.dispatcher.register(0x4c) { throw IllegalStateException("a page handler bug") }
         controller.start()
         runCurrent()

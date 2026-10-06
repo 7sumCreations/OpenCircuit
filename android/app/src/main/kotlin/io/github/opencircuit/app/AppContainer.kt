@@ -1,6 +1,7 @@
 package io.github.opencircuit.app
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.ble.RememberedRing
@@ -32,6 +33,9 @@ class AppContainer(context: Context) {
     /** The phone's clock. */
     val clock: Clock = Clock { System.currentTimeMillis() }
 
+    /** Milliseconds since boot, counting sleep; never jumps when the user changes the clock. */
+    val monotonicMillis: () -> Long = { SystemClock.elapsedRealtime() }
+
     /** Links to a real ring over the phone's Bluetooth (`:ble`'s Android factory). */
     val ringLinkFactory: RingLinkFactory = RingLinkFactory { ring -> RingLink(context.applicationContext, ring) }
 
@@ -46,7 +50,7 @@ class AppContainer(context: Context) {
      * the demo ring; choosing and remembering a real ring is not built yet.
      */
     val ringSession: RingSessionController? by lazy {
-        VariantLinks.demoLink?.invoke()?.let { RingSessionController(it, appScope, log) }
+        VariantLinks.demoLink?.invoke()?.let { RingSessionController(it, appScope, monotonicMillis, log) }
     }
 
     /** The Ring screen's title; debug builds say when the ring is the demo. */

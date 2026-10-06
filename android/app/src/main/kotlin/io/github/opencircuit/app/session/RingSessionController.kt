@@ -1,5 +1,6 @@
 package io.github.opencircuit.app.session
 
+import io.github.opencircuit.app.live.LiveMeasureController
 import io.github.opencircuit.app.ring.DeviceStatusModel
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
@@ -21,22 +22,6 @@ data class SessionTeardowns(
 )
 
 /**
- * Receives the live-sample frames (`0x15`, the answer to the `95 00 00` poll) and, for now, only
- * counts them; the live measure takes them over when it is built.
- */
-class LiveFrameCounter {
-    private val receivedFlow = MutableStateFlow(0)
-
-    /** How many live-sample frames arrived. */
-    val received: StateFlow<Int> = receivedFlow.asStateFlow()
-
-    /** Takes one live-sample frame. */
-    fun onFrame(frame: ByteArray) {
-        receivedFlow.update { it + 1 }
-    }
-}
-
-/**
  * The app's session with one ring: the ONLY collector of the link's [RingLink.frames] and
  * [RingLink.teardowns]. Each flow takes one collector at a time (a second collection while one
  * runs fails), and this controller holds one collection of each for the whole session and never
@@ -44,14 +29,17 @@ class LiveFrameCounter {
  * its opcode), never through the flow. Because nothing restarts a collection that ended, the
  * dispatcher contains a handler's exception instead of letting it end the collection.
  *
- * Routes: `0x10` / `0x87` descriptors → [deviceStatus]; `0x15` live samples → [liveFrames];
+ * Routes: `0x10` / `0x87` descriptors → [deviceStatus]; `0x15` live samples → [liveMeasure];
  * `0x11` heartbeats are ignored (the link already answered them); everything else is counted by
- * the dispatcher. Both collections run in [scope], which outlives any one screen.
+ * the dispatcher. A torn-down connection, or the link leaving [LinkState.Authenticated], stops a
+ * running live measure. Every collection runs in [scope], which outlives any one screen.
  */
 class RingSessionController(
     /** The link to the ring. */
     val link: RingLink,
     private val scope: CoroutineScope,
+    /** Monotonic milliseconds (never jumps with the wall clock); virtual time in tests. */
+    monotonicMillis: () -> Long,
     log: (String) -> Unit,
 ) {
     /** Routes every frame; register a handler here to receive an opcode. */
@@ -60,8 +48,8 @@ class RingSessionController(
     /** The ring's battery and status, from its descriptors. */
     val deviceStatus = DeviceStatusModel()
 
-    /** The live-sample frames. */
-    val liveFrames = LiveFrameCounter()
+    /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames. */
+    val liveMeasure = LiveMeasureController(send = link::send, scope = scope, monotonicMillis = monotonicMillis)
 
     /** Where the link stands. */
     val state: StateFlow<LinkState> get() = link.state
@@ -76,18 +64,23 @@ class RingSessionController(
     init {
         dispatcher.register(DESCRIPTOR, deviceStatus::onDescriptor)
         dispatcher.register(DESCRIPTOR_RESPONSE, deviceStatus::onDescriptor)
-        dispatcher.register(LIVE_SAMPLE, liveFrames::onFrame)
+        dispatcher.register(LIVE_SAMPLE, liveMeasure::onFrame)
         dispatcher.ignore(HEARTBEAT)
     }
 
-    /** Starts the two collections. Calling it again does nothing: the session collects each flow once. */
+    /** Starts the collections. Calling it again does nothing: the session collects each flow once. */
     fun start() {
         if (!started.compareAndSet(false, true)) return
         scope.launch { link.frames.collect { dispatcher.dispatch(it) } }
         scope.launch {
             link.teardowns.collect { teardown ->
                 teardownsFlow.update { SessionTeardowns(count = it.count + 1, last = teardown) }
+                liveMeasure.onLinkLost()
             }
+        }
+        // `state` is a StateFlow, so this is not a second collector of anything single-collector.
+        scope.launch {
+            link.state.collect { if (it != LinkState.Authenticated) liveMeasure.onLinkLost() }
         }
     }
 

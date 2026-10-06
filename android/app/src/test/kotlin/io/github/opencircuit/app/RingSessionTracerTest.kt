@@ -25,7 +25,7 @@ class RingSessionTracerTest {
     @Test
     fun anAuthenticatedRingAndOneDescriptorShowAsConnectedWithItsBattery() = runTest {
         val link = FakeRingLink(ring)
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         val viewModel = RingViewModel(controller, title = "Ring", scope = backgroundScope)
         runCurrent()
         assertEquals(RingUiState(title = "Ring", status = "Not connected", batteryPercent = null), viewModel.uiState.value)
@@ -45,19 +45,19 @@ class RingSessionTracerTest {
     @Test
     fun everyRouteIsReachedFromTheLinkThroughTheController() = runTest {
         val link = FakeRingLink(ring)
-        val controller = RingSessionController(link, backgroundScope, log = { logLines += it })
+        val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         controller.start()
         runCurrent()
 
         link.emitFrame(TestFrames.chargingResponseDescriptor) // 0x87 → device status
-        link.emitFrame(TestFrames.liveHeartRate) // 0x15 → live frames
+        link.emitFrame(TestFrames.liveHeartRate) // 0x15 → live measure (none running: counted)
         link.emitFrame(TestFrames.heartbeat) // 0x11 → ignored, :ble answered it
         link.emitFrame(TestFrames.historyPage47) // no handler → counted
         link.emitFrame(TestFrames.unknown) // no handler → counted
         runCurrent()
 
         assertEquals(71, controller.deviceStatus.state.value.batteryPercent)
-        assertEquals(1, controller.liveFrames.received.value)
+        assertEquals(1, controller.liveMeasure.state.value.framesNotUsed)
         assertEquals(1, controller.dispatcher.counts.value.ignored)
         assertEquals(mapOf(0x47 to 1, 0xee to 1), controller.dispatcher.counts.value.unhandled)
         assertEquals(2, logLines.size, "one line per unhandled frame: $logLines")

@@ -50,4 +50,43 @@ internal object TestFrames {
 
     /** An opcode no part of the app knows (`0xee`); marker bytes `ba ad`. */
     val unknown: ByteArray get() = hex("ee00baad")
+
+    /**
+     * One real live heart-rate read, in arrival order: the warm-up sentinel (8) and then 82, 84,
+     * 88, 90, 91, 66, 61 bpm. `realHRFrames` in
+     * `ringkit/src/test/kotlin/io/github/opencircuit/ringkit/RingKitVerifyTest.kt`.
+     */
+    val realHeartRateRead: List<ByteArray>
+        get() = listOf(
+            "1500080ab0a7", "1500520ab0fd", "1500540ab0fb", "1500580ab0f7",
+            "15005a0ab0f5", "15005b0ab0f4", "1500420ab0ed", "15003d0ab092",
+        ).map(::hex)
+
+    /** The warm-up sentinel frame (byte 2 = 8): the sensor has not locked on yet. */
+    val heartRateWarmUp: ByteArray get() = hex("1500080ab0a7")
+
+    /** Short frames at the band edges, built on the raw path with a correct XOR trailer. */
+    val heartRate29: ByteArray get() = hex("15001d0ab0b2")
+    val heartRate30: ByteArray get() = hex("15001e0ab0b1")
+    val heartRate220: ByteArray get() = hex("1500dc0ab073")
+    val heartRate225: ByteArray get() = hex("1500e10ab04e")
+
+    /** The 91 bpm frame with its last byte off by one: a bad XOR trailer. */
+    val heartRateBadTrailer: ByteArray get() = hex("15005b0ab0f5")
+
+    /**
+     * Three real long SpO₂ frames (`15 01 …`, byte 14): 96, 96, 97 %. `realSpO2Frames` in
+     * `RingKitVerifyTest.kt`.
+     */
+    val realSpO2Read: List<ByteArray>
+        get() = listOf(
+            "15010000207afb00000024a1c800600098",
+            "150100001615ac0000001a2c8f00600062",
+            "15010000102e8000000010be5c00610039",
+        ).map(::hex)
+
+    /** The first real SpO₂ frame with byte 14 set to 69 / 70 / 101 %, XOR trailer recomputed. */
+    val spo2At69: ByteArray get() = hex("15010000207afb00000024a1c8004500bd")
+    val spo2At70: ByteArray get() = hex("15010000207afb00000024a1c8004600be")
+    val spo2At101: ByteArray get() = hex("15010000207afb00000024a1c80065009d")
 }
