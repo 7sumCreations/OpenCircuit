@@ -156,6 +156,69 @@ class CompanionPairingFlowTest {
     }
 
     @Test
+    fun aCancelledSheetStillOffersScanAndConnectAndAlsoPairingWithoutTheSheet() = runTest {
+        val screen = screen()
+        continueToSheet(screen)
+
+        sheetAnswers(screen, 1)
+
+        assertEquals(LinkAction.SCAN_AND_CONNECT, screen.card.action)
+        assertEquals(LinkAction.PAIR_WITHOUT_SHEET, screen.card.secondary)
+        assertEquals("Pair without the system sheet", LinkAction.PAIR_WITHOUT_SHEET.label)
+    }
+
+    @Test
+    fun pairingWithoutTheSheetRemembersAndConnectsTheRingAndRecordsThatTheUserChoseIt() = runTest {
+        for (code in listOf(1, 0)) {
+            val screen = screen()
+            continueToSheet(screen)
+            sheetAnswers(screen, code)
+
+            screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
+            runCurrent()
+
+            assertEquals(ring, screen.remembered, "result $code")
+            assertEquals(1, screen.built.single().fake.connectCalls, "result $code")
+            assertEquals(PairingOutcome.Fallback(FallbackReason.USER_CHOSE_PLAIN_BOND, resultCode = code), screen.pairing.lastOutcome.value)
+            assertEquals(listOf(ring), screen.port.requests, "the sheet is not asked for again")
+            assertFalse(screen.card.headline == "Pairing cancelled", "the card leaves the cancelled state")
+        }
+    }
+
+    @Test
+    fun pairingWithoutTheSheetDoesNothingUnlessThePairingWasCancelled() = runTest {
+        // Before the sheet answered (the explanation, then waiting for the sheet), and after Cancel.
+        val screen = screen()
+        screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
+        runCurrent()
+        continueToSheet(screen)
+        screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
+        runCurrent()
+        screen.tap(LinkAction.CANCEL_SCAN)
+        runCurrent()
+        screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
+        runCurrent()
+
+        assertNull(screen.remembered)
+        assertTrue(screen.built.isEmpty())
+        assertNull(screen.pairing.lastOutcome.value)
+    }
+
+    @Test
+    fun pairingWithoutTheSheetConnectsOnlyOnceForTwoTaps() = runTest {
+        val screen = screen()
+        continueToSheet(screen)
+        sheetAnswers(screen, 1)
+
+        screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
+        runCurrent()
+        screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
+        runCurrent()
+
+        assertEquals(1, screen.built.single().fake.connectCalls)
+    }
+
+    @Test
     fun aSheetThatFailsRemembersAndConnectsAnywayAndKeepsTheReason() = runTest {
         val expected = mapOf(
             2 to FallbackReason.DISCOVERY_TIMEOUT,

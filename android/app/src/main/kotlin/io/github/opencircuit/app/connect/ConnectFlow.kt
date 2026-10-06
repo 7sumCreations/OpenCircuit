@@ -50,8 +50,11 @@ sealed interface ScanPhase {
     /** Waiting for Android's companion-device sheet and its answer. */
     data class Pairing(val ring: RememberedRing) : ScanPhase
 
-    /** The user refused or closed Android's sheet: nothing was remembered or connected. */
-    data object PairingCancelled : ScanPhase
+    /**
+     * The user refused or closed Android's sheet for [ring]: nothing was remembered or connected.
+     * The user may still pair it without the sheet ([ConnectFlowController.pairWithoutSheet]).
+     */
+    data class PairingCancelled(val ring: RememberedRing) : ScanPhase
 }
 
 /** Everything the Ring screen needs to show about finding a ring. */
@@ -84,7 +87,8 @@ data class ConnectFlowState(
  * A chosen ring is not connected at once: the card first says what Android's companion-device
  * sheet is for (its own wording is generic), and Continue hands the ring to [pairing]. The sheet
  * it returns is published on [pairingSheet] for the activity to show; the answer remembers and
- * connects the ring through [connector], or ends as "Pairing cancelled".
+ * connects the ring through [connector], or ends as "Pairing cancelled", from where the user can
+ * still pair without the sheet.
  */
 class ConnectFlowController(
     private val prefs: AppPrefs,
@@ -121,9 +125,23 @@ class ConnectFlowController(
                 stateFlow.update { it.copy(phase = ScanPhase.Idle) }
                 connector.connect(ring)
             } else {
-                stateFlow.update { it.copy(phase = ScanPhase.PairingCancelled) }
+                stateFlow.update { it.copy(phase = ScanPhase.PairingCancelled(ring)) }
             }
         }
+    }
+
+    /**
+     * Pair without the system sheet, after the user cancelled it: remember and connect the ring
+     * anyway, the way a sheet that could not help does, so the ring bonds through Android's own
+     * pairing prompt. Recorded for Connection details as the user's choice. The sheet never times
+     * out by itself and its Cancel is a refusal, so without this a ring the sheet cannot find
+     * could never be paired (PORTING D-254). Does nothing unless the pairing was cancelled.
+     */
+    fun pairWithoutSheet() {
+        val ring = (stateFlow.value.phase as? ScanPhase.PairingCancelled)?.ring ?: return
+        stateFlow.update { it.copy(phase = ScanPhase.Idle) }
+        pairing.userChosePlainBond()
+        connector.connect(ring)
     }
 
     /** The activity showed the sheet: it is not shown again. */

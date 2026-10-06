@@ -143,7 +143,7 @@ class MainActivity : ComponentActivity() {
             LinkAction.BLUETOOTH_SETTINGS -> openBluetoothSettings()
             LinkAction.OPEN_APP_SETTINGS -> openAppSettings()
             LinkAction.CANCEL_SCAN, LinkAction.CONTINUE_PAIRING, LinkAction.TRY_AGAIN, LinkAction.CANCEL,
-            LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT,
+            LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT, LinkAction.PAIR_WITHOUT_SHEET,
             -> ringViewModel.onAction(action)
         }
     }

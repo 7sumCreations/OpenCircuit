@@ -199,12 +199,22 @@ class RingStatesRenderTest {
 
     @Test
     fun aRefusedSheetSaysPairingCancelledAndOffersScanAgain() {
-        state = idle(ConnectFlowState(permission = BluetoothPermission.GRANTED, phase = ScanPhase.PairingCancelled))
+        state = idle(ConnectFlowState(permission = BluetoothPermission.GRANTED, phase = ScanPhase.PairingCancelled(alpha)))
         show()
 
         compose.onNodeWithText("Pairing cancelled").assertIsDisplayed()
         compose.onNodeWithText("Scan & connect").performClick()
         assertEquals(listOf<RingAction>(RingAction.Link(LinkAction.SCAN_AND_CONNECT)), actions)
+    }
+
+    @Test
+    fun aRefusedSheetAlsoOffersPairingWithoutTheSystemSheet() {
+        state = idle(ConnectFlowState(permission = BluetoothPermission.GRANTED, phase = ScanPhase.PairingCancelled(alpha)))
+        show()
+
+        compose.onNodeWithText("Scan & connect").assertIsDisplayed()
+        compose.onNodeWithText("Pair without the system sheet").assertIsDisplayed().performClick()
+        assertEquals(listOf<RingAction>(RingAction.Link(LinkAction.PAIR_WITHOUT_SHEET)), actions)
     }
 
     @Test

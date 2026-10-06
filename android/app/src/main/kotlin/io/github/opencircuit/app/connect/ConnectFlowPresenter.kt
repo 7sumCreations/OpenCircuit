@@ -92,11 +92,13 @@ object ConnectFlowPresenter {
             connected = false,
             searching = true,
         )
-        ScanPhase.PairingCancelled -> LinkStateUi(
+        is ScanPhase.PairingCancelled -> LinkStateUi(
             "Pairing cancelled",
-            "OpenCircuit didn't connect to the ring. Tap Scan & connect to try again.",
+            "OpenCircuit didn't connect to the ring. Tap Scan & connect to try again. If Android's sheet " +
+                "can't find your ring, pair without it: Android asks you to confirm the pairing instead.",
             LinkAction.SCAN_AND_CONNECT,
             connected = false,
+            secondary = LinkAction.PAIR_WITHOUT_SHEET,
         )
     }
 

@@ -87,7 +87,9 @@ private fun LinkActionButton(action: LinkAction, onAction: (LinkAction) -> Unit)
         LinkAction.SCAN_AND_CONNECT, LinkAction.TRY_AGAIN, LinkAction.TURN_ON_BLUETOOTH, LinkAction.BLUETOOTH_SETTINGS,
         LinkAction.ALLOW_NEARBY, LinkAction.OPEN_APP_SETTINGS, LinkAction.SEARCH_AGAIN, LinkAction.CONTINUE_PAIRING,
         -> FilledTonalButton(onClick = { onAction(action) }) { Text(action.label) }
-        LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT, LinkAction.CANCEL_SCAN, LinkAction.ASK_AGAIN ->
+        LinkAction.CANCEL, LinkAction.STOP_RECONNECTING, LinkAction.DISCONNECT, LinkAction.CANCEL_SCAN, LinkAction.ASK_AGAIN,
+        LinkAction.PAIR_WITHOUT_SHEET,
+        ->
             TextButton(onClick = { onAction(action) }) { Text(action.label) }
     }
 }

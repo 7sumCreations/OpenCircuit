@@ -32,6 +32,9 @@ enum class LinkAction(
     /** Go on from the app's explanation to Android's pairing sheet. */
     CONTINUE_PAIRING("Continue"),
 
+    /** After the user cancelled Android's pairing sheet: connect anyway, and let the ring bond through Android's own prompt. */
+    PAIR_WITHOUT_SHEET("Pair without the system sheet"),
+
     /** Stop a connection that is being made. */
     CANCEL("Cancel"),
 

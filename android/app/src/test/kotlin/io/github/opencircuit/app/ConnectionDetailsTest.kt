@@ -201,6 +201,13 @@ class ConnectionDetailsTest {
         screen.pairing.value = PairingOutcome.Declined(1)
         runCurrent()
         assertEquals("refused (result 1)", screen.value(screen.details.rows, "Pairing sheet"))
+
+        screen.pairing.value = PairingOutcome.Fallback(FallbackReason.USER_CHOSE_PLAIN_BOND, resultCode = 1)
+        runCurrent()
+        assertEquals(
+            "connected without it: you chose to pair without the system sheet (result 1)",
+            screen.value(screen.details.rows, "Pairing sheet"),
+        )
     }
 
     @Test

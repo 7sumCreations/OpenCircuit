@@ -56,6 +56,7 @@ enum class FallbackReason(val words: String) {
     INTERNAL_ERROR("the sheet reported an internal error"),
     SECURITY_ERROR("the sheet reported a security error"),
     UNKNOWN_RESULT("the sheet returned an unknown result"),
+    USER_CHOSE_PLAIN_BOND("you chose to pair without the system sheet"),
 }
 
 /** How a pairing request ended. */
@@ -152,6 +153,15 @@ class CompanionPairing(private val port: CompanionPort, private val log: (String
         val current = request ?: return
         log("The companion-device sheet could not be shown")
         finish(current, PairingOutcome.Fallback(FallbackReason.SHEET_NOT_SHOWN))
+    }
+
+    /**
+     * The user cancelled the sheet and then chose to pair without it: recorded as a
+     * [FallbackReason.USER_CHOSE_PLAIN_BOND] fallback, keeping the sheet's result code.
+     */
+    fun userChosePlainBond() {
+        request = null
+        outcomeFlow.value = PairingOutcome.Fallback(FallbackReason.USER_CHOSE_PLAIN_BOND, (outcomeFlow.value as? PairingOutcome.Declined)?.resultCode)
     }
 
     /** Abandons a waiting request: a late answer changes nothing. */

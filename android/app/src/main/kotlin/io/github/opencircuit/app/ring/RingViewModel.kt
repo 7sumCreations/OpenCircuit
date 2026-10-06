@@ -139,6 +139,7 @@ class RingViewModel(
             is RingAction.Link -> when (action.action) {
                 LinkAction.CANCEL_SCAN -> connectFlow?.cancelScan()
                 LinkAction.CONTINUE_PAIRING -> connectFlow?.continuePairing()
+                LinkAction.PAIR_WITHOUT_SHEET -> connectFlow?.pairWithoutSheet()
                 // Asks for the bond again on the same link (the link does not retry a failed bond itself).
                 LinkAction.TRY_AGAIN -> controller?.connect()
                 LinkAction.CANCEL, LinkAction.DISCONNECT -> controller?.let {
