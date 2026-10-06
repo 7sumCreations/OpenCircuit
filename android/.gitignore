@@ -8,6 +8,9 @@ local.properties
 # Signing material never enters git
 *.jks
 *.keystore
+*.p12
 keystore.properties
+# Release staging folder (the APK and its checksum before upload)
+dist/
 # Raw BLE captures and exported health data (upstream convention: decoded findings only)
 captures/

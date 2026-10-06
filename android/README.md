@@ -36,13 +36,64 @@ ignored by git; never commit it. From this folder (`android/`):
 
 ```sh
 ./gradlew --no-daemon test --rerun      # run the JVM test suite (one summary line per module)
-./gradlew --no-daemon build -x test     # compile every module
+./gradlew --no-daemon assembleDebug     # build the debug APK
+./gradlew --no-daemon build -x test -x assembleRelease   # compile and check every module
 scripts/upstream-diff.sh                # list upstream changes since the pinned commit
 ```
 
 The `:store` module (the on-device database) is Kotlin Multiplatform: its tests run on the JVM
 as `:store:jvmTest` (`--tests` filters go on that task), and its on-device smoke test runs on an
 emulator as `:store:connectedAndroidDeviceTest`.
+
+## Signing a release
+
+A release APK is signed with the project's release key, which never enters git. Two things
+must be in place before `./gradlew --no-daemon assembleRelease` will build:
+
+1. A file `keystore.properties` in this folder (`android/`; it is git-ignored) with two lines:
+
+   ```properties
+   storeFile=/absolute/path/outside/the/repository/opencircuit-release.p12
+   keyAlias=opencircuit-release
+   ```
+
+   Keep the keystore itself outside the repository.
+2. The keystore's password in the environment variable `OPENCIRCUIT_KEYSTORE_PASSWORD` (it is
+   used for both the store and the key). Fill it from a password manager for the one command,
+   for example from the macOS Keychain:
+
+   ```sh
+   OPENCIRCUIT_KEYSTORE_PASSWORD=$(security find-generic-password -s opencircuit-release -w) \
+     ./gradlew --no-daemon assembleRelease
+   ```
+
+If either is missing, the release build stops with "Release signing is not set up: …", naming
+what is missing, before it packages anything. It never writes an unsigned release APK. Debug
+builds need neither. The release APK is signed with APK Signature Schemes v2 and v3 (no v1,
+no v4) and is not minified.
+
+Check a signed APK with the Android SDK's `apksigner`:
+
+```sh
+apksigner verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+```
+
+At the APK's own minimum Android version (14) `apksigner` checks only the strongest scheme it
+needs, so it prints `v3 … true` and `v2 … false`. Adding `--min-sdk-version 24` makes it check
+the v2 signature too, and both print `true`.
+
+## Release signing certificate
+
+Every release APK is signed with the same certificate. Its SHA-256 digest, as `apksigner`
+prints it ("Signer #1 certificate SHA-256 digest"), is:
+
+```text
+(filled in at the first release)
+```
+
+Android refuses an update signed with a different key, and Obtainium can block one too (see
+[`../docs/ANDROID.md`](../docs/ANDROID.md), "Installing the app"). If an APK's digest differs
+from this one, it was not built by this project: don't install it.
 
 ## Privacy
 
