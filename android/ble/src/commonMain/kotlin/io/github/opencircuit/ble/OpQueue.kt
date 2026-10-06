@@ -70,6 +70,9 @@ internal sealed interface GattOp {
 
         /** True for the link's own urgent writes, which go on the link lane. */
         val onLinkLane: Boolean get() = purpose == Purpose.ACK || purpose == Purpose.AUTH_REPLY
+
+        /** The caller of `send` this write was for was cancelled (the link's own writes have none). */
+        val callerGone: Boolean get() = reply?.isCancelled == true
     }
 }
 
@@ -95,12 +98,18 @@ internal class OpQueue {
         if (op is GattOp.Write && op.onLinkLane) link.addLast(op) else main.addLast(op)
     }
 
-    /** Takes the next operation and marks it in flight; null while one is in flight or none waits. */
+    /**
+     * Takes the next operation and marks it in flight; null while one is in flight or none waits.
+     * A feature write whose caller is gone is dropped on the way, never started.
+     */
     fun startNext(): GattOp? {
         if (inFlight != null) return null
-        val next = link.removeFirstOrNull() ?: main.removeFirstOrNull() ?: return null
-        inFlight = next
-        return next
+        while (true) {
+            val next = link.removeFirstOrNull() ?: main.removeFirstOrNull() ?: return null
+            if (next is GattOp.Write && next.callerGone) continue
+            inFlight = next
+            return next
+        }
     }
 
     /** The in-flight operation was answered. */

@@ -50,7 +50,9 @@ import kotlin.time.TimeSource
  * Any failure (a timeout, an error status, a refused or throwing call, a drop) fails the
  * operation in flight, closes the connection and schedules the next attempt by address
  * (PORTING.md D-186, D-187). Each connection has its own [SessionToken]; a callback carrying any
- * other token changes nothing.
+ * other token changes nothing. An exception thrown while an event is handled is treated as such a
+ * failure, and the loop goes on with the next event. A `send` caller cancelled while its write
+ * still waits takes the write with it: it is never written.
  *
  * Every bring-up step, bond change, failure and close is also noted in [diagnostics] (the last
  * 64, never an address, a MAC or frame bytes; PORTING.md D-196).
@@ -145,7 +147,15 @@ internal class LinkCore(
 
     init {
         val loop = scope.launch(loopDispatcher) {
-            for (event in inbox) handle(event)
+            for (event in inbox) {
+                try {
+                    handle(event)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    recoverFrom(e)
+                }
+            }
         }
         loop.invokeOnCompletion {
             // The loop is gone: nothing else will answer a caller or close the connection.
@@ -159,7 +169,13 @@ internal class LinkCore(
         if (inbox.trySend(LinkEvent.Send(command.copyOf(), reply)).isFailure) {
             return SendResult.Failed(SendFailure.LINK_LOST)
         }
-        return reply.await()
+        return try {
+            reply.await()
+        } catch (e: CancellationException) {
+            // The caller is gone: a write still waiting in the queue is dropped, never written.
+            reply.cancel()
+            throw e
+        }
     }
 
     override fun connect() {
@@ -191,6 +207,34 @@ internal class LinkCore(
             is LinkEvent.BondChanged -> onBond(event.state)
         }
         pump()
+    }
+
+    /**
+     * [fault] was thrown while an event was being handled: a defect, not a GATT answer. It counts
+     * as a failure of the connection open at the time (the operation in flight fails with
+     * `GATT_ERROR`, the waiting ones with `LINK_LOST`, the connection is closed and the next
+     * attempt scheduled), and the loop goes on with the next event, so the link neither stops
+     * answering nor takes the app down. The diagnostic names the exception's class only: its
+     * message may hold anything. If the recovery throws too, the connection is closed without
+     * diagnostics and the link stays `Idle` until `connect()` is asked again.
+     */
+    private fun recoverFrom(fault: Exception) {
+        try {
+            note("unexpected error", fault::class.simpleName.orEmpty())
+            dropLink(SendFailure.GATT_ERROR)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            stopAfterFault()
+        }
+    }
+
+    /** The last resort of [recoverFrom]: closes the connection without noting it and stops wanting one. */
+    private fun stopAfterFault() {
+        wanted = false
+        timers.keys.toList().forEach(::cancelTimer)
+        closeSession(SendFailure.GATT_ERROR, TeardownReason.LINK_DROPPED, noted = false)
+        stateFlow.value = LinkState.Idle
     }
 
     private fun onConnectAsked() {
@@ -646,9 +690,9 @@ internal class LinkCore(
      * Ends the current connection: fails its operations (the one in flight with [inFlight], the
      * waiting ones with `LINK_LOST`), stops its timers, closes it and retires its token. No
      * callback follows a close, so nothing waits for one. A connection that had connected
-     * publishes its teardown.
+     * publishes its teardown. [noted] false leaves the close out of the diagnostics.
      */
-    private fun closeSession(inFlight: SendFailure, reason: TeardownReason) {
+    private fun closeSession(inFlight: SendFailure, reason: TeardownReason, noted: Boolean = true) {
         if (session == null) return
         val current = queue.inFlight
         queue.clear().forEach { op ->
@@ -665,7 +709,7 @@ internal class LinkCore(
         // The buffer is per connection: what its collector never took is dropped and counted.
         val undelivered = frameBuffer.clear()
         if (connected) teardownBuffer.add(LinkTeardown(reason, undelivered))
-        note("closed", if (connected) "${reason.rawValue}, $undelivered undelivered frames" else reason.rawValue)
+        if (noted) note("closed", if (connected) "${reason.rawValue}, $undelivered undelivered frames" else reason.rawValue)
         connected = false
         awaitingBond = false
     }
