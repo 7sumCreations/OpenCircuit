@@ -54,6 +54,7 @@ class CompanionPairingFlowTest {
         val under: SessionsUnderTest,
         val viewModel: RingViewModel,
         val logLines: MutableList<String>,
+        val flow: ConnectFlowController,
     ) {
         val card get() = viewModel.uiState.value.card.link
         val remembered get() = under.store.load()
@@ -82,7 +83,7 @@ class CompanionPairingFlowTest {
         runCurrent()
         flow.requestScan(granted)
         runCurrent()
-        return Screen(port, pairing, under, viewModel, logLines)
+        return Screen(port, pairing, under, viewModel, logLines, flow)
     }
 
     /** Continue past the app's explanation, and the system sheet comes up and is shown. */
@@ -109,6 +110,7 @@ class CompanionPairingFlowTest {
         assertTrue(screen.card.detail!!.contains("Android will ask"), screen.card.detail)
         assertEquals(LinkAction.CONTINUE_PAIRING, screen.card.action)
         assertEquals(LinkAction.CANCEL_SCAN, screen.card.secondary)
+        assertEquals(LinkAction.PAIR_WITHOUT_SHEET, screen.card.tertiary, "the sheet may never find the ring: pairing without it is offered up front")
         assertTrue(screen.port.requests.isEmpty(), "the sheet opens only after Continue")
         assertNull(screen.remembered)
         assertTrue(screen.built.isEmpty())
@@ -186,11 +188,40 @@ class CompanionPairingFlowTest {
     }
 
     @Test
-    fun pairingWithoutTheSheetDoesNothingUnlessThePairingWasCancelled() = runTest {
-        // Before the sheet answered (the explanation, then waiting for the sheet), and after Cancel.
+    fun pairingWithoutTheSheetFromTheExplanationRemembersAndConnectsWithoutAskingCdm() = runTest {
         val screen = screen()
+
         screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
         runCurrent()
+
+        assertEquals(ring, screen.remembered)
+        assertEquals(1, screen.built.single().fake.connectCalls)
+        assertTrue(screen.port.requests.isEmpty(), "the sheet is never asked for")
+        assertEquals(PairingOutcome.Fallback(FallbackReason.USER_CHOSE_PLAIN_BOND, resultCode = null), screen.pairing.lastOutcome.value)
+        assertFalse(screen.card.headline.startsWith("Pair with"), "the card leaves the explanation")
+    }
+
+    @Test
+    fun pairingWithoutTheSheetFromTheExplanationKeepsNoResultCodeFromAnEarlierCancelledSheet() = runTest {
+        val screen = screen()
+        continueToSheet(screen)
+        sheetAnswers(screen, 1)
+        screen.flow.requestScan(granted) // Scan & connect: the activity hands the controller a fresh permission read
+        runCurrent()
+        assertTrue(screen.card.headline.startsWith("Pair with"), screen.card.headline)
+
+        screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
+        runCurrent()
+
+        assertEquals(PairingOutcome.Fallback(FallbackReason.USER_CHOSE_PLAIN_BOND, resultCode = null), screen.pairing.lastOutcome.value)
+        assertEquals(listOf(ring), screen.port.requests, "only the first pairing asked for the sheet")
+        assertEquals(1, screen.built.single().fake.connectCalls)
+    }
+
+    @Test
+    fun pairingWithoutTheSheetDoesNothingWhileTheSheetIsAskedForOrAfterCancel() = runTest {
+        // While waiting for the sheet, and after Cancel.
+        val screen = screen()
         continueToSheet(screen)
         screen.tap(LinkAction.PAIR_WITHOUT_SHEET)
         runCurrent()

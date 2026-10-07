@@ -32,7 +32,7 @@ enum class LinkAction(
     /** Go on from the app's explanation to Android's pairing sheet. */
     CONTINUE_PAIRING("Continue"),
 
-    /** After the user cancelled Android's pairing sheet: connect anyway, and let the ring bond through Android's own prompt. */
+    /** Instead of Android's pairing sheet, or after the user cancelled it: connect anyway, and let the ring bond through Android's own prompt. */
     PAIR_WITHOUT_SHEET("Pair without the system sheet"),
 
     /** Stop a connection that is being made. */
@@ -66,6 +66,8 @@ data class LinkStateUi(
     val connected: Boolean,
     /** A second, quieter button, or null. */
     val secondary: LinkAction? = null,
+    /** A third, quieter button on its own row above the others, or null. */
+    val tertiary: LinkAction? = null,
     /** Bulleted hints under the detail, in order. */
     val hints: List<String> = emptyList(),
     /** The rings to pick from, in the order shown; empty unless several rings were found. */

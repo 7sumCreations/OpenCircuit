@@ -185,7 +185,15 @@ class RingStatesRenderTest {
         compose.onNodeWithText("Android will ask you to allow OpenCircuit", substring = true).assertIsDisplayed()
         compose.onNodeWithText("Continue").performClick()
         compose.onNodeWithText("Cancel").performClick()
-        assertEquals(listOf<RingAction>(RingAction.Link(LinkAction.CONTINUE_PAIRING), RingAction.Link(LinkAction.CANCEL_SCAN)), actions)
+        compose.onNodeWithText("Pair without the system sheet").assertIsDisplayed().performClick()
+        assertEquals(
+            listOf<RingAction>(
+                RingAction.Link(LinkAction.CONTINUE_PAIRING),
+                RingAction.Link(LinkAction.CANCEL_SCAN),
+                RingAction.Link(LinkAction.PAIR_WITHOUT_SHEET),
+            ),
+            actions,
+        )
     }
 
     @Test

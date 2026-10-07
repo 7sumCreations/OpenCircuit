@@ -87,8 +87,8 @@ data class ConnectFlowState(
  * A chosen ring is not connected at once: the card first says what Android's companion-device
  * sheet is for (its own wording is generic), and Continue hands the ring to [pairing]. The sheet
  * it returns is published on [pairingSheet] for the activity to show; the answer remembers and
- * connects the ring through [connector], or ends as "Pairing cancelled", from where the user can
- * still pair without the sheet.
+ * connects the ring through [connector], or ends as "Pairing cancelled". From the explanation and
+ * from "Pairing cancelled" the user can also pair without the sheet.
  */
 class ConnectFlowController(
     private val prefs: AppPrefs,
@@ -131,16 +131,23 @@ class ConnectFlowController(
     }
 
     /**
-     * Pair without the system sheet, after the user cancelled it: remember and connect the ring
-     * anyway, the way a sheet that could not help does, so the ring bonds through Android's own
-     * pairing prompt. Recorded for Connection details as the user's choice. The sheet never times
-     * out by itself and its Cancel is a refusal, so without this a ring the sheet cannot find
-     * could never be paired (PORTING D-254). Does nothing unless the pairing was cancelled.
+     * Pair without the system sheet, from the explanation or after the user cancelled the sheet:
+     * remember and connect the ring anyway, the way a sheet that could not help does, so the ring
+     * bonds through Android's own pairing prompt. Recorded for Connection details as the user's
+     * choice, with the sheet's result code when the sheet was shown for this ring. The sheet never
+     * times out by itself and its Cancel is a refusal, so without this a ring the sheet cannot
+     * find could never be paired (PORTING D-254, D-258). Does nothing while the sheet is asked for
+     * or shown, and nothing once the pairing ended.
      */
     fun pairWithoutSheet() {
-        val ring = (stateFlow.value.phase as? ScanPhase.PairingCancelled)?.ring ?: return
+        val phase = stateFlow.value.phase
+        val ring = when (phase) {
+            is ScanPhase.ConfirmPairing -> phase.ring
+            is ScanPhase.PairingCancelled -> phase.ring
+            else -> return
+        }
         stateFlow.update { it.copy(phase = ScanPhase.Idle) }
-        pairing.userChosePlainBond()
+        pairing.userChosePlainBond(afterSheet = phase is ScanPhase.PairingCancelled)
         connector.connect(ring)
     }
 

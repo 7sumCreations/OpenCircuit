@@ -11,16 +11,15 @@ import android.content.IntentSender
 import android.content.pm.PackageManager
 import io.github.opencircuit.ble.RememberedRing
 import java.util.Locale
-import java.util.regex.Pattern
 
 /** Android's companion-device sheet: the activity launches [intentSender] for a result. */
 class IntentSenderSheet(val intentSender: IntentSender) : PairingSheet
 
 /**
- * [CompanionPort] over Android's `CompanionDeviceManager`. The request names one device by its
- * address and, when it has one, its exact advertised name; no device profile, so no permission or
- * role comes with it. CDM's own scan runs in the system's companion-device app; its answers arrive
- * on the main thread.
+ * [CompanionPort] over Android's `CompanionDeviceManager`. The request is one LE filter on the
+ * ring's address ([CompanionFilterSpec]; no name pattern); no device profile, so
+ * no permission or role comes with it. CDM's own scan runs in the system's companion-device app;
+ * its answers arrive on the main thread.
  */
 class AndroidCompanionPort(context: Context) : CompanionPort {
 
@@ -50,9 +49,9 @@ class AndroidCompanionPort(context: Context) : CompanionPort {
     }
 
     override fun associate(ring: RememberedRing, callback: AssociationCallback) {
+        val spec = CompanionFilter.specFor(ring)
         val filter = BluetoothLeDeviceFilter.Builder()
-            .setScanFilter(ScanFilter.Builder().setDeviceAddress(ring.address.uppercase(Locale.ROOT)).build())
-            .apply { ring.name?.takeIf(String::isNotEmpty)?.let { setNamePattern(Pattern.compile(Pattern.quote(it))) } }
+            .setScanFilter(ScanFilter.Builder().setDeviceAddress(spec.address).build())
             .build()
         val request = AssociationRequest.Builder().addDeviceFilter(filter).setSingleDevice(true).build()
         requireManager().associate(

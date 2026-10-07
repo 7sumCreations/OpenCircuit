@@ -156,12 +156,14 @@ class CompanionPairing(private val port: CompanionPort, private val log: (String
     }
 
     /**
-     * The user cancelled the sheet and then chose to pair without it: recorded as a
-     * [FallbackReason.USER_CHOSE_PLAIN_BOND] fallback, keeping the sheet's result code.
+     * The user chose to pair without the sheet: recorded as a [FallbackReason.USER_CHOSE_PLAIN_BOND]
+     * fallback. [afterSheet]: they cancelled the sheet first, whose result code is kept; otherwise
+     * the sheet was never asked for this ring and no code is (an earlier pairing's is not).
      */
-    fun userChosePlainBond() {
+    fun userChosePlainBond(afterSheet: Boolean) {
         request = null
-        outcomeFlow.value = PairingOutcome.Fallback(FallbackReason.USER_CHOSE_PLAIN_BOND, (outcomeFlow.value as? PairingOutcome.Declined)?.resultCode)
+        val code = if (afterSheet) (outcomeFlow.value as? PairingOutcome.Declined)?.resultCode else null
+        outcomeFlow.value = PairingOutcome.Fallback(FallbackReason.USER_CHOSE_PLAIN_BOND, code)
     }
 
     /** Abandons a waiting request: a late answer changes nothing. */

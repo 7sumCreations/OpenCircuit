@@ -84,6 +84,8 @@ object ConnectFlowPresenter {
             LinkAction.CONTINUE_PAIRING,
             connected = false,
             secondary = LinkAction.CANCEL_SCAN,
+            // The sheet may never find the ring (PORTING D-258): the way round it is offered up front.
+            tertiary = LinkAction.PAIR_WITHOUT_SHEET,
         )
         is ScanPhase.Pairing -> LinkStateUi(
             "Waiting for Android's pairing sheet…",
@@ -112,7 +114,8 @@ object ConnectFlowPresenter {
     private const val PAIRING_EXPLAINED =
         "Android will ask you to allow OpenCircuit to access this ring. Its message mentions syncing info like the " +
             "name of someone calling: that is Android's standard wording for any companion device. OpenCircuit only " +
-            "reads the ring's own data, on this phone. Allowing it usually lets the pairing finish without another prompt."
+            "reads the ring's own data, on this phone. Allowing it usually lets the pairing finish without another prompt. " +
+            "If the sheet keeps looking for the ring, cancel it and pair without it: Android asks you to confirm the pairing instead."
 
     /**
      * The picker's rows: the saved ring first (marked "Last used"), then by name, then by

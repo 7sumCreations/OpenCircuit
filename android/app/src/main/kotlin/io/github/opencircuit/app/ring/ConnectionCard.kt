@@ -82,6 +82,12 @@ fun ConnectionCard(
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
+            card.link.tertiary?.let { tertiary ->
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    TextButton(onClick = { onAction(tertiary) }) { Text(tertiary.label) }
+                }
+            }
             if (card.link.action != null || card.link.secondary != null) {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Spacer(modifier = Modifier.weight(1f))
