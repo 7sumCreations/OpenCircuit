@@ -18,7 +18,8 @@ import kotlinx.coroutines.launch
  *
  * The ring itself answers `01 00 00` with [Script.challengeFrame], and answers a write equal to
  * [Script.acceptedAuthReply] with [Script.firstFrameAfterAuth]; any other reply gets nothing,
- * as a real ring drops a wrong one without a word.
+ * as a real ring drops a wrong one without a word. Once it has accepted the reply on the current
+ * connection it answers `d0 00 00` with [Script.statusQueryReply].
  *
  * Callbacks are tasks on [scope]. Under `runTest` with `backgroundScope`, drive them with
  * `runCurrent()` or `advanceTimeBy(…)`: `advanceUntilIdle()` stops once no foreground task is
@@ -36,6 +37,12 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
         val acceptedAuthReply: ByteArray? = null,
         /** The notification the ring sends once it accepted the auth reply, or none. */
         val firstFrameAfterAuth: ByteArray? = null,
+        /**
+         * The notification the ring sends for each `d0 00 00` written after it accepted the auth
+         * reply on the current connection, or none. A real ring answers it with a `0x10`
+         * descriptor or a `0x50` frame (`docs/PROTOCOL.md` §4).
+         */
+        val statusQueryReply: ByteArray? = null,
         /** The ATT MTU the exchange settles on. */
         val mtuGrant: Int = 247,
         /** The phone's bond state with the ring. */
@@ -85,6 +92,7 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
     private var open = 0
     private var mostOpen = 0
     private var bond = script.bondState
+    private var authAccepted = false
     private var bondRequests = 0
     private var bondRequestsAccepted = true
     private val bondListeners = mutableListOf<(GattPort.BondState) -> Unit>()
@@ -156,6 +164,7 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
     override fun connect(session: SessionToken, ring: RememberedRing, autoConnect: Boolean, events: GattPort.EventSink): Boolean {
         sink = events
         current = session
+        authAccepted = false
         tokens += session
         connectCalls += ConnectCall(ring.address, autoConnect)
         open++
@@ -285,10 +294,15 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
 
     private fun ringAnswers(written: ByteArray) {
         val status0 = byteArrayOf(0x01, 0x00, 0x00)
+        val statusQuery = byteArrayOf(0xD0.toByte(), 0x00, 0x00)
         val accepted = script.acceptedAuthReply
         when {
             written.contentEquals(status0) -> script.challengeFrame?.let(::notify)
-            accepted != null && written.contentEquals(accepted) -> script.firstFrameAfterAuth?.let(::notify)
+            accepted != null && written.contentEquals(accepted) -> {
+                authAccepted = true
+                script.firstFrameAfterAuth?.let(::notify)
+            }
+            written.contentEquals(statusQuery) && authAccepted -> script.statusQueryReply?.let(::notify)
         }
     }
 

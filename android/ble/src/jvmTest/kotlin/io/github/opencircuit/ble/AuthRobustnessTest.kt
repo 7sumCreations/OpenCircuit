@@ -116,7 +116,7 @@ class AuthRobustnessTest {
     fun whenTheAddressAndTheSystemIdDisagreeTheSystemIdMacIsUsedAndTheMismatchIsReported() = runTest {
         val (ring, link) = authenticatedLink(ring = otherRing)
 
-        assertEquals(reply("01 01 31 82 67 00"), ring.log.last())
+        assertEquals(listOf(reply("01 01 31 82 67 00"), reply("d0 00 00")), ring.log.takeLast(2))
         assertEquals("F8:79:99:F7:03:AD", link.info.value.mac)
         assertTrue(link.info.value.macMismatch)
     }
@@ -136,7 +136,7 @@ class AuthRobustnessTest {
 
         val (ring, link) = authenticatedLink(noSystemId, lowerCase)
 
-        assertEquals(reply("01 01 31 82 67 00"), ring.log.last())
+        assertEquals(listOf(reply("01 01 31 82 67 00"), reply("d0 00 00")), ring.log.takeLast(2))
         assertEquals("F8:79:99:F7:03:AD", link.info.value.mac)
         assertFalse(link.info.value.macMismatch)
     }

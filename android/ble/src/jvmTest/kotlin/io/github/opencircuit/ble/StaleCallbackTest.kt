@@ -31,6 +31,7 @@ class StaleCallbackTest {
         "read 00002a27",
         "write 8327ad98 01 00 00",
         "write 8327ad98 01 01 31 82 67 00",
+        "write 8327ad98 d0 00 00", // asks for the first data frame (PORTING.md D-257)
     )
 
     /** Every kind of callback, as the closed connection [old] would have produced it. */

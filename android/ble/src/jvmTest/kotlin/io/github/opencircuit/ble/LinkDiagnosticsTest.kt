@@ -32,7 +32,7 @@ class LinkDiagnosticsTest {
         runCurrent()
 
         val diagnostics = (link as? LinkDiagnostics)?.diagnostics?.value ?: error("no diagnostics on the factory's link")
-        assertEquals("Authenticated", diagnostics.last().event)
+        assertTrue(diagnostics.any { it.event == "Authenticated" }, diagnostics.joinToString { it.event })
     }
 
     @Test
@@ -55,7 +55,8 @@ class LinkDiagnosticsTest {
                 "DIS read started", "DIS read finished",
                 "auth started", "auth finished",
                 "auth reply started", "auth reply finished",
-                "Authenticated",
+                // The answer to `d0 00 00` and its write callback can come in either order.
+                "data request started", "Authenticated", "data request finished",
             ),
             link.events(),
         )

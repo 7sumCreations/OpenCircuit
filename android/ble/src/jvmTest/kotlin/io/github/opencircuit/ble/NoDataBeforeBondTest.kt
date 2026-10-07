@@ -86,7 +86,10 @@ class NoDataBeforeBondTest {
 
         assertEquals(SendResult.Sent, result)
         val writes = ring.writes()
-        assertEquals(listOf("write 8327ad98 01 00 00", "write 8327ad98 01 01 31 82 67 00", "write 8327ad98 95 00 00"), writes)
+        assertEquals(
+            listOf("write 8327ad98 01 00 00", "write 8327ad98 01 01 31 82 67 00", "write 8327ad98 d0 00 00", "write 8327ad98 95 00 00"),
+            writes,
+        )
         assertTrue(ring.log.indexOf("createBond") < ring.log.indexOf(writes.first()), "every write after the bond request")
     }
 }
