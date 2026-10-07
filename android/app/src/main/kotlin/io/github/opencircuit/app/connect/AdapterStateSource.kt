@@ -22,7 +22,10 @@ interface AdapterStateSource {
  *
  * Listens only between [start] and [stop] (the activity calls them as it becomes visible and
  * hidden). [start] reads the state first, because the broadcast is not replayed. The receiver is
- * registered not exported: only the system can send it this broadcast. Main thread only.
+ * registered exported: a not-exported receiver hears only uid system, and the Bluetooth stack
+ * (which sends some of its broadcasts as its own uid) is not uid system. Exporting opens nothing,
+ * because `ACTION_STATE_CHANGED` is a protected broadcast only the system can send. Main thread
+ * only.
  */
 class AndroidAdapterStateSource(context: Context, private val log: (String) -> Unit) : AdapterStateSource {
     private val appContext = context.applicationContext
@@ -42,7 +45,7 @@ class AndroidAdapterStateSource(context: Context, private val log: (String) -> U
 
     fun start() {
         if (listening) return
-        appContext.registerReceiver(receiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), Context.RECEIVER_NOT_EXPORTED)
+        appContext.registerReceiver(receiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), Context.RECEIVER_EXPORTED)
         listening = true
         stateFlow.value = readNow()
     }

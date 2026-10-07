@@ -16,8 +16,14 @@ import android.os.Looper
  * (`BluetoothDevice.ACTION_BOND_STATE_CHANGED`, other devices' bonds ignored). A mechanical
  * mapping with no link logic; compiled, not exercised, on the JVM.
  *
- * Both receivers are registered at run time with `RECEIVER_NOT_EXPORTED` (no other app can send
- * them anything) and run on the main thread, where they only hand the value on. The reason
+ * Both receivers are registered at run time with `RECEIVER_EXPORTED`, and must be. A
+ * `RECEIVER_NOT_EXPORTED` receiver only gets broadcasts from uid system or from this app, and on
+ * current Android the bond broadcast is sent by the Bluetooth stack, which runs as its own uid
+ * (the adapter broadcast still comes from system_server today, but that is not a promise). With
+ * the not-exported flag the bond receiver silently heard nothing: a first pairing on a real phone
+ * finished only through the bond step's slow re-read of the bond. Exporting opens nothing: both
+ * actions are protected broadcasts, which only the system can send. They run on the main thread,
+ * where they only hand the value on. The reason
  * Android gives for a lost bond is not read: it is not public in the SDK, and the link never
  * acts on it.
  */
@@ -78,7 +84,7 @@ internal class AndroidLinkBroadcasts(
 
     private fun register(receiver: BroadcastReceiver, action: String) {
         try {
-            context.registerReceiver(receiver, IntentFilter(action), null, handler, Context.RECEIVER_NOT_EXPORTED)
+            context.registerReceiver(receiver, IntentFilter(action), null, handler, Context.RECEIVER_EXPORTED)
         } catch (_: SecurityException) {
             // Without the permission no broadcast arrives; the link still reads the bond itself.
         }
