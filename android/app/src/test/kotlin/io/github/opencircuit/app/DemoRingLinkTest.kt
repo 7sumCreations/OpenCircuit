@@ -206,4 +206,24 @@ class DemoRingLinkTest {
         assertFailsWith<IllegalStateException> { withTimeout(1_000) { link.frames.collect() } }
         assertFailsWith<IllegalStateException> { withTimeout(1_000) { link.teardowns.collect() } }
     }
+
+    @Test
+    fun aReconnectedDemoRingAnswersNoPollUntilAModeIsChosenAgain() = runTest {
+        val link = DemoRingLink(backgroundScope)
+        val received = mutableListOf<ByteArray>()
+        backgroundScope.launch { link.frames.collect { received += it } }
+        link.connect()
+        for (cmd in listOf("d00000", "060100", "070000", "950000")) link.send(hex(cmd))
+        runCurrent()
+        assertEquals(1, received.count { it[0] == 0x15.toByte() })
+
+        link.disconnect()
+        link.connect()
+        runCurrent()
+        received.clear()
+        link.send(hex("950000"))
+        runCurrent()
+
+        assertEquals(0, received.count { it[0] == 0x15.toByte() }, "a new connection starts with no mode, as a real ring's does")
+    }
 }

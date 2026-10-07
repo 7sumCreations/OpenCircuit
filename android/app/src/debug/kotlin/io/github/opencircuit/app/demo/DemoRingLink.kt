@@ -140,6 +140,9 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
         if (stateFlow.value == LinkState.Idle) return
         descriptorJob?.cancel()
         descriptorJob = null
+        // A new connection starts with no live mode chosen, as a real ring's does.
+        liveMode = null
+        pollsSinceEntry = 0
         stateFlow.value = LinkState.Idle
         infoFlow.value = LinkInfo()
         teardownChannel.trySend(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 0))
