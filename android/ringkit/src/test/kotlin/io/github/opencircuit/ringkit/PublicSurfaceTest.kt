@@ -13,8 +13,12 @@ import kotlin.test.assertTrue
  * local path, points readers at something they can never open. A one-off manual grep only runs
  * when someone remembers it; this test runs on every suite.
  *
- * Scope: the whole `android/` tree on disk, minus the private kit paths, build and tool output,
- * binaries, and this file (which has to spell the patterns out).
+ * Scope: every file git would publish or could be asked to add, i.e. tracked files plus untracked
+ * files git does not ignore (`git ls-files --cached --others --exclude-standard`), minus the
+ * private kit paths, build and tool output, binaries, and this file (which has to spell the
+ * patterns out). A git-ignored file such as `keystore.properties` holds machine-local paths by
+ * design and can never be pushed, so it is not scanned; a new file nobody has ignored yet is.
+ * Without git (a source archive) the whole tree on disk is scanned instead.
  */
 class PublicSurfaceTest {
 
@@ -27,21 +31,7 @@ class PublicSurfaceTest {
         val root = File(rootPath)
         assertTrue(root.isDirectory, "android root not found at $rootPath")
 
-        val scanned = mutableListOf<String>()
-        val hits = mutableListOf<String>()
-        root.walkTopDown()
-            .onEnter { dir -> dir == root || !PublicSurface.isSkippedDir(dir.relativeTo(root).invariantSeparatorsPath) }
-            .filter { it.isFile }
-            .forEach { file ->
-                val rel = file.relativeTo(root).invariantSeparatorsPath
-                if (PublicSurface.isSkippedFile(rel)) return@forEach
-                val bytes = file.readBytes()
-                if (PublicSurface.looksBinary(bytes)) return@forEach
-                scanned += rel
-                PublicSurface.scan(String(bytes, Charsets.UTF_8)).forEach { (line, rule, match) ->
-                    hits += "$rel:$line [$rule] '$match'"
-                }
-            }
+        val (scanned, hits) = PublicSurface.scanTree(root)
 
         assertTrue(scanned.any { it == "PORTING.md" }, "scan never reached PORTING.md — skip rules are too wide")
         assertTrue(scanned.any { it.startsWith("ringkit/src/main/") }, "scan never reached ringkit sources")
@@ -49,6 +39,56 @@ class PublicSurfaceTest {
             hits.isEmpty(),
             "${hits.size} private reference(s) in public files:\n" + hits.joinToString("\n"),
         )
+    }
+
+    // --- which files the tree scan reads, on a throwaway git repository ---
+
+    @Test
+    fun theTreeScanSkipsGitIgnoredFilesButReadsUntrackedOnes() {
+        val repo = kotlin.io.path.createTempDirectory("public-surface").toFile()
+        try {
+            val leak = "/" + "Users" + "/someone/release.jks"
+            git(repo, "init", "-q")
+            File(repo, ".gitignore").writeText("machine.properties\n")
+            File(repo, "machine.properties").writeText("storeFile=$leak\n") // ignored: never published
+            File(repo, "notes.txt").writeText("key at $leak\n") // untracked, not ignored: one `git add` from public
+            File(repo, "src").mkdirs()
+            File(repo, "src/Tracked.kt").writeText("// key at $leak\n")
+            git(repo, "add", "src/Tracked.kt")
+
+            val (scanned, hits) = PublicSurface.scanTree(repo)
+
+            assertEquals(listOf(".gitignore", "notes.txt", "src/Tracked.kt"), scanned.sorted())
+            assertEquals(
+                listOf("notes.txt:1 [personal-data] '/" + "Users" + "/'", "src/Tracked.kt:1 [personal-data] '/" + "Users" + "/'"),
+                hits.sorted(),
+            )
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun withoutGitTheTreeScanReadsEveryFileOnDisk() {
+        val dir = kotlin.io.path.createTempDirectory("public-surface").toFile()
+        try {
+            File(dir, ".gitignore").writeText("machine.properties\n")
+            File(dir, "machine.properties").writeText("storeFile=/" + "Users" + "/someone/release.jks\n")
+
+            assertEquals(null, PublicSurface.gitListing(dir), "not a git repository")
+            val (scanned, hits) = PublicSurface.scanTree(dir)
+
+            assertEquals(listOf(".gitignore", "machine.properties"), scanned.sorted())
+            assertEquals(1, hits.size, hits.joinToString())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    private fun git(dir: File, vararg args: String) {
+        val process = ProcessBuilder(listOf("git", *args)).directory(dir).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        assertEquals(0, process.waitFor(), "git ${args.joinToString(" ")}: $output")
     }
 
     // --- the matcher itself, independent of the tree ---
@@ -139,6 +179,48 @@ private object PublicSurface {
         rel == SELF || rel in skippedTopFiles || rel.substringAfterLast('.', "") in binaryExtensions
 
     fun looksBinary(bytes: ByteArray): Boolean = bytes.take(8192).any { it == 0.toByte() }
+
+    /**
+     * Scans the files under [root] that could be published, minus the skip rules; returns the
+     * relative paths read and every hit as "path:line [rule] 'match'".
+     */
+    fun scanTree(root: File): Pair<List<String>, List<String>> {
+        val candidates = gitListing(root)?.map { File(root, it) }
+            ?: root.walkTopDown()
+                .onEnter { dir -> dir == root || !isSkippedDir(dir.relativeTo(root).invariantSeparatorsPath) }
+                .toList()
+        val scanned = mutableListOf<String>()
+        val hits = mutableListOf<String>()
+        candidates.filter { it.isFile }.forEach { file ->
+            val rel = file.relativeTo(root).invariantSeparatorsPath
+            if (isSkippedDir(rel.substringBeforeLast('/', "")) || isSkippedFile(rel)) return@forEach
+            val bytes = file.readBytes()
+            if (looksBinary(bytes)) return@forEach
+            scanned += rel
+            scan(String(bytes, Charsets.UTF_8)).forEach { (line, rule, match) -> hits += "$rel:$line [$rule] '$match'" }
+        }
+        return scanned to hits
+    }
+
+    /**
+     * The files under [root] that git tracks or could be asked to add (untracked and not ignored),
+     * relative to [root]; null when [root] is not in a git work tree or git cannot be run.
+     */
+    fun gitListing(root: File): List<String>? = try {
+        val inside = ProcessBuilder("git", "rev-parse", "--is-inside-work-tree")
+            .directory(root).redirectErrorStream(true).start()
+        val isRepo = inside.inputStream.bufferedReader().readText().trim() == "true"
+        if (inside.waitFor() != 0 || !isRepo) {
+            null
+        } else {
+            val ls = ProcessBuilder("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+                .directory(root).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            val out = ls.inputStream.bufferedReader().readText()
+            if (ls.waitFor() == 0) out.split('\u0000').filter { it.isNotEmpty() }.distinct() else null
+        }
+    } catch (_: java.io.IOException) {
+        null // git is not installed
+    }
 
     /**
      * The kit's anti-pattern labels are one capital A, I or G followed by one or two digits, as a
