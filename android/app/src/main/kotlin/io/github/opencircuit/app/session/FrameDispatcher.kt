@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlin.coroutines.cancellation.CancellationException
 
 /** What the [FrameDispatcher] could not hand to a handler, counted (never a list of frames). */
@@ -25,16 +26,21 @@ data class DispatchCounts(
  * (`ios/OpenCircuit/BLE/RingSession.swift:4910-4920, 5334-5357` @ b1c2fdd). Here a frame is never
  * lost without a trace: an opcode with no handler is counted per opcode and logged, and a handler
  * that throws is counted and logged while the next frame is still routed (PORTING.md D-230, D-231).
- * Log lines name the opcode only; they never carry a frame's bytes.
+ * Log lines name the opcode only; they never carry a frame's bytes, and a flood of one opcode is
+ * logged at its 1st, 2nd, 4th, 8th … occurrence only, while every frame is still counted.
  *
- * Not thread-safe for registration: register every handler before the first [dispatch]. [dispatch]
- * is called by the one collector of the link's frames.
+ * Routes are fixed by the first [dispatch]: registering or ignoring an opcode after it throws, so
+ * the table the collector reads never changes under it. [dispatch] is called by the one collector
+ * of the link's frames.
  */
 class FrameDispatcher(private val log: (String) -> Unit) {
 
     private val handlers = HashMap<Int, (ByteArray) -> Unit>()
     private val ignoredOpcodes = HashSet<Int>()
     private val countsFlow = MutableStateFlow(DispatchCounts())
+
+    @Volatile
+    private var routesFixed = false
 
     /** Everything that did not reach a handler, or whose handler failed. */
     val counts: StateFlow<DispatchCounts> = countsFlow.asStateFlow()
@@ -56,9 +62,10 @@ class FrameDispatcher(private val log: (String) -> Unit) {
 
     /** Hands [frame] to its opcode's handler, or counts and logs why it could not. */
     fun dispatch(frame: ByteArray) {
+        routesFixed = true
         if (frame.isEmpty()) {
-            countsFlow.update { it.copy(empty = it.empty + 1) }
-            log("Empty frame from the ring (seen ${countsFlow.value.empty})")
+            val seen = countsFlow.updateAndGet { it.copy(empty = it.empty + 1) }.empty
+            if (worthLogging(seen)) log("Empty frame from the ring (seen $seen)")
             return
         }
         val opcode = frame[0].toInt() and 0xFF
@@ -67,8 +74,8 @@ class FrameDispatcher(private val log: (String) -> Unit) {
             handler != null -> runHandler(opcode, handler, frame)
             opcode in ignoredOpcodes -> countsFlow.update { it.copy(ignored = it.ignored + 1) }
             else -> {
-                countsFlow.update { it.copy(unhandled = it.unhandled.incremented(opcode)) }
-                log("Unhandled frame opcode ${opcode.hex()} (seen ${countsFlow.value.unhandled[opcode]})")
+                val seen = countsFlow.updateAndGet { it.copy(unhandled = it.unhandled.incremented(opcode)) }.unhandled.getValue(opcode)
+                if (worthLogging(seen)) log("Unhandled frame opcode ${opcode.hex()} (seen $seen)")
             }
         }
     }
@@ -81,15 +88,17 @@ class FrameDispatcher(private val log: (String) -> Unit) {
         } catch (e: Exception) {
             // Contained so one bad frame cannot end the session's one collection of the link's
             // frames, which nothing restarts; counted and logged so the failure stays visible.
-            countsFlow.update { it.copy(handlerFailures = it.handlerFailures.incremented(opcode)) }
-            log(
-                "Handler for frame opcode ${opcode.hex()} failed: ${e::class.java.simpleName} " +
-                    "(failures ${countsFlow.value.handlerFailures[opcode]})",
-            )
+            val failures = countsFlow.updateAndGet { it.copy(handlerFailures = it.handlerFailures.incremented(opcode)) }
+                .handlerFailures.getValue(opcode)
+            if (worthLogging(failures)) log("Handler for frame opcode ${opcode.hex()} failed: ${e::class.java.simpleName} (failures $failures)")
         }
     }
 
+    /** The 1st, 2nd, 4th, 8th … occurrence: a flood stays visible in the log without filling it. */
+    private fun worthLogging(seen: Int): Boolean = seen and (seen - 1) == 0
+
     private fun requireFreeOpcode(opcode: Int) {
+        check(!routesFixed) { "routes are fixed once the first frame was dispatched" }
         require(opcode in 0..0xFF) { "opcode must be a byte value 0..255: $opcode" }
         require(opcode !in handlers && opcode !in ignoredOpcodes) { "opcode ${opcode.hex()} already has a route" }
     }

@@ -136,4 +136,27 @@ class FrameDispatcherTest {
         assertFailsWith<IllegalArgumentException> { dispatcher.register(0x100) {} }
         assertFailsWith<IllegalArgumentException> { dispatcher.register(-1) {} }
     }
+
+    @Test
+    fun aFloodOfOneOpcodeIsCountedFrameByFrameButLoggedOnlyAtPowersOfTwo() {
+        dispatcher.register(0x10) { throw IllegalArgumentException("x") }
+
+        repeat(100) { dispatcher.dispatch(TestFrames.historyPage4c) }
+        repeat(100) { dispatcher.dispatch(TestFrames.wornDescriptor) }
+
+        assertEquals(mapOf(0x4c to 100), dispatcher.counts.value.unhandled)
+        assertEquals(mapOf(0x10 to 100), dispatcher.counts.value.handlerFailures)
+        val seen = listOf(1, 2, 4, 8, 16, 32, 64)
+        assertEquals(seen.map { "(seen $it)" }, logLines.filter { "Unhandled" in it }.map { it.substringAfter("0x4c ") })
+        assertEquals(seen.map { "(failures $it)" }, logLines.filter { "failed" in it }.map { it.substringAfter("IllegalArgumentException ") })
+    }
+
+    @Test
+    fun routesCannotChangeOnceTheFirstFrameWasDispatched() {
+        dispatcher.register(0x10) {}
+        dispatcher.dispatch(TestFrames.wornDescriptor)
+
+        assertFailsWith<IllegalStateException> { dispatcher.register(0x15) {} }
+        assertFailsWith<IllegalStateException> { dispatcher.ignore(0x11) }
+    }
 }
