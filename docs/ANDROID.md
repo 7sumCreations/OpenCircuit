@@ -232,3 +232,58 @@ system sheet" sits on the "Pair with …" card next to Continue, and on the "Pai
 if you cancel a sheet that keeps looking. That path connects anyway, and Android shows its standard pairing dialog (tap "Pair"; the contacts/phone access toggle
 can stay off). Pairing again later, after "Stop reconnecting", asks nothing: the bond is kept. "Stop reconnecting" forgets the ring in the app; the phone's own
 Bluetooth pairing is left alone.
+
+## Using the app
+
+**First run.** Four short onboarding pages explain what the app does (no account, no subscription,
+no cloud), what it needs and what it does not do yet. Nothing is requested during onboarding.
+
+**Pairing.** Tap **Scan & connect**. Android asks for "Nearby devices" the first time. If several
+rings are found you pick one. The "Pair with …" card then offers **Continue** (Android's
+companion-device sheet), **Pair without the system sheet**, or **Cancel**. Hold the ring close and
+tap Allow when Android asks. A ring you have paired before reconnects automatically once it is back
+in range.
+
+**The connection card.** Shows the ring's battery (and whether it is charging) and its state, with
+**Measure**, **Disconnect** and **Stop reconnecting**. Measure is unavailable while the ring is on
+the charger. Disconnect ends this connection; **Stop reconnecting** makes the app forget the ring.
+
+**Measuring.** Measure starts a live heart-rate or SpO₂ reading ("Hold still" while the ring
+settles) with a chart; stop it at any time. The app asks the ring to start, reads the ring's answer,
+and stops the ring's mode again afterwards. If the ring refuses or stops answering, the card says so.
+
+**Connection details.** Expand the card to see the ring's facts (firmware, address type, ATT MTU,
+whether it is history-safe) and **Link diagnostics**: the last steps of the connection with times,
+the pairing prompt, and a **Last measure** row with what the ring answered to the last live
+request. **Copy connection details** puts the text on the clipboard with the ring's address and name
+masked, so it is safe to paste into a bug report.
+
+**Privacy.** The app has no internet permission and sends nothing anywhere. Its data is excluded
+from both cloud backup and device-to-device transfer. It is not a medical device; talk to a
+clinician about any health concern.
+
+## Troubleshooting
+
+- **"No ring found".** Take the ring out of its charging case and put it on, keep it within a few
+  feet of the phone, and force-stop the official RingConn app if it is installed: it can hold the
+  Bluetooth connection.
+- **The Android sheet stays on "Looking for a device".** Cancel it and use "Pair without the system
+  sheet".
+- **"Ring isn't streaming".** The ring has not accepted this phone. Forget the ring in Android's
+  Bluetooth settings, then pair again from the app.
+- **A measure fails.** Open Connection details and read "Last measure": it shows what the ring sent.
+
+## FAQ
+
+**Does it need an account or the internet?** No. There is no account, no cloud and no server.
+
+**Is this the RingConn app?** No. It is an independent port of OpenCircuit and is not affiliated
+with RingConn.
+
+**Can it write to Health Connect or sync history?** Not yet; the current release gives live heart
+rate and SpO₂, battery and connection status.
+
+**Which rings work?** RingConn Gen 2, Gen 2 Air and Gen 3, on Android 14 or later.
+
+**Does "Stop reconnecting" unpair the ring?** No. It forgets the ring in the app only; Android's
+own pairing is kept, so pairing again later asks nothing.
