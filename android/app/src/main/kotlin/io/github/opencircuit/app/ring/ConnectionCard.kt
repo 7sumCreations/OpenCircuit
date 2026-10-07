@@ -3,6 +3,7 @@ package io.github.opencircuit.app.ring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,9 +25,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import io.github.opencircuit.ble.RememberedRing
 
@@ -48,7 +52,7 @@ fun ConnectionCard(
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 StatusDot(connected = card.link.connected, modifier = Modifier.padding(top = 6.dp))
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    card.ringName?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
+                    card.ringName?.let { Text(it, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() }) }
                     Text(
                         card.link.headline,
                         style = MaterialTheme.typography.bodyMedium,
@@ -89,8 +93,12 @@ fun ConnectionCard(
                 }
             }
             if (card.link.action != null || card.link.secondary != null) {
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Spacer(modifier = Modifier.weight(1f))
+                // Wraps instead of squeezing: at a large font size a long secondary label ("Pair
+                // without the system sheet") would otherwise leave the main action no width.
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                ) {
                     card.link.secondary?.let { TextButton(onClick = { onAction(it) }) { Text(it.label) } }
                     card.link.action?.let { LinkActionButton(it, onAction) }
                 }
@@ -117,7 +125,7 @@ private fun LinkActionButton(action: LinkAction, onAction: (LinkAction) -> Unit)
 private fun RingChoiceRow(choice: RingChoiceUi, onPick: (RememberedRing) -> Unit) {
     OutlinedButton(
         onClick = { onPick(choice.ring) },
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Connect to ${choice.label}" },
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Connect to ${choice.label}" + if (choice.lastUsed) ", last used" else "" },
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(choice.label, style = MaterialTheme.typography.bodyMedium)
@@ -137,7 +145,16 @@ private fun BatteryColumn(battery: BatteryUi) {
     val caption = MaterialTheme.typography.labelSmall
     val faint = MaterialTheme.colorScheme.onSurfaceVariant
     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        // One node for TalkBack: "Ring battery[, charging]", the percent, and low / out of date,
+        // which the colour alone would carry otherwise.
+        val batteryState = listOfNotNull("low".takeIf { battery.low && !battery.charging }, "out of date".takeIf { battery.stale })
+        Row(
+            modifier = Modifier.semantics(mergeDescendants = true) {
+                if (batteryState.isNotEmpty()) stateDescription = batteryState.joinToString(", ")
+            },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             BatteryIcon(
                 band = battery.band,
                 colour = colour,
@@ -146,7 +163,8 @@ private fun BatteryColumn(battery: BatteryUi) {
                 },
             )
             Text("${battery.percent}%", style = MaterialTheme.typography.titleSmall, color = colour)
-            if (battery.charging) Text("⚡", style = caption, color = colour)
+            // Charging is already in the icon's description; the glyph would be read as "high voltage".
+            if (battery.charging) Text("⚡", style = caption, color = colour, modifier = Modifier.clearAndSetSemantics {})
         }
         battery.asOf?.let { Text(it, style = caption, color = faint) }
         battery.inferredChargingLabel?.let { Text(it, style = caption, color = faint) }

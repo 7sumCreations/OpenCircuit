@@ -93,6 +93,7 @@ class LiveCardRenderTest {
         compose.onNodeWithText("last 90 s").assertIsDisplayed()
         compose.onNodeWithText("62 bpm (settled) · measuring…").performScrollTo().assertIsDisplayed()
 
+        compose.onNodeWithContentDescription("Stop live heart rate").performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription("Stop measuring heart rate").performScrollTo().performClick()
         assertEquals(listOf<RingAction>(RingAction.StopMeasure), actions)
     }

@@ -42,7 +42,7 @@ interface CompanionPort {
     /** The phone is bonded to [address]. */
     fun isBonded(address: String): Boolean
 
-    /** Asks CDM for one association with exactly [ring] (its address and name, no device profile). */
+    /** Asks CDM for one association with exactly [ring] (its address only, no device profile). */
     fun associate(ring: RememberedRing, callback: AssociationCallback)
 }
 

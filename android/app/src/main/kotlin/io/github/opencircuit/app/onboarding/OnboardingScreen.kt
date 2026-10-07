@@ -21,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -68,7 +69,7 @@ private fun Page(page: OnboardingPage) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(page.title, style = MaterialTheme.typography.headlineSmall)
+        Text(page.title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
         page.paragraphs.forEach { Text(it, style = MaterialTheme.typography.bodyLarge) }
     }
 }

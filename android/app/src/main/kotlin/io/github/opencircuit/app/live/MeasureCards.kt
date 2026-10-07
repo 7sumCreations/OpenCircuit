@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -53,7 +54,7 @@ fun MeasureCard(card: MeasureCardUi, onMeasure: (LiveMode) -> Unit, onStop: () -
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Bottom) {
-                    Text(card.title, style = MaterialTheme.typography.titleMedium)
+                    Text(card.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
                     if (card.estimate) EstimateMark()
                 }
                 Text(card.caption, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -88,7 +89,7 @@ fun LiveCard(live: LiveCardUi, pulse: Boolean, onStop: () -> Unit, modifier: Mod
     Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Bottom) {
-                Text(live.title, style = MaterialTheme.typography.titleMedium)
+                Text(live.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
                 if (live.estimate) EstimateMark()
             }
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -104,7 +105,11 @@ fun LiveCard(live: LiveCardUi, pulse: Boolean, onStop: () -> Unit, modifier: Mod
                 modifier = Modifier.fillMaxWidth().height(110.dp),
             )
             Text(live.windowLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            OutlinedButton(onClick = onStop) { Text("Stop") }
+            // Named for TalkBack: the metric's own card shows a Stop of its own at the same time.
+            OutlinedButton(
+                onClick = onStop,
+                modifier = Modifier.semantics { contentDescription = "Stop ${live.title.lowercase(java.util.Locale.ROOT)}" },
+            ) { Text("Stop") }
         }
     }
 }

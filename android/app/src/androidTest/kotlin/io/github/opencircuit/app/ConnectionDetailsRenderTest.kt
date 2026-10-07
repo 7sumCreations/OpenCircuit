@@ -4,6 +4,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -94,6 +98,16 @@ class ConnectionDetailsRenderTest {
         compose.onNodeWithText("AA:BB:CC:DD:EE:FF").assertDoesNotExist()
         compose.onNodeWithText("RingConn Gen2-EEFF").assertDoesNotExist()
         compose.onNodeWithText("Link diagnostics").assertDoesNotExist()
+    }
+
+    @Test
+    fun theExpandButtonSaysWhatItShowsAndWhetherTheCardIsExpanded() {
+        show(details(full))
+        fun state(value: String) = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, value)
+
+        compose.onNodeWithContentDescription("Show all connection details").assert(state("Collapsed")).performClick()
+
+        compose.onNodeWithContentDescription("Hide all connection details").assert(state("Expanded"))
     }
 
     @Test

@@ -130,7 +130,8 @@ class RingStatesRenderTest {
         compose.onNodeWithText("Multiple rings found — pick one").assertIsDisplayed()
         compose.onNodeWithText("Last used").assertIsDisplayed()
         compose.onNodeWithText("RingConn Alpha").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Connect to RingConn Zulu").performClick()
+        compose.onNodeWithContentDescription("Connect to RingConn Alpha").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Connect to RingConn Zulu, last used").performClick()
         assertEquals(listOf<RingAction>(RingAction.Pick(zulu)), actions)
     }
 

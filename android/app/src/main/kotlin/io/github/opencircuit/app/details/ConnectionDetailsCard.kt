@@ -17,6 +17,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
@@ -33,8 +37,18 @@ fun ConnectionDetailsCard(details: ConnectionDetailsUi, onCopy: () -> Unit, modi
     Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Connection details", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide" else "Show all") }
+                Text(
+                    "Connection details",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f).semantics { heading() },
+                )
+                TextButton(
+                    onClick = { expanded = !expanded },
+                    modifier = Modifier.semantics {
+                        contentDescription = if (expanded) "Hide all connection details" else "Show all connection details"
+                        stateDescription = if (expanded) "Expanded" else "Collapsed"
+                    },
+                ) { Text(if (expanded) "Hide" else "Show all") }
             }
             (if (expanded) details.rows else details.summary).forEach { DetailLine(it) }
             if (expanded) {
@@ -58,7 +72,7 @@ fun ConnectionDetailsCard(details: ConnectionDetailsUi, onCopy: () -> Unit, modi
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(modifier = Modifier.padding(4.dp))
-                TextButton(onClick = onCopy) { Text("Copy") }
+                TextButton(onClick = onCopy, modifier = Modifier.semantics { contentDescription = "Copy connection details" }) { Text("Copy") }
             }
         }
     }
@@ -66,12 +80,13 @@ fun ConnectionDetailsCard(details: ConnectionDetailsUi, onCopy: () -> Unit, modi
 
 @Composable
 private fun Section(title: String) {
-    Text(title, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+    Text(title, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
 }
 
 @Composable
 private fun DetailLine(row: DetailRow) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Label and value are one stop for TalkBack, not two.
+    Row(modifier = Modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(row.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.45f))
         Text(row.value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.55f))
     }
