@@ -54,8 +54,8 @@ import kotlin.time.TimeSource
  * failure, and the loop goes on with the next event. A `send` caller cancelled while its write
  * still waits takes the write with it: it is never written.
  *
- * Every bring-up step, bond change, failure and close is also noted in [diagnostics] (the last
- * 64, never an address, a MAC or frame bytes; PORTING.md D-196).
+ * Every bring-up step, Bluetooth adapter change, bond change, failure and close is also noted in
+ * [diagnostics] (the last 64, never an address, a MAC or frame bytes; PORTING.md D-196).
  */
 internal class LinkCore(
     override val ring: RememberedRing,
@@ -141,6 +141,9 @@ internal class LinkCore(
 
     /** The bond state last read or announced, for the diagnostics' "before → after". */
     private var lastBond: GattPort.BondState? = null
+
+    /** The adapter state last announced, for the diagnostics' "before → after"; a repeat is not noted. */
+    private var lastAdapter: AdapterState? = null
 
     /** This connection asked Android for the bond (`createBond`). */
     private var bondRequested = false
@@ -252,6 +255,9 @@ internal class LinkCore(
     }
 
     private fun onAdapter(adapter: AdapterState) {
+        val before = lastAdapter
+        if (adapter != before) note("Bluetooth adapter", "${before?.let { "$it → " }.orEmpty()}$adapter")
+        lastAdapter = adapter
         when (adapter) {
             AdapterState.OFF, AdapterState.TURNING_OFF -> {
                 if (!adapterOn) return

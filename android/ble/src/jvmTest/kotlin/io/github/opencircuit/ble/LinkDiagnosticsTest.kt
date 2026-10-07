@@ -150,6 +150,31 @@ class LinkDiagnosticsTest {
         assertEquals("BOND_NOT_COMPLETED", link.detailOf("pairing failed"))
     }
 
+    /**
+     * Turning Bluetooth off and on is the one link event the phone's owner can cause at will, and
+     * the diagnostics are the only place it can be read on a phone with no cable: every change of
+     * the adapter's state is noted, "before → after", and a repeat of the same state is not.
+     */
+    @Test
+    fun bluetoothTurnedOffAndOnIsRecordedOncePerChange() = runTest {
+        val (_, link) = linkTo()
+        link.onAdapterState(AdapterState.ON) // the broadcasts' first read, at build time
+        link.onAdapterState(AdapterState.ON) // and its re-read from the receivers' thread
+        link.connect()
+        runCurrent()
+
+        link.onAdapterState(AdapterState.TURNING_OFF)
+        link.onAdapterState(AdapterState.OFF)
+        link.onAdapterState(AdapterState.OFF)
+        link.onAdapterState(AdapterState.TURNING_ON)
+        link.onAdapterState(AdapterState.ON)
+        runCurrent()
+
+        val adapterLines = link.diagnostics.value.filter { it.event == "Bluetooth adapter" }.map { it.detail }
+        assertEquals(listOf("ON", "ON → TURNING_OFF", "TURNING_OFF → OFF", "OFF → TURNING_ON", "TURNING_ON → ON"), adapterLines)
+        assertEquals(LinkState.Authenticated, link.state.value)
+    }
+
     @Test
     fun notStreamingAndASuspectedLostBondAreRecorded() = runTest {
         val (ring, link) = linkTo(Fixtures.acceptingRing().copy(acceptedAuthReply = null))
