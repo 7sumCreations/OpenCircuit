@@ -91,7 +91,7 @@ Every release APK is signed with the same certificate. Its SHA-256 digest, as `a
 prints it ("Signer #1 certificate SHA-256 digest"), is:
 
 ```text
-(filled in at the first release)
+1f7bbb872897491c55dbd91da28de488dc89db21b335c1bb59c556c8425fe69f
 ```
 
 Android refuses an update signed with a different key, and Obtainium can block one too (see

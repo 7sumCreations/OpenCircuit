@@ -202,7 +202,7 @@ and its SHA-256 checksum file, and the release notes give the signing certificat
 | Filter APKs by regular expression | `^OpenCircuit-Android-.*\.apk$` |
 | Verify the 'latest' tag | **Off** (GitHub's "latest" never points at a pre-release) |
 | Version detection | the default |
-| Expected signing certificate hashes | the SHA-256 digest from [`android/README.md`](../android/README.md), "Release signing certificate" (filled in at the first release) |
+| Expected signing certificate hashes | the SHA-256 digest from [`android/README.md`](../android/README.md), "Release signing certificate": `1f7bbb872897491c55dbd91da28de488dc89db21b335c1bb59c556c8425fe69f` |
 
 With the expected hash set, Obtainium refuses an APK signed with any other key. Android refuses
 an update signed with a different key anyway, so a first install from the wrong source cannot
