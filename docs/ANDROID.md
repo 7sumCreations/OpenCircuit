@@ -225,9 +225,10 @@ too).
 first time you tap Scan & connect, never at install or during onboarding. The app declares no
 `INTERNET` permission, so it cannot reach any server. When it finds a ring, the app first explains
 Android's companion-device sheet ("Allow OpenCircuit to access …?"), whose wording is Android's
-generic text for any companion device. On the first real phone (GrapheneOS) the sheet stayed on
-"Looking for a device" and never found the ring, although the app's own scan had. If that happens,
-tap Cancel, then "Pair without the system sheet" on the "Pairing cancelled" card: it connects
-anyway, and Android shows its standard pairing dialog (tap "Pair"; the contacts/phone access toggle
+generic text for any companion device. On the first real phone (GrapheneOS) the 0.1.0 sheet stayed
+on "Looking for a device" and never found the ring, although the app's own scan had; from 0.1.1 the
+sheet looks for the ring by its address alone. You can skip the sheet altogether: "Pair without the
+system sheet" sits on the "Pair with …" card next to Continue, and on the "Pairing cancelled" card
+if you cancel a sheet that keeps looking. That path connects anyway, and Android shows its standard pairing dialog (tap "Pair"; the contacts/phone access toggle
 can stay off). Pairing again later, after "Stop reconnecting", asks nothing: the bond is kept. "Stop reconnecting" forgets the ring in the app; the phone's own
 Bluetooth pairing is left alone.
