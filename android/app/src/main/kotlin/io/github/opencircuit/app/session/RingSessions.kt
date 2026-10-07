@@ -6,8 +6,10 @@ import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,7 +43,8 @@ interface SessionHost {
  * app, Try again, and pairing the same ring again all connect the same link. Pairing a different
  * ring retires the old link first (disconnect, then `close()`).
  *
- * Each session runs in its own child of [scope], cancelled when its link is retired.
+ * Each session runs in its own supervised child of [scope], cancelled when its link is retired; a
+ * session task that throws is logged and does not end the others.
  * Main-thread only.
  */
 class RingSessions(
@@ -94,7 +97,11 @@ class RingSessions(
     }
 
     private fun open(ring: RememberedRing): RingSessionController {
-        val childScope = CoroutineScope(scope.coroutineContext + Job(scope.coroutineContext[Job]))
+        // A supervisor, with a handler that logs: one task that throws (a link breaking its
+        // never-throws contract) must not cancel its siblings, among them the one collection of
+        // the link's frames that nothing restarts, nor reach the app's scope and end the process.
+        val contained = CoroutineExceptionHandler { _, e -> log("A ring session task failed: ${e::class.java.simpleName}") }
+        val childScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]) + contained)
         val session = newSession(links.create(ring), childScope)
         sessionScope = childScope
         currentFlow.value = session

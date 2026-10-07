@@ -183,6 +183,21 @@ class KeepaliveTickerTest {
     }
 
     @Test
+    fun aProblemIsClearedWhenTheLinkLeavesAuthenticated() = runTest {
+        val link = timedLink()
+        val controller = session(link)
+        link.fake.answerSendsWith(SendResult.Refused(RefusalReason.NOT_BONDED))
+        link.fake.setState(LinkState.Authenticated)
+        runCurrentAt(0)
+        assertEquals(KeepaliveProblem.Refused(RefusalReason.NOT_BONDED), controller.keepalive.problem.value)
+
+        link.fake.setState(LinkState.WaitingForRing)
+        testScheduler.runCurrent()
+
+        assertNull(controller.keepalive.problem.value, "the link's own words say why; no stale status-query line beside them")
+    }
+
+    @Test
     fun aFailedD0IsShown() = runTest {
         val link = timedLink()
         val controller = session(link)

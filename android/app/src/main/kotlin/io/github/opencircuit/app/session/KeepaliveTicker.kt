@@ -41,8 +41,8 @@ sealed interface KeepaliveProblem {
  *   live read; then the 180 s cadence. Upstream's refresh ladder writes `07 00 00` and
  *   `01 00 00` (RingSession.swift:4666-4722); this one does not (PORTING.md D-240).
  *
- * A refused or failed write is logged and kept in [problem] until a write goes through; the
- * cadence carries on.
+ * A refused or failed write is logged and kept in [problem] until a write goes through or the
+ * link leaves `Authenticated`; the cadence carries on.
  */
 class KeepaliveTicker(
     private val send: suspend (ByteArray) -> SendResult,
@@ -71,6 +71,9 @@ class KeepaliveTicker(
                 .collectLatest { (authenticated, measuring) ->
                     if (wasMeasuring && !measuring) refreshPending = true
                     wasMeasuring = measuring
+                    // Off the authenticated link the card shows the link's own words; a status
+                    // query refused as the link went down is not kept beside them.
+                    if (!authenticated) problemFlow.value = null
                     if (!authenticated || measuring) return@collectLatest
                     val refresh = refreshPending
                     refreshPending = false

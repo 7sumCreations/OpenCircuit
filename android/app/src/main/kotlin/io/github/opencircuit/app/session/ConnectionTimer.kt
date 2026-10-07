@@ -68,6 +68,8 @@ class ConnectionTimer(private val monotonicMillis: () -> Long) {
                 connectAt = null
                 lostAt = null
             }
+            // A failed bond ends the attempt: Try again's connect() is timed from its own tap.
+            state is LinkState.PairingFailed -> connectAt = null
             previous == LinkState.Authenticated && state != LinkState.NotStreaming -> lostAt = now
         }
         timingsFlow.value = timings
