@@ -485,7 +485,7 @@ written `ble/<set>/` = `ble/src/<set>/kotlin/io/github/opencircuit/ble/` (`commo
 
 ### Index of every row
 
-One line per row of the table below, in order: number · title · owning epic — where the work lives now for an open row, the epic that made it for a done one (rows D-1 to D-13 were raised in E1, D-14 to D-44 in E2, D-45 to D-70 in E3, D-71 to D-104 in E4, D-105 to D-130 in E5a, D-131 to D-136 in E5b, D-137 to D-159 in E6a, D-160 to D-182 in E6b, D-183 onwards in E7, D-201 to D-229 unused, D-230 onwards in E8). 257 rows.
+One line per row of the table below, in order: number · title · owning epic — where the work lives now for an open row, the epic that made it for a done one (rows D-1 to D-13 were raised in E1, D-14 to D-44 in E2, D-45 to D-70 in E3, D-71 to D-104 in E4, D-105 to D-130 in E5a, D-131 to D-136 in E5b, D-137 to D-159 in E6a, D-160 to D-182 in E6b, D-183 onwards in E7, D-201 to D-229 unused, D-230 onwards in E8). 258 rows.
 
 - **D-1** · DEVIATION: legacy auth dropped · E1 (done)
 - **D-2** · DEVIATION: out-of-range bytes rejected · E1 (done)
