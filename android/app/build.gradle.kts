@@ -29,6 +29,24 @@ val keystorePassword: Provider<String> = providers.environmentVariable("OPENCIRC
 val releaseStoreFile: File? = keystoreProperties.getProperty("storeFile")?.trim()?.takeIf { it.isNotEmpty() }?.let { rootProject.file(it) }
 val releaseKeyAlias: String? = keystoreProperties.getProperty("keyAlias")?.trim()?.takeIf { it.isNotEmpty() }
 
+// A plain `build` / `assemble` must work on any machine without the release key (every other
+// session and every later gate runs it), and must still never write an unsigned release APK. So
+// when signing is not fully set up AND no release task was named on the command line, the release
+// variant is switched off (androidComponents block below): no release task exists, nothing is
+// packaged, and one lifecycle line says why. A release task named explicitly (assembleRelease,
+// :app:packageRelease, bundleRelease, ...) keeps the variant on, and checkReleaseSigning then fails
+// loud as before. Turning the variant off, rather than an onlyIf on packaging, also keeps the
+// release compile, lint-vital and bundle tasks out of a plain build. Task names and the
+// environment variable are configuration-cache inputs, so a cached configuration is reused only
+// for the same request. Abbreviated names (`aR`) are not recognised: with the variant off they
+// fail with "task not found", which is loud too.
+val releaseSigningReady: Boolean =
+    keystorePropertiesFile.isFile && !keystorePassword.orNull.isNullOrEmpty()
+val releaseTaskRequested: Boolean = gradle.startParameter.taskNames.any { requested ->
+    requested.substringAfterLast(':').contains("Release")
+}
+val skipReleaseVariant: Boolean = !releaseSigningReady && !releaseTaskRequested
+
 android {
     namespace = "io.github.opencircuit.app"
     // Compose 1.12 and lifecycle 2.11 need compileSdk 37; runtime behaviour follows targetSdk.
@@ -92,6 +110,7 @@ kotlin {
 androidComponents {
     beforeVariants(selector().withBuildType("release")) { variant ->
         variant.hostTests.values.forEach { it.enable = false }
+        if (skipReleaseVariant) variant.enable = false
     }
 }
 
@@ -132,8 +151,23 @@ val checkReleaseSigning = tasks.register("checkReleaseSigning") {
 // The packaging task's name under AGP 9.2.1 is packageRelease (measured with `:app:tasks --all`).
 // validateSigningRelease, when it exists, would otherwise report a missing password first, in its
 // own words.
+// packageReleaseBundle / packageReleaseUniversalApk are the bundle path's packaging tasks, so
+// bundleRelease without signing fails the same way.
+val releasePackagingTasks = setOf(
+    "packageRelease",
+    "validateSigningRelease",
+    "packageReleaseBundle",
+    "packageReleaseUniversalApk",
+)
 tasks.configureEach {
-    if (name == "packageRelease" || name == "validateSigningRelease") dependsOn(checkReleaseSigning)
+    if (name in releasePackagingTasks) dependsOn(checkReleaseSigning)
+}
+
+if (skipReleaseVariant) {
+    logger.lifecycle(
+        "Release variant skipped: release signing is not set up and no release task was requested, " +
+            "so no release APK is built. See android/README.md, \"Signing a release\".",
+    )
 }
 
 dependencies {

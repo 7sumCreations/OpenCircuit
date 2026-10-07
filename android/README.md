@@ -70,7 +70,9 @@ must be in place before `./gradlew --no-daemon assembleRelease` will build:
 
 If either is missing, the release build stops with "Release signing is not set up: …", naming
 what is missing, before it packages anything. It never writes an unsigned release APK. Debug
-builds need neither. The release APK is signed with APK Signature Schemes v2 and v3 (no v1,
+builds need neither. A plain `build` or `assemble` without the key skips the release APK (it
+says so in one line) and succeeds; only a release task named explicitly, such as
+`assembleRelease` or `bundleRelease`, fails loud. The release APK is signed with APK Signature Schemes v2 and v3 (no v1,
 no v4) and is not minified.
 
 Check a signed APK with the Android SDK's `apksigner`:
