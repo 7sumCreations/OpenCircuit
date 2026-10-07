@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -271,7 +272,8 @@ class LiveMeasureController(
         }
         if (!writeEntry(myCycle, mode)) return
         val armedAt = synchronized(lock) {
-            if (cycle != myCycle) return
+            // A run cancelled under the lock (a refusal's re-entry keeps the cycle) must not arm.
+            if (cycle != myCycle || !coroutineContext.isActive) return
             val now = monotonicMillis()
             deadline = now + budgetMillis(mode)
             stateFlow.value = stateFlow.value.copy(preparing = false)
@@ -314,7 +316,7 @@ class LiveMeasureController(
         while (true) {
             val now = monotonicMillis()
             val budgetEndsAt = synchronized(lock) {
-                if (cycle != myCycle) return
+                if (cycle != myCycle || !coroutineContext.isActive) return
                 if (now >= deadline) {
                     finishAtTheBudget(myCycle)
                     return
@@ -392,7 +394,10 @@ class LiveMeasureController(
         staleJob = scope.launch {
             delay(STALE_AFTER_MILLIS)
             synchronized(lock) {
-                if (cycle == myCycle) stateFlow.value = stateFlow.value.copy(stale = true)
+                // `synchronized` is no cancellation point: a timer a newer frame cancelled while this
+                // waited for the lock must not mark that frame's readout stale. Cancels happen under
+                // the lock, so this check sees them.
+                if (cycle == myCycle && isActive) stateFlow.value = stateFlow.value.copy(stale = true)
             }
         }
     }

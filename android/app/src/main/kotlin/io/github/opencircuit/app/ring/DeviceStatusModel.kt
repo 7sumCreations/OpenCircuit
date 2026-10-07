@@ -6,6 +6,7 @@ import io.github.opencircuit.ringkit.DeviceStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -98,6 +99,9 @@ class DeviceStatusModel(private val scope: CoroutineScope, private val monotonic
             delay(STALE_AFTER_MILLIS)
             while (true) {
                 synchronized(lock) {
+                    // `synchronized` is no cancellation point: a timer a fresh reading cancelled while
+                    // this waited for the lock must not age that reading. Cancels happen under the lock.
+                    if (!isActive) return@launch
                     stateFlow.value = stateFlow.value.copy(batteryAgeMillis = monotonicMillis() - readAt)
                 }
                 delay(AGE_STEP_MILLIS)
