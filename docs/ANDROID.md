@@ -195,11 +195,10 @@ and its SHA-256 checksum file, and the release notes give the signing certificat
 
 | Setting | Value |
 |---|---|
-| Source | GitHub, `https://github.com/cpw7776/OpenCircuit` |
+| Source | GitHub, `https://github.com/7sumCreations/OpenCircuit` |
 | Include prereleases | **On** (every Android release is a pre-release for now) |
 | Fallback to older releases | **On** (the default) |
-| Filter release titles by regular expression | `^OpenCircuit Android ` (the fork may hold other releases) |
-| Filter APKs by regular expression | `^OpenCircuit-Android-.*\.apk$` |
+| Filter release titles / Filter APKs by regular expression | **leave both empty** (each release carries exactly one APK; on the first real install a filter made Obtainium report "could not find a suitable release") |
 | Verify the 'latest' tag | **Off** (GitHub's "latest" never points at a pre-release) |
 | Version detection | the default |
 | Expected signing certificate hashes | the SHA-256 digest from [`android/README.md`](../android/README.md), "Release signing certificate": `1f7bbb872897491c55dbd91da28de488dc89db21b335c1bb59c556c8425fe69f` |
@@ -226,8 +225,9 @@ too).
 first time you tap Scan & connect, never at install or during onboarding. The app declares no
 `INTERNET` permission, so it cannot reach any server. When it finds a ring, the app first explains
 Android's companion-device sheet ("Allow OpenCircuit to access …?"), whose wording is Android's
-generic text for any companion device. Allowing it usually lets the pairing finish without another
-prompt. If you cancel the sheet, or it cannot find the ring, "Pair without the system sheet" on the
-"Pairing cancelled" card connects anyway, and Android asks you to confirm the pairing instead (it
-may appear as a notification). "Stop reconnecting" forgets the ring in the app; the phone's own
+generic text for any companion device. On the first real phone (GrapheneOS) the sheet stayed on
+"Looking for a device" and never found the ring, although the app's own scan had. If that happens,
+tap Cancel, then "Pair without the system sheet" on the "Pairing cancelled" card: it connects
+anyway, and Android shows its standard pairing dialog (tap "Pair"; the contacts/phone access toggle
+can stay off). Pairing again later, after "Stop reconnecting", asks nothing: the bond is kept. "Stop reconnecting" forgets the ring in the app; the phone's own
 Bluetooth pairing is left alone.
