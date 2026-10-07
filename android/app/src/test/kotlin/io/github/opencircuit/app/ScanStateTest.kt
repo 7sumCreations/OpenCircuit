@@ -294,4 +294,32 @@ class ScanStateTest {
 
         assertTrue(screen.link.searching)
     }
+
+    @Test
+    fun aNewScanDoesNotShowTheLastScansTimeToSelection() = runTest {
+        var round = 0
+        val screen = connectScreen(
+            ScriptedScanner {
+                round++
+                if (round == 1) {
+                    delay(2_500)
+                    emit(ScanUpdate.Selected(alpha))
+                } else {
+                    emit(ScanUpdate.NoRingFound)
+                }
+            },
+        )
+        fun scanRow() = screen.viewModel.uiState.value.details.rows.single { it.label == "Scan → selected" }.value
+
+        screen.flow.requestScan(granted)
+        advanceTo(2_500)
+        assertEquals("2.5 s", scanRow())
+
+        screen.flow.cancelScan()
+        screen.flow.requestScan(granted)
+        runCurrent()
+
+        assertEquals("No ring found", screen.link.headline)
+        assertEquals("not measured", scanRow(), "the time belongs to the scan that selected a ring, not to this one")
+    }
 }

@@ -66,7 +66,7 @@ data class ConnectFlowState(
     val phase: ScanPhase = ScanPhase.Idle,
     /** The saved ring, read when a scan starts: marks "Last used" and adds the no-ring hint. */
     val savedRing: RememberedRing? = null,
-    /** From the last scan's start to its ring being selected or picked; null until one was (Connection details). */
+    /** From the last scan's start to its ring being selected or picked; null until one was, and cleared by each new scan (Connection details). */
     val scanToSelectedMillis: Long? = null,
 )
 
@@ -228,7 +228,7 @@ class ConnectFlowController(
     private fun startScan() {
         stopScan()
         scanStartedAt = monotonicMillis()
-        stateFlow.update { it.copy(phase = ScanPhase.Scanning(emptyList()), savedRing = rings.load()) }
+        stateFlow.update { it.copy(phase = ScanPhase.Scanning(emptyList()), savedRing = rings.load(), scanToSelectedMillis = null) }
         scanJob = scope.launch {
             var answered = false
             try {
