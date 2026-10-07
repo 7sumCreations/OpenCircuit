@@ -89,7 +89,7 @@ class LiveCardRenderTest {
         compose.onNodeWithText("63").assertIsDisplayed()
         compose.onNodeWithText("58–66 so far").assertIsDisplayed()
         compose.onNodeWithText("Measuring heart rate…").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Live chart, 3 readings").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Live chart, 3 readings, latest 63, falling").assertIsDisplayed()
         compose.onNodeWithText("last 90 s").assertIsDisplayed()
         compose.onNodeWithText("62 bpm (settled) · measuring…").performScrollTo().assertIsDisplayed()
 
@@ -145,6 +145,6 @@ class LiveCardRenderTest {
 
         compose.waitForIdle()
         compose.onNodeWithText("63").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Live chart, 3 readings").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Live chart, 3 readings, latest 63, falling").assertIsDisplayed()
     }
 }

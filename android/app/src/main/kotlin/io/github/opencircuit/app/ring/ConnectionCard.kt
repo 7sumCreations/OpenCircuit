@@ -23,7 +23,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.opencircuit.ble.RememberedRing
@@ -47,7 +49,12 @@ fun ConnectionCard(
                 StatusDot(connected = card.link.connected, modifier = Modifier.padding(top = 6.dp))
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     card.ringName?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
-                    Text(card.link.headline, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        card.link.headline,
+                        style = MaterialTheme.typography.bodyMedium,
+                        // Announced when it changes ("Searching" → "Connected"); it changes rarely.
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    )
                 }
                 if (card.link.searching) {
                     CircularProgressIndicator(
@@ -68,7 +75,12 @@ fun ConnectionCard(
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
             }
             card.problem?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
             }
             if (card.link.action != null || card.link.secondary != null) {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
