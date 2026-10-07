@@ -35,6 +35,7 @@ class BringUpTest {
         "read 00002a27",
         "write 8327ad98 01 00 00",
         "write 8327ad98 01 01 31 82 67 00",
+        "write 8327ad98 d0 00 00", // asks for the first data frame (PORTING.md D-257)
     )
 
     private fun TestScope.statesOf(link: RingLink): List<LinkState> {
@@ -160,7 +161,7 @@ class BringUpTest {
         link.connect()
         runCurrent()
 
-        assertEquals("write 8327ad98 01 01 31 82 67 00", ring.log.last())
+        assertEquals(listOf("write 8327ad98 01 01 31 82 67 00", "write 8327ad98 d0 00 00"), ring.log.takeLast(2))
         assertFalse(ring.log.contains("read 00002a23"), "a characteristic the ring does not have is not read")
         assertEquals(LinkState.Authenticated, link.state.value)
         assertNull(link.info.value.firmware.mac, "no System ID was read")

@@ -178,3 +178,112 @@ with:
 ```kotlin
 testImplementation(testFixtures(project(":ble")))
 ```
+
+## Installing the app
+
+The app (`:app`, package `io.github.opencircuit.android`) is published as a signed APK on this
+fork's GitHub Releases, as a **pre-release** while it is in early development. The first is
+`android-v0.1.0`: onboarding, finding and pairing the ring, the connection card (battery,
+charging, the ring's state) and a live heart-rate or SpO₂ reading. It does not sync history and
+does not write to Health Connect yet. Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
+and its SHA-256 checksum file, and the release notes give the signing certificate's digest.
+
+> **Not affiliated with, authorized, or endorsed by RingConn or JZ_Tech. Not a medical device.**
+> Readings are estimates from a consumer ring and are not for diagnosis or treatment.
+
+**With Obtainium.** Add the app with these settings, so updates come straight from GitHub:
+
+| Setting | Value |
+|---|---|
+| Source | GitHub, `https://github.com/7sumCreations/OpenCircuit` |
+| Include prereleases | **On** (every Android release is a pre-release for now) |
+| Fallback to older releases | **On** (the default) |
+| Filter release titles / Filter APKs by regular expression | **leave both empty** (each release carries exactly one APK; on the first real install a filter made Obtainium report "could not find a suitable release") |
+| Verify the 'latest' tag | **Off** (GitHub's "latest" never points at a pre-release) |
+| Version detection | the default |
+| Expected signing certificate hashes | the SHA-256 digest from [`android/README.md`](../android/README.md), "Release signing certificate": `1f7bbb872897491c55dbd91da28de488dc89db21b335c1bb59c556c8425fe69f` |
+
+With the expected hash set, Obtainium refuses an APK signed with any other key. Android refuses
+an update signed with a different key anyway, so a first install from the wrong source cannot
+later be updated from this one.
+
+**By hand.** Download the APK and its `.sha256` file from the release, then check both before
+installing:
+
+```sh
+shasum -a 256 -c OpenCircuit-Android-0.1.0.apk.sha256
+apksigner verify --verbose --print-certs OpenCircuit-Android-0.1.0.apk
+```
+
+The first must print `OK`; the second's "Signer #1 certificate SHA-256 digest" must match the
+README. At the APK's minimum Android version `apksigner` reports `v3 … true` and `v2 … false`:
+it checks only the strongest scheme needed there (add `--min-sdk-version 24` to see v2 checked
+too).
+
+**What it asks for.** Android 14 or later. The only permission is "Nearby devices"
+(`BLUETOOTH_SCAN`, declared never to be used for location, and `BLUETOOTH_CONNECT`), asked the
+first time you tap Scan & connect, never at install or during onboarding. The app declares no
+`INTERNET` permission, so it cannot reach any server. When it finds a ring, the app first explains
+Android's companion-device sheet ("Allow OpenCircuit to access …?"), whose wording is Android's
+generic text for any companion device. On the first real phone (GrapheneOS) the 0.1.0 sheet stayed
+on "Looking for a device" and never found the ring, although the app's own scan had; from 0.1.1 the
+sheet looks for the ring by its address alone. You can skip the sheet altogether: "Pair without the
+system sheet" sits on the "Pair with …" card next to Continue, and on the "Pairing cancelled" card
+if you cancel a sheet that keeps looking. That path connects anyway, and Android shows its standard pairing dialog (tap "Pair"; the contacts/phone access toggle
+can stay off). Pairing again later, after "Stop reconnecting", asks nothing: the bond is kept. "Stop reconnecting" forgets the ring in the app; the phone's own
+Bluetooth pairing is left alone.
+
+## Using the app
+
+**First run.** Four short onboarding pages explain what the app does (no account, no subscription,
+no cloud), what it needs and what it does not do yet. Nothing is requested during onboarding.
+
+**Pairing.** Tap **Scan & connect**. Android asks for "Nearby devices" the first time. If several
+rings are found you pick one. The "Pair with …" card then offers **Continue** (Android's
+companion-device sheet), **Pair without the system sheet**, or **Cancel**. Hold the ring close and
+tap Allow when Android asks. A ring you have paired before reconnects automatically once it is back
+in range.
+
+**The connection card.** Shows the ring's battery (and whether it is charging) and its state, with
+**Measure**, **Disconnect** and **Stop reconnecting**. Measure is unavailable while the ring is on
+the charger. Disconnect ends this connection; **Stop reconnecting** makes the app forget the ring.
+
+**Measuring.** Measure starts a live heart-rate or SpO₂ reading ("Hold still" while the ring
+settles) with a chart; stop it at any time. The app asks the ring to start, reads the ring's answer,
+and stops the ring's mode again afterwards. If the ring refuses or stops answering, the card says so.
+
+**Connection details.** Expand the card to see the ring's facts (firmware, address type, ATT MTU,
+whether it is history-safe) and **Link diagnostics**: the last steps of the connection with times,
+the pairing prompt, and a **Last measure** row with what the ring answered to the last live
+request. **Copy connection details** puts the text on the clipboard with the ring's address and name
+masked, so it is safe to paste into a bug report.
+
+**Privacy.** The app has no internet permission and sends nothing anywhere. Its data is excluded
+from both cloud backup and device-to-device transfer. It is not a medical device; talk to a
+clinician about any health concern.
+
+## Troubleshooting
+
+- **"No ring found".** Take the ring out of its charging case and put it on, keep it within a few
+  feet of the phone, and force-stop the official RingConn app if it is installed: it can hold the
+  Bluetooth connection.
+- **The Android sheet stays on "Looking for a device".** Cancel it and use "Pair without the system
+  sheet".
+- **"Ring isn't streaming".** The ring has not accepted this phone. Forget the ring in Android's
+  Bluetooth settings, then pair again from the app.
+- **A measure fails.** Open Connection details and read "Last measure": it shows what the ring sent.
+
+## FAQ
+
+**Does it need an account or the internet?** No. There is no account, no cloud and no server.
+
+**Is this the RingConn app?** No. It is an independent port of OpenCircuit and is not affiliated
+with RingConn.
+
+**Can it write to Health Connect or sync history?** Not yet; the current release gives live heart
+rate and SpO₂, battery and connection status.
+
+**Which rings work?** RingConn Gen 2, Gen 2 Air and Gen 3, on Android 14 or later.
+
+**Does "Stop reconnecting" unpair the ring?** No. It forgets the ring in the app only; Android's
+own pairing is kept, so pairing again later asks nothing.

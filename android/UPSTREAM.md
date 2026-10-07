@@ -5,7 +5,7 @@ This Android port follows the iOS app **OpenCircuit**. This file records exactly
 | | |
 |---|---|
 | Upstream repo | [`perezjuanj/OpenCircuit`](https://github.com/perezjuanj/OpenCircuit) — MIT, © 2026 Juan Perez |
-| This fork | [`cpw7776/OpenCircuit`](https://github.com/cpw7776/OpenCircuit) |
+| This fork | [`7sumCreations/OpenCircuit`](https://github.com/7sumCreations/OpenCircuit) |
 | Android work | branch `android`, Gradle root `android/` |
 | Git remotes | `origin` = the fork (push) · `upstream` = `perezjuanj/OpenCircuit` (fetch-only) |
 

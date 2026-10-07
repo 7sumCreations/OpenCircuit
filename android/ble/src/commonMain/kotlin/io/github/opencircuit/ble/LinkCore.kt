@@ -34,8 +34,8 @@ import kotlin.time.TimeSource
  *
  * Cold bring-up: connect → discover → the bond (PORTING.md D-193) → MTU exchange → notifications
  * enabled (the CCCD write CONFIRMED) → Device Information reads → `01 00 00` → answer
- * `81 00 <challenge>` with `RingAuth.authCommand` → the first frame other than `0x81` means the
- * ring's data path is open.
+ * `81 00 <challenge>` with `RingAuth.authCommand` → `d0 00 00`, once, to ask for a data frame
+ * (PORTING.md D-257) → the first frame other than `0x81` means the ring's data path is open.
  * Auth starts only after the descriptor write is confirmed (PORTING.md D-183); every GATT
  * operation waits for the previous one's answer (PORTING.md D-184), for at most its own timeout
  * (PORTING.md D-185).
@@ -54,8 +54,8 @@ import kotlin.time.TimeSource
  * failure, and the loop goes on with the next event. A `send` caller cancelled while its write
  * still waits takes the write with it: it is never written.
  *
- * Every bring-up step, bond change, failure and close is also noted in [diagnostics] (the last
- * 64, never an address, a MAC or frame bytes; PORTING.md D-196).
+ * Every bring-up step, Bluetooth adapter change, bond change, failure and close is also noted in
+ * [diagnostics] (the last 64, never an address, a MAC or frame bytes; PORTING.md D-196).
  */
 internal class LinkCore(
     override val ring: RememberedRing,
@@ -123,6 +123,9 @@ internal class LinkCore(
     /** `01 00 00` was written on this connection. */
     private var authStarted = false
 
+    /** `d0 00 00` has been queued after an auth reply on this connection (PORTING.md D-257). */
+    private var streamRequested = false
+
     /** This connection's service discovery was answered. */
     private var discoveryDone = false
 
@@ -141,6 +144,9 @@ internal class LinkCore(
 
     /** The bond state last read or announced, for the diagnostics' "before → after". */
     private var lastBond: GattPort.BondState? = null
+
+    /** The adapter state last announced, for the diagnostics' "before → after"; a repeat is not noted. */
+    private var lastAdapter: AdapterState? = null
 
     /** This connection asked Android for the bond (`createBond`). */
     private var bondRequested = false
@@ -252,6 +258,9 @@ internal class LinkCore(
     }
 
     private fun onAdapter(adapter: AdapterState) {
+        val before = lastAdapter
+        if (adapter != before) note("Bluetooth adapter", "${before?.let { "$it → " }.orEmpty()}$adapter")
+        lastAdapter = adapter
         when (adapter) {
             AdapterState.OFF, AdapterState.TURNING_OFF -> {
                 if (!adapterOn) return
@@ -280,6 +289,7 @@ internal class LinkCore(
         connectIsLate = false
         awaitingBond = false
         authStarted = false
+        streamRequested = false
         discoveryDone = false
         pastEarlyWindow = false
         discovered = emptySet()
@@ -579,6 +589,13 @@ internal class LinkCore(
      * Answers [challenge] on the link lane, every time one arrives. Until the MAC is settled the
      * challenge waits (PORTING.md D-188); with no MAC at all it is never answered: no fixed or
      * guessed reply (PORTING.md D-192).
+     *
+     * After the connection's first reply the link writes `d0 00 00` once, which the ring answers
+     * with a `0x10` or `0x50` frame (`docs/PROTOCOL.md` §4). Without it the link waited for the
+     * ring's own telemetry timer (§5.8) for the first data frame: on a reconnect that was up to
+     * ~72 s of "not streaming". Upstream writes a keepalive tick 250 ms after `01 00 00` instead
+     * (RingSession.swift:1220-1256); the app may not write before the link is authenticated, so
+     * the link asks itself (PORTING.md D-257).
      */
     private fun answerChallenge(challenge: Int) {
         if (!macSettled) {
@@ -587,6 +604,10 @@ internal class LinkCore(
         }
         val key = mac ?: return
         queue.add(GattOp.Write(RingAuth.authCommand(challenge, key), Purpose.AUTH_REPLY))
+        if (!streamRequested) {
+            streamRequested = true
+            queue.add(GattOp.Write(Command.statusQuery, Purpose.STREAM_REQUEST))
+        }
     }
 
     /** The MAC auth uses is now known (or known to be missing); answers the challenges that waited for it. */
@@ -881,6 +902,7 @@ private val GattOp.stepName: String
         is GattOp.Write -> when (purpose) {
             Purpose.AUTH_START -> "auth"
             Purpose.AUTH_REPLY -> "auth reply"
+            Purpose.STREAM_REQUEST -> "data request"
             Purpose.ACK -> "ack"
             Purpose.FEATURE -> "write"
         }

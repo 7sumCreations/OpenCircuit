@@ -145,7 +145,11 @@ class NotStreamingTest {
 
         ring.release(Operation.READ)
         runCurrent()
-        assertEquals("write 8327ad98 01 01 31 82 67 00", ring.log.last(), "auth ran")
+        assertEquals(
+            listOf("write 8327ad98 01 01 31 82 67 00", "write 8327ad98 d0 00 00"),
+            ring.log.takeLast(2),
+            "auth ran, and the ring was asked for a frame",
+        )
         assertEquals(LinkState.NotStreaming, link.state.value)
 
         ring.notify(Fixtures.firstDataFrame)

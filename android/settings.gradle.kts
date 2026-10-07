@@ -21,7 +21,10 @@ rootProject.name = "OpenCircuitAndroid"
 //          depends on :ringkit, never the reverse.
 // :ble — the Bluetooth link to the ring (Kotlin Multiplatform: the link logic and its tests on the
 //        JVM, the Android GATT adapter for the app); depends on :ringkit, never the reverse.
-// :health and :app are added as their phases start.
+// :app — the Android application: the screens, and the one place that collects the link's frames.
+//        Depends on :ble (and through it :ringkit), never the reverse.
+// :health is added when its phase starts.
 include(":ringkit")
 include(":store")
 include(":ble")
+include(":app")

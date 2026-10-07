@@ -113,6 +113,29 @@ is bonded. So the "no auth" above is conditional on a bonded link.
 > `01 01 …` write that looked like a second status read (§4) is that reply. Both gates apply:
 > the LE bond (§0) and the challenge reply (§5.8).
 
+### 2.1 Android-verified (OpenCircuit Android 0.1.0, real Gen 2, GrapheneOS, 2026-10-07)
+
+First run of the native Android app against a real ring (Gen 2, firmware `FR02.013`, hardware
+`00010002`, manufacturer `JZ_Tech`; ring not used with the official app for about a year). The
+phone was never on USB, so the evidence is the app's own Connection details text (address and
+name masked by the app) and the owner's observations.
+
+| Fact | Observed | Conf. |
+|---|---|---|
+| Advertisement | Flags `0x06`, the name only: no service UUIDs, no service data, no manufacturer data, no Tx power; public address | 🟢 Android-verified |
+| GATT | 16 characteristics discovered in ~1 s | 🟢 Android-verified |
+| ATT MTU | 247 granted when 517 was requested | 🟢 Android-verified |
+| MAC for auth | DIS System ID (`0x2a23`) matches the connection address (no mismatch) — §5.8 works unchanged on Android | 🟢 Android-verified |
+| Bonding | `createBond()` with no prior bond → GrapheneOS's standard pairing dialog ("Pair", plus an optional contacts/phone access toggle — left off); no passkey (Just Works, §5.8). Re-pairing after the app forgets the ring needs no prompt: the Android bond survives | 🟢 Android-verified |
+| Companion-device sheet | Android's companion-device pairing sheet, filtered on the ring's address, never found the ring on GrapheneOS ("Looking for a device" until cancelled), although the app's own scan found it. The app pairs with a plain bond instead | 🟡 one phone |
+| Auth | challenge → reply in ~0.2 s; streaming after the reply | 🟢 Android-verified |
+| Live SpO₂ | `d0 00 00` → `06 02 00` → `07 00 00`, then `95 00 00` polls, works WITHOUT the `01 00 00` that the iOS app sends first | 🟢 Android-verified |
+| Keepalive | `d0 00 00` alone every 180 s held an idle link for ~10.5 min with a fresh battery reading | 🟡 one session |
+| Reconnect | by address with no scan, ~30 s after the ring came back in range | 🟢 Android-verified |
+| Live heart rate | Same entry with `06 01 00`: no reading in the first session after pairing (the poll never locked), worked after a reconnect. The ring answers every `06 xx 00` with `86 <status> <xor>`, which the app had ignored; it now reads it, and on a refusal goes back to idle (`06 00 00`, 1 s) and enters once more, as upstream does. Which cause applied (a refused mode, a sensor stuck in warm-up, or no `0x15` at all) is not yet known: the app's "Last measure" diagnostics row records it from 0.1.1 on | 🟡 one session |
+| Bond broadcast | `ACTION_BOND_STATE_CHANGED` never reached a receiver registered `RECEIVER_NOT_EXPORTED` (it is sent by the Bluetooth stack, not uid system); pairing finished only through a 40 s re-read of the bond. Receivers are now registered exported (both actions are protected broadcasts) | 🟡 reasoning + one phone |
+| First data frame after a reconnect | After the auth reply the ring sent no data frame for 5–72 s ("not streaming") until its own telemetry timer fired (§5.8). Writing `d0 00 00` right after the auth reply asks for a `0x10`/`0x50` at once (upstream writes a keepalive tick 250 ms after `01 00 00`) | 🟡 not yet re-measured on the ring |
+
 ## 3. Framing 🟢 (verified live on the Mac)
 
 **Commands and responses use DIFFERENT trailers — this corrects an earlier error.**

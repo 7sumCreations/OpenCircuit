@@ -61,6 +61,9 @@ internal sealed interface GattOp {
             /** The answer to the ring's `81 00` challenge (link lane). */
             AUTH_REPLY,
 
+            /** `d0 00 00` after the first auth reply, asking for the data frame that authenticates the link (a bring-up step). */
+            STREAM_REQUEST,
+
             /** The acknowledgement of a page or heartbeat (link lane). */
             ACK,
 
