@@ -18,7 +18,8 @@ import kotlin.test.assertTrue
  * sync open (it would move the ring's one shared history pointer), or a `07 00 00` anywhere but as
  * the third write of a live entry (PORTING.md D-233). Polls are never closer than 2 s. The idle
  * keepalive and the status refresh after each measure write `d0 00 00` only, and never while a
- * measure runs (PORTING.md D-240).
+ * measure runs (PORTING.md D-240). The ring accepts every mode here, so `06 00 00` — written only
+ * after the ring refuses a mode (PORTING.md D-255, `LiveModeReplyTest`) — never appears.
  */
 class WholeSessionForbiddenWritesTest {
 
@@ -27,6 +28,7 @@ class WholeSessionForbiddenWritesTest {
     @Test
     fun aWholeSessionNeverSends010000Or02OrAStray07AndNeverPollsFasterThanEvery2Seconds() = runTest {
         val link = timedLink()
+        link.replyTo = { if (it == Wire.HR_MODE || it == Wire.SPO2_MODE) ModeReplies.ACCEPTED else null }
         val session = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
         val live = session.liveMeasure
 

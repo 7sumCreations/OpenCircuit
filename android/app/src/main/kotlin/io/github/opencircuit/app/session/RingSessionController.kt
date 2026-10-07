@@ -31,10 +31,12 @@ data class SessionTeardowns(
  * its opcode), never through the flow. Because nothing restarts a collection that ended, the
  * dispatcher contains a handler's exception instead of letting it end the collection.
  *
- * Routes: `0x10` / `0x87` descriptors → [deviceStatus]; `0x15` live samples → [liveMeasure];
- * `0x11` heartbeats are ignored (the link already answered them); everything else is counted by
- * the dispatcher. A torn-down connection, or the link leaving [LinkState.Authenticated], stops a
- * running live measure. While the link is authenticated and idle, [keepalive] writes the status
+ * Routes: `0x10` / `0x87` descriptors → [deviceStatus]; `0x15` live samples and `0x86` mode
+ * answers → [liveMeasure]; `0x11` heartbeats (the link already answered them) and `0x81` status
+ * replies (the link answers the `81 00` challenge itself; what reaches the app is the ring's
+ * `81 01 …` answer to the auth reply) are ignored; everything else is counted by the dispatcher.
+ * A torn-down connection, or the link leaving [LinkState.Authenticated], stops a running live
+ * measure. While the link is authenticated and idle, [keepalive] writes the status
  * query on its cadence and asks for a fresh status after each measure. Every collection runs in
  * [scope], which outlives any one screen.
  */
@@ -82,7 +84,9 @@ class RingSessionController(
         dispatcher.register(DESCRIPTOR, deviceStatus::onDescriptor)
         dispatcher.register(DESCRIPTOR_RESPONSE, deviceStatus::onDescriptor)
         dispatcher.register(LIVE_SAMPLE, liveMeasure::onFrame)
+        dispatcher.register(MODE_REPLY, liveMeasure::onModeReply)
         dispatcher.ignore(HEARTBEAT)
+        dispatcher.ignore(STATUS_REPLY)
     }
 
     /** Starts the collections. Calling it again does nothing: the session collects each flow once. */
@@ -126,5 +130,11 @@ class RingSessionController(
 
         /** The ring's heartbeat; `:ble` answers it with `91 00 00`. */
         const val HEARTBEAT = 0x11
+
+        /** The answer to a `06 xx 00` mode write, `86 <status> <xor>` (PROTOCOL.md §4). */
+        const val MODE_REPLY = 0x86
+
+        /** Status replies, `81 …` (PROTOCOL.md §5.7); the link keeps the `81 00` challenge to itself. */
+        const val STATUS_REPLY = 0x81
     }
 }

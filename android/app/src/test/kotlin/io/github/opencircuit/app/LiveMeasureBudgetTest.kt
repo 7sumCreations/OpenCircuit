@@ -2,6 +2,7 @@ package io.github.opencircuit.app
 
 import io.github.opencircuit.app.live.LiveMeasureController
 import io.github.opencircuit.app.live.LiveMode
+import io.github.opencircuit.app.live.MeasureEvidence
 import io.github.opencircuit.app.live.MeasureFailure
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -64,7 +65,10 @@ class LiveMeasureBudgetTest {
 
         advanceTo(ARMED_AT + 45_000)
 
-        assertEquals(MeasureFailure.NoReading, live.state.value.spo2.failure)
+        assertEquals(
+            MeasureFailure.NoReading(MeasureEvidence(LiveMode.SPO2, liveFrames = 0, unusableFrames = 0, modeReplies = emptyList(), resets = 0)),
+            live.state.value.spo2.failure,
+        )
         assertNull(live.state.value.heartRate.failure, "the other row is untouched")
     }
 

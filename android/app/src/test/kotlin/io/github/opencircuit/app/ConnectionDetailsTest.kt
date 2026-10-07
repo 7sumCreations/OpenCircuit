@@ -5,6 +5,8 @@ import io.github.opencircuit.app.connect.PairingOutcome
 import io.github.opencircuit.app.details.ConnectionDetailsUi
 import io.github.opencircuit.app.details.DetailRow
 import io.github.opencircuit.app.details.DetailsSources
+import io.github.opencircuit.app.live.LiveMode
+import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.ble.AddressType
@@ -184,6 +186,29 @@ class ConnectionDetailsTest {
         assertEquals("0x47 × 1 · 0xee × 2", screen.value(rows, "Frames not handled"))
         assertEquals("none", screen.value(rows, "Handler failures"))
         assertEquals("2 · last: link dropped · 5 frames undelivered in all", screen.value(rows, "Connections torn down"))
+    }
+
+    @Test
+    fun theLastMeasureShowsWhatTheRingAnsweredAsCountsAndVerdictsOnly() = runTest {
+        val screen = screen()
+        val link = screen.link!!
+        assertEquals("none since the app started", screen.value(screen.details.rows, "Last measure"))
+
+        link.setState(LinkState.Authenticated)
+        runCurrent()
+        screen.viewModel.onAction(RingAction.Measure(LiveMode.HEART_RATE))
+        advanceTo(testScheduler.currentTime + 250) // the mode write
+        link.emitFrame(hex("86fd7b")) // refused: reset to idle, entry again
+        advanceTo(testScheduler.currentTime + 1_250)
+        link.emitFrame(hex("860086"))
+        repeat(2) { link.emitFrame(TestFrames.heartRateWarmUp) }
+        runCurrent()
+        screen.viewModel.onAction(RingAction.StopMeasure)
+        runCurrent()
+
+        val expected = "heart rate · mode answers 0xfd, 0x00 · resets 1 · live frames 2, not usable 2"
+        assertEquals(expected, screen.value(screen.details.rows, "Last measure"))
+        assertTrue("Last measure: $expected" in screen.details.copyText, screen.details.copyText)
     }
 
     @Test

@@ -27,8 +27,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 /** Everything the Ring screen shows. */
@@ -98,7 +100,7 @@ class RingViewModel(
                 val diagnostics: Flow<List<LinkDiagnostic>?> = (session.link as? LinkDiagnostics)?.diagnostics ?: flowOf(null)
                 combine(session.link.info, session.timer.timings, session.dispatcher.counts, session.teardowns, diagnostics) { info, timings, counts, teardowns, lines ->
                     DetailsInput(ring = session.link.ring, info = info, timings = timings, counts = counts, teardowns = teardowns, diagnostics = lines)
-                }
+                }.combine(session.liveMeasure.state.map { it.evidence }.distinctUntilChanged()) { input, evidence -> input.copy(lastMeasure = evidence) }
             }
         }
         val scanKept = details.scanMatch != null

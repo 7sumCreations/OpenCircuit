@@ -1,6 +1,8 @@
 package io.github.opencircuit.app.details
 
 import io.github.opencircuit.app.connect.PairingOutcome
+import io.github.opencircuit.app.live.LiveMode
+import io.github.opencircuit.app.live.MeasureEvidence
 import io.github.opencircuit.app.session.ConnectionTimings
 import io.github.opencircuit.app.session.DispatchCounts
 import io.github.opencircuit.app.session.SessionTeardowns
@@ -51,6 +53,8 @@ data class DetailsInput(
     val scanKept: Boolean = false,
     val scan: ScanDiagnostic? = null,
     val scanToSelectedMillis: Long? = null,
+    /** What the ring sent during the running or the last live measure; null before the first. */
+    val lastMeasure: MeasureEvidence? = null,
 )
 
 /**
@@ -116,6 +120,7 @@ object ConnectionDetailsPresenter {
             DetailRow("Frames not handled", input.counts?.let { opcodeCounts(it.unhandled) } ?: NOT_AVAILABLE),
             DetailRow("Handler failures", input.counts?.let { opcodeCounts(it.handlerFailures) } ?: NOT_AVAILABLE),
             DetailRow("Connections torn down", input.teardowns?.let(::teardowns) ?: NOT_AVAILABLE),
+            DetailRow("Last measure", input.lastMeasure?.let(::measure) ?: "none since the app started"),
         )
     }
 
@@ -171,6 +176,13 @@ object ConnectionDetailsPresenter {
         PairingOutcome.Approved -> "allowed"
         is PairingOutcome.Declined -> (if (outcome.resultCode == 0) "closed" else "refused") + " (result ${outcome.resultCode})"
         is PairingOutcome.Fallback -> "connected without it: ${outcome.reason.words}" + (outcome.resultCode?.let { " (result $it)" } ?: "")
+    }
+
+    /** Counts and the ring's answers only: never a reading (PORTING.md D-255). */
+    private fun measure(e: MeasureEvidence): String {
+        val mode = if (e.mode == LiveMode.HEART_RATE) "heart rate" else "SpO₂"
+        val answers = e.modeReplies.joinToString(", ") { "0x" + hexByte(it) }.ifEmpty { "none" }
+        return "$mode · mode answers $answers · resets ${e.resets} · live frames ${e.liveFrames}, not usable ${e.unusableFrames}"
     }
 
     private fun teardowns(t: SessionTeardowns): String {

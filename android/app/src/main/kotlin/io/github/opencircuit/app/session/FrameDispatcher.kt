@@ -12,7 +12,7 @@ data class DispatchCounts(
     val unhandled: Map<Int, Int> = emptyMap(),
     /** Frames whose handler threw, per opcode. */
     val handlerFailures: Map<Int, Int> = emptyMap(),
-    /** Frames of an opcode the app deliberately ignores (the heartbeat `:ble` already answered). */
+    /** Frames of an opcode the app deliberately ignores (the heartbeat `:ble` already answered, the `81 01` auth answer). */
     val ignored: Int = 0,
     /** Frames with no bytes at all. */
     val empty: Int = 0,

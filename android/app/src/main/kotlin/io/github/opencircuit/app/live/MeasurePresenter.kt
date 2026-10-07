@@ -55,9 +55,11 @@ fun measureUi(state: LiveMeasureState, onCharger: Boolean = false): MeasureUi = 
 
 /** The line a failed measure leaves on its card. */
 fun MeasureFailure.message(): String = when (this) {
-    MeasureFailure.NoReading ->
+    is MeasureFailure.NoReading ->
         // Upstream's wording (ios/OpenCircuit/BLE/RingSession.swift:1167 @ b1c2fdd).
         "Couldn't get a reading — make sure the ring is worn snugly and not on the charger, then hold still."
+    is MeasureFailure.ModeRejected ->
+        "Couldn't measure — the ring didn't switch to ${if (mode == LiveMode.HEART_RATE) "heart-rate" else "SpO₂"} mode. Try again in a moment."
     MeasureFailure.RingDisconnected -> "Measurement stopped — the ring disconnected."
     is MeasureFailure.CommandRefused -> when (reason) {
         RefusalReason.NOT_AUTHENTICATED -> "Couldn't measure — the ring isn't connected."

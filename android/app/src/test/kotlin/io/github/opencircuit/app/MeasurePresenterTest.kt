@@ -4,6 +4,7 @@ import io.github.opencircuit.app.live.LiveMeasureState
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.live.LivePoint
 import io.github.opencircuit.app.live.LiveSessionSnapshot
+import io.github.opencircuit.app.live.MeasureEvidence
 import io.github.opencircuit.app.live.MeasureFailure
 import io.github.opencircuit.app.live.MeasureResult
 import io.github.opencircuit.app.live.measureUi
@@ -112,8 +113,12 @@ class MeasurePresenterTest {
     @Test
     fun eachFailureHasItsOwnLineOnTheRowAndKeepsTheLastReading() {
         val expected = mapOf(
-            MeasureFailure.NoReading to
+            MeasureFailure.NoReading(MeasureEvidence(LiveMode.HEART_RATE, liveFrames = 3, unusableFrames = 3, modeReplies = listOf(0), resets = 0)) to
                 "Couldn't get a reading — make sure the ring is worn snugly and not on the charger, then hold still.",
+            MeasureFailure.ModeRejected(LiveMode.HEART_RATE, 0xfd) to
+                "Couldn't measure — the ring didn't switch to heart-rate mode. Try again in a moment.",
+            MeasureFailure.ModeRejected(LiveMode.SPO2, 0xfd) to
+                "Couldn't measure — the ring didn't switch to SpO₂ mode. Try again in a moment.",
             MeasureFailure.RingDisconnected to "Measurement stopped — the ring disconnected.",
             MeasureFailure.CommandRefused(RefusalReason.NOT_AUTHENTICATED) to "Couldn't measure — the ring isn't connected.",
             MeasureFailure.CommandRefused(RefusalReason.NOT_BONDED) to "Couldn't measure — this phone isn't paired with the ring.",

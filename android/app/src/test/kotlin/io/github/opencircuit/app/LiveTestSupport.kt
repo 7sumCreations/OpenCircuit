@@ -14,9 +14,18 @@ internal data class TimedWrite(val atMillis: Long, val hex: String)
 /**
  * The scripted fake link, with every write recorded together with the virtual time it was made
  * at (the fake itself records bytes only). Answers come from the fake ([FakeRingLink.answerSendsWith]).
+ *
+ * [replyTo], when set, plays the ring's notification answer to a write: given the write's plain
+ * hex it returns the hex of the frame the ring sends back (or null for none), which is queued on
+ * the fake's frames right after the write goes out — as the ring answers `06 xx 00` with
+ * `86 <status> <xor>` (PROTOCOL.md §4).
  */
 internal class TimedRingLink(val fake: FakeRingLink, private val now: () -> Long) : RingLink by fake {
     private val log = CopyOnWriteArrayList<TimedWrite>()
+
+    /** The ring's frame answering a write, by the write's hex; null sends nothing. */
+    @Volatile
+    var replyTo: (String) -> String? = { null }
 
     /** Every write so far, oldest first. */
     val writes: List<TimedWrite> get() = log.toList()
@@ -28,8 +37,11 @@ internal class TimedRingLink(val fake: FakeRingLink, private val now: () -> Long
     fun clear() = log.clear()
 
     override suspend fun send(command: ByteArray): SendResult {
-        log += TimedWrite(now(), command.toPlainHex())
-        return fake.send(command)
+        val written = command.toPlainHex()
+        log += TimedWrite(now(), written)
+        val result = fake.send(command)
+        if (result == SendResult.Sent) replyTo(written)?.let { fake.emitFrame(hex(it)) }
+        return result
     }
 }
 
@@ -57,4 +69,19 @@ internal object Wire {
     const val SPO2_MODE = "060200"
     const val FETCH = "070000"
     const val POLL = "950000"
+
+    /** Back to idle, out of any `06` mode (PROTOCOL.md §4 table: `06 00 00` → `86 00 86`). */
+    const val MODE_EXIT = "060000"
+}
+
+/**
+ * The ring's answers to a `06 xx 00` mode write, as raw frames `86 <status> <xor>`. Accepted is
+ * `86 00 86` (PROTOCOL.md §4). The refusal is `86 fd 7b`, the "not ready" reject upstream saw on a
+ * real ring (upstream e3b1330's message and `ios/OpenCircuit/BLE/RingSession.swift:5299-5311`
+ * @ b1c2fdd); `86 fc 7a` is "already in that mode", which upstream treats as accepted (same lines).
+ */
+internal object ModeReplies {
+    const val ACCEPTED = "860086"
+    const val REFUSED = "86fd7b"
+    const val ALREADY = "86fc7a"
 }
