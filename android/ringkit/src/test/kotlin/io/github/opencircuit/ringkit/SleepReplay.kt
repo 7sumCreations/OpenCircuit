@@ -40,6 +40,8 @@ import java.util.Locale
 //      onsetIsUnobserved judged against the UNION (not the night slice); otherwise nothing
 //   5. what gets STORED: SleepStaging.summary(segments), the min start / max end, and
 //      SleepStaging.sleepWindow(segments).
+// Steps 3 and 4 are `NightStager.stage` itself — the main-code stager the app's history commit
+// calls — so the harness measures the shipped path, not a copy of it.
 //
 // THE FOUR INPUTS PRODUCTION HAS THAT A RECORDS FILE DOES NOT — all manifest fields:
 //   1. LOCAL TIME ZONE. Upstream's overnight test reads the PROCESS calendar, so its harness switched
@@ -606,16 +608,11 @@ object SleepReplay {
             union, zone, temperatures = temperatures, observedGapCoverageCut = observedGapCoverageCut, motionPolicy = motionPolicy,
         )
         val baseline = deepHRBaseline?.let { SleepStaging.PersonalBaseline(it) }
-        val segs = SleepStaging.classify(nightRecords, temperatures = temperatures, tuning = tuning, baseline = baseline, motionPolicy = motionPolicy)
-
-        // The overnight envelope gate.
-        val inBeds = segs.filter { it.stage == SleepStage.IN_BED }
-        val lo = inBeds.minOfOrNull { it.start } ?: return Staged(segs, union, nightRecords)
-        val hi = inBeds.maxOf { it.end }
-        if (SleepWindow.isOvernightBlock(lo, hi, zone)) return Staged(segs, union, nightRecords)
-        val onsetIsUnobserved = BulkSleep.onsetIsUnobserved(DateInterval(lo, maxOf(hi, lo)), union) // the UNION, not the slice
-        val accepted = SleepWindow.isOvernightBlock(lo, hi, onsetIsUnobserved = onsetIsUnobserved, zone = zone)
-        return Staged(if (accepted) segs else emptyList(), union, nightRecords)
+        // Steps 3–4: the app's own stager (classify + the overnight envelope gate, judged against the UNION).
+        val segs = NightStager.stage(
+            nightRecords, archive = union, zone = zone, temperatures = temperatures, baseline = baseline, tuning = tuning, motionPolicy = motionPolicy,
+        )
+        return Staged(segs, union, nightRecords)
     }
 
     /** Replace the manifest's deep-HR baseline for one measurement; [bpm] null means "no baseline". */
