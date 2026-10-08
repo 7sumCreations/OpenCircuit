@@ -20,6 +20,15 @@ interface AppPrefs {
 
     /** Marks the permission as asked; false when the file could not be written. */
     fun setPermissionAsked(): Boolean
+
+    /**
+     * The Ring data card's "Disconnect after syncing" switch (`sync.disconnectAfter.v1`): ON until
+     * the user turns it off. A damaged value reads as ON, the default.
+     */
+    val disconnectAfterSync: Boolean
+
+    /** Saves the switch; false when the file could not be written. */
+    fun setDisconnectAfterSync(on: Boolean): Boolean
 }
 
 /** [AppPrefs] over [KeyValues]. */
@@ -32,8 +41,14 @@ class PrefsAppPrefs(private val values: KeyValues) : AppPrefs {
 
     override fun setPermissionAsked(): Boolean = values.putBoolean(PERMISSION_ASKED, true)
 
+    // Missing or damaged reads as ON: the default never keeps the ring connected behind the user's back.
+    override val disconnectAfterSync: Boolean get() = values.boolean(DISCONNECT_AFTER_SYNC) ?: true
+
+    override fun setDisconnectAfterSync(on: Boolean): Boolean = values.putBoolean(DISCONNECT_AFTER_SYNC, on)
+
     private companion object {
         const val ONBOARDING_COMPLETED = "onboarding.completed.v1"
         const val PERMISSION_ASKED = "bt.permission.asked.v1"
+        const val DISCONNECT_AFTER_SYNC = "sync.disconnectAfter.v1"
     }
 }
