@@ -1,9 +1,12 @@
 package io.github.opencircuit.app
 
 import android.content.Context
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -28,6 +31,7 @@ import org.junit.runner.RunWith
  * card goes to "Last synced just now" with the records stored, three nights and last night, and
  * the ring is disconnected afterwards (the switch is on). Sync now then syncs again whatever the
  * throttle says: it reconnects, drains (nothing new) and disconnects.
+ * While a sync runs, both Measure buttons are off and say to wait for it.
  */
 @RunWith(AndroidJUnit4::class)
 class SyncOnDemoRingTest {
@@ -69,5 +73,21 @@ class SyncOnDemoRingTest {
         compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Syncing…").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithText("Last synced just now").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Up to date").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun measureWaitsWhileTheLaunchSyncRuns() {
+        // The launch's sync drains three nights page by page: the link is up and "Syncing…" shows.
+        compose.waitUntil(timeoutMillis = 30_000) { compose.onAllNodesWithText("Syncing…").fetchSemanticsNodes().isNotEmpty() }
+
+        // Both Measure buttons are off, each card saying why; the sync is not interrupted.
+        compose.onNodeWithContentDescription("Measure heart rate").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Measure SpO₂").assertIsNotEnabled()
+        compose.onAllNodesWithText("Wait for the sync to finish").assertCountEquals(2)
+
+        compose.waitUntil(timeoutMillis = 90_000) {
+            compose.onAllNodesWithText("Last synced just now").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onAllNodesWithText("Wait for the sync to finish").assertCountEquals(0)
     }
 }
