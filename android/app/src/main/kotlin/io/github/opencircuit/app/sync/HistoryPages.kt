@@ -8,9 +8,11 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
@@ -88,17 +90,38 @@ class HistoryPages(
     private val attached = AtomicReference<Attached?>(null)
     private val countsFlow = MutableStateFlow(HistoryPageCounts())
 
+    /** Frames queued or being handled: zero when the ACK lane is idle. */
+    private val inFlight = MutableStateFlow(0)
+
     /** This session's counts. */
     val counts: StateFlow<HistoryPageCounts> = countsFlow.asStateFlow()
 
     init {
-        scope.launch { for (arrival in queue) handle(arrival) }
+        scope.launch {
+            for (arrival in queue) {
+                try {
+                    handle(arrival)
+                } finally {
+                    inFlight.update { it - 1 }
+                }
+            }
+        }
     }
 
     /** One history frame from the dispatcher (any thread). Queued; never blocks the dispatcher. */
     fun onFrame(frame: ByteArray) {
-        queue.trySend(Arrival(frame.copyOf(), wallClock(), attached.get()?.drainId))
+        inFlight.update { it + 1 }
+        if (queue.trySend(Arrival(frame.copyOf(), wallClock(), attached.get()?.drainId)).isFailure) inFlight.update { it - 1 }
     }
+
+    /**
+     * Returns true once no history frame is queued or being stored / acknowledged — the ACK lane
+     * is idle, since the link's acknowledge returns only when its write is done — or false after
+     * [timeoutMillis] with one still in flight. A disconnect waits for this first, so it does not
+     * cut the last acknowledgement (a page cut anyway is offered again by the ring).
+     */
+    suspend fun awaitIdle(timeoutMillis: Long): Boolean =
+        withTimeoutOrNull(timeoutMillis) { inFlight.first { it == 0 } } != null
 
     /** Drain [drainId] starts: pages arriving from now on carry its id, and their signals go to [sink]. */
     fun attach(drainId: Long, sink: (HistorySignal) -> Unit) {

@@ -1,6 +1,7 @@
 package io.github.opencircuit.app.sync
 
 import io.github.opencircuit.ble.LinkState
+import io.github.opencircuit.ble.LinkTeardown
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.AndroidDrainTiming
@@ -31,6 +32,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 import java.time.Instant
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 
 /** How a sync ended. */
@@ -108,7 +110,22 @@ data class SyncReport(
     val commit: CommitResult?,
     /** Each channel it drained, in order. */
     val channels: List<ChannelReport> = emptyList(),
+    /**
+     * Pages the ring sent during the sync that were never acknowledged, counted by the link at the
+     * teardowns of the sync's connection: the ring offers them again. A trace, not a fault.
+     */
+    val pagesUnacknowledged: Int = 0,
+    /** Frames the link received during the sync that the app never took, counted at those teardowns. */
+    val undeliveredFrames: Int = 0,
+    /** What went wrong beside the outcome; empty when nothing did. */
+    val faults: Set<SyncFault> = emptySet(),
 )
+
+/** A fault a sync reports beside its outcome. */
+enum class SyncFault {
+    /** The link dropped frames the app never took ([SyncReport.undeliveredFrames] > 0): the app fell behind. */
+    UNDELIVERED_FRAMES,
+}
 
 /**
  * How far one channel of the running sync has come ([io.github.opencircuit.ringkit.DrainProgress]):
@@ -187,6 +204,9 @@ class HistoryDrainController(
     private val stateFlow = MutableStateFlow(SyncState())
     private val syncingFlow = MutableStateFlow(false)
 
+    /** The running sync's teardowns; null when no sync runs. */
+    private val tally = AtomicReference<MutableStateFlow<List<LinkTeardown>>?>(null)
+
     /** What the Ring data card shows. */
     val state: StateFlow<SyncState> = stateFlow.asStateFlow()
 
@@ -206,26 +226,38 @@ class HistoryDrainController(
         }
         if (!started) return false
         syncingFlow.value = true
+        val teardowns = MutableStateFlow<List<LinkTeardown>>(emptyList())
+        tally.set(teardowns)
         scope.launch {
             val report = try {
-                sync()
+                sync(teardowns)
             } catch (e: CancellationException) {
+                tally.compareAndSet(teardowns, null)
                 stateFlow.update { it.copy(syncing = false, channels = emptyList()) }
                 syncingFlow.value = false
                 throw e
             }
+            tally.compareAndSet(teardowns, null)
             stateFlow.update { SyncState(syncing = false, pagesThisSync = it.pagesThisSync, last = report) }
             syncingFlow.value = false
         }
         return true
     }
 
-    private suspend fun sync(): SyncReport {
+    /**
+     * One torn-down connection of the link (from the session's one collector of the link's
+     * teardowns, any thread). Counted for the running sync's report; ignored when none runs.
+     */
+    fun onTeardown(teardown: LinkTeardown) {
+        tally.get()?.update { it + teardown }
+    }
+
+    private suspend fun sync(teardowns: MutableStateFlow<List<LinkTeardown>>): SyncReport {
         val plan = HistoryDrainPlan.steps(inBackground = false, allDayOnly = false, sportEnabled = false, now = wallClock(), nightWindowEnd = null)
         if (link.state.value != LinkState.Authenticated) {
             connect()
             val up = withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) { link.state.first { it == LinkState.Authenticated } }
-            if (up == null) return commitAndReport(SyncOutcome.NOT_CONNECTED, emptyList(), plan)
+            if (up == null) return commitAndReport(SyncOutcome.NOT_CONNECTED, emptyList(), plan, teardowns, linkWasUp = false)
         }
         awaitStatusQuiet()
         val run = SyncRun(deadline = monotonicMillis() + AndroidDrainTiming.WHOLE_SYNC.toMillis())
@@ -251,7 +283,7 @@ class HistoryDrainController(
         } finally {
             pages.detach(drainId)
         }
-        return commitAndReport(run.outcome(plan.size), run.reports, plan)
+        return commitAndReport(run.outcome(plan.size), run.reports, plan, teardowns, linkWasUp = true)
     }
 
     /** One channel: rounds until one ends without earning a reopen. */
@@ -465,18 +497,51 @@ class HistoryDrainController(
         return link.send(Command.fetch) == SendResult.Sent
     }
 
-    private suspend fun commitAndReport(outcome: SyncOutcome, channels: List<ChannelReport>, plan: List<HistoryDrainPlan.Step>): SyncReport {
+    /**
+     * Commits, then — with the switch on and the commit returned — disconnects once the ACK lane is
+     * idle (at most 2 s: a page still being stored is not cut mid-acknowledgement; one cut anyway is
+     * offered again). The report carries the teardowns of the sync's connection: the one its own
+     * disconnect causes, or the drop the drain saw, each waited for at most 2 s ([linkWasUp]: the
+     * link was authenticated during the sync, so a teardown is due when it is not any more).
+     */
+    private suspend fun commitAndReport(
+        outcome: SyncOutcome,
+        channels: List<ChannelReport>,
+        plan: List<HistoryDrainPlan.Step>,
+        teardowns: MutableStateFlow<List<LinkTeardown>>,
+        linkWasUp: Boolean,
+    ): SyncReport {
         val commit = try {
             store.commit(wallClock(), drainedThrough(plan, channels))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log("The sync's commit failed: ${e::class.java.simpleName}; the pages stay on the phone for the next sync")
-            return SyncReport(wallClock(), SyncOutcome.COMMIT_FAILED, commit = null, channels = channels)
+            null
         }
         // Only after the commit returned: what the ring dropped is in the store by now.
-        if (disconnectAfterSync()) link.disconnect()
-        return SyncReport(wallClock(), outcome, commit, channels)
+        if (commit != null && disconnectAfterSync()) {
+            val up = link.state.value == LinkState.Authenticated
+            if (up && !pages.awaitIdle(ACK_IDLE_MILLIS)) log("history-drain: a page was still in flight after 2 s; disconnecting, the ring offers it again")
+            val before = teardowns.value.size
+            link.disconnect()
+            if (up) withTimeoutOrNull(TEARDOWN_WAIT_MILLIS) { teardowns.first { it.size > before } }
+        } else if (linkWasUp && link.state.value != LinkState.Authenticated && teardowns.value.isEmpty()) {
+            withTimeoutOrNull(TEARDOWN_WAIT_MILLIS) { teardowns.first { it.isNotEmpty() } }
+        }
+        val seen = teardowns.value
+        val unacknowledged = seen.sumOf { it.pagesUnacknowledged }
+        val undelivered = seen.sumOf { it.undeliveredFrames }
+        if (seen.isNotEmpty()) log("history-drain: the sync's connection closed — teardowns=${seen.size} pagesUnacknowledged=$unacknowledged undeliveredFrames=$undelivered")
+        return SyncReport(
+            finishedAt = wallClock(),
+            outcome = if (commit == null) SyncOutcome.COMMIT_FAILED else outcome,
+            commit = commit,
+            channels = channels,
+            pagesUnacknowledged = unacknowledged,
+            undeliveredFrames = undelivered,
+            faults = if (undelivered > 0) setOf(SyncFault.UNDELIVERED_FRAMES) else emptySet(),
+        )
     }
 
     /**
@@ -578,6 +643,12 @@ class HistoryDrainController(
     companion object {
         /** How long a sync waits for the ring to connect before giving up. */
         const val CONNECT_TIMEOUT_MILLIS = 30_000L
+
+        /** How long a disconnect waits for the ACK lane to go idle. */
+        const val ACK_IDLE_MILLIS = 2_000L
+
+        /** How long the report waits for the teardown of the sync's connection. */
+        const val TEARDOWN_WAIT_MILLIS = 2_000L
 
         private val QUIET = AndroidDrainTiming.QUIET.toMillis()
         private val OPEN_ANSWER = AndroidDrainTiming.OPEN_ANSWER.toMillis()

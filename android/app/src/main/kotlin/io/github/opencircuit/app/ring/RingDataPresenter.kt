@@ -1,6 +1,7 @@
 package io.github.opencircuit.app.ring
 
 import io.github.opencircuit.app.sync.ChannelProgress
+import io.github.opencircuit.app.sync.SyncFault
 import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.app.sync.SyncState
 import java.time.Duration
@@ -62,7 +63,7 @@ object RingDataPresenter {
         return RingDataUi(
             headline = if (last == null) NOT_SYNCED else "Last synced ${ago(last.finishedAt, now)}",
             lastSync = last?.commit?.let { "${count(it.records)} records · ${outcomeWords(last.outcome)}" },
-            problem = last?.let { problemOf(it.outcome) },
+            problem = last?.let { problemOf(it.outcome) ?: if (SyncFault.UNDELIVERED_FRAMES in it.faults) FRAMES_NOT_READ else null },
             syncEnabled = !measuring,
             syncBlockedBy = if (measuring) STOP_MEASURING_TO_SYNC else null,
             disconnectAfterSync = disconnectAfterSync,
@@ -117,6 +118,7 @@ object RingDataPresenter {
     /** ASCII digits with a comma every three, whatever the phone's locale ("4,312"). */
     private fun count(n: Int): String = String.format(Locale.ROOT, "%,d", n)
 
+    private const val FRAMES_NOT_READ = "Some data from the ring wasn't read — sync again"
     private const val STOP_MEASURING_TO_SYNC = "Stop measuring to sync"
     private const val NOT_SYNCED = "Not synced yet"
     private const val SYNCING = "Syncing…"

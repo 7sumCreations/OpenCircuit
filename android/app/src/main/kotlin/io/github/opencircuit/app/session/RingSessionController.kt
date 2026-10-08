@@ -143,6 +143,7 @@ class RingSessionController(
                 teardownsFlow.update {
                     SessionTeardowns(count = it.count + 1, last = teardown, undeliveredFrames = it.undeliveredFrames + teardown.undeliveredFrames)
                 }
+                sync.onTeardown(teardown)
                 liveMeasure.onLinkLost()
             }
         }

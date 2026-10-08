@@ -68,6 +68,8 @@ internal class RingFake(
     private val statusReplyMillis: Long = 100,
     private val ignoreOpensUntilReauth: Boolean = false,
     private val ignoreAllOpens: Boolean = false,
+    /** Frames the link reports it never delivered, at every teardown (a collector that fell behind). */
+    private val undeliveredOnTeardown: Int = 0,
     val fake: FakeRingLink = FakeRingLink(testRing),
 ) : RingLink by fake {
 
@@ -227,7 +229,7 @@ internal class RingFake(
         }
         if (fake.state.value == LinkState.Idle) return
         fake.setState(LinkState.Idle)
-        fake.emitTeardown(LinkTeardown(reason, undeliveredFrames = 0, pagesUnacknowledged = unacknowledged))
+        fake.emitTeardown(LinkTeardown(reason, undeliveredFrames = undeliveredOnTeardown, pagesUnacknowledged = unacknowledged))
     }
 
     /** Called with the lock held, on `07 00 00` after an open. A page sent and not acknowledged is offered again. */

@@ -35,8 +35,12 @@ internal const val TEST_RING_ID = "AA:BB:CC:DD:EE:FF"
 internal class RecordingStore(private val real: HistoryStore, private val note: (String) -> Unit) : HistoryStore {
     var failAppendsOf: (ByteArray) -> Boolean = { false }
 
+    /** Runs inside each append, before the page is written (a link drop while a page is being stored). */
+    var duringAppend: suspend (ByteArray) -> Unit = {}
+
     override suspend fun append(page: ByteArray, receivedAt: Instant, drainId: Long?): Long {
         if (failAppendsOf(page)) throw IllegalStateException("disk full")
+        duringAppend(page)
         return real.append(page, receivedAt, drainId)
     }
 
