@@ -40,7 +40,7 @@ class StoreHistory(
     override suspend fun append(page: ByteArray, receivedAt: Instant, drainId: Long?): Long =
         HistoryJournal(database()).append(ringId, page, receivedAt, drainId)
 
-    override suspend fun commit(now: Instant, drained: CommitPlanner.Drained): CommitResult {
+    override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean): CommitResult {
         val db = database()
         val journal = HistoryJournal(db)
         val blobs = BlobStore(db)
@@ -51,7 +51,11 @@ class StoreHistory(
         val plan = CommitPlanner.plan(pages, drained, read.unreadableSeqs, chunkRecords)
 
         var result = CommitResult(heldBack = plan.heldBackRecords, pagesKept = plan.kept.size)
-        plan.chunks.forEachIndexed { index, chunk ->
+        for ((index, chunk) in plan.chunks.withIndex()) {
+            if (index > 0 && !keepGoing()) {
+                // Stopped between transactions: what is left stays in the journal for the next commit.
+                return result.copy(chunksLeft = plan.chunks.size - index)
+            }
             val stored = db.withWriteTransaction {
                 val merge = blobs.mergeEpochArchive(ringId, chunk.records, notAfter = now.plus(NOT_AFTER_ALLOWANCE), now = now)
                 // The HRV gate is calibrated on the whole archive, never on one chunk (BulkSleep.samples).

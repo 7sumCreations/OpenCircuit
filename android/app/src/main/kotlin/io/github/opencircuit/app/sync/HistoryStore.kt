@@ -20,9 +20,11 @@ interface HistoryStore {
      * Puts the stored pages' records into the store and forgets those pages — only records the
      * sync is [drained] through (a channel that may still hold older records holds the newer ones
      * back, PORTING.md D-267); the rest stay stored for a later commit. Oldest first, in chunks:
-     * each chunk all or nothing. Throws when a chunk fails; the chunks before it are kept.
+     * each chunk all or nothing. Throws when a chunk fails; the chunks before it are kept. Before
+     * each chunk after the first it asks [keepGoing]; on false it stops there and the remaining
+     * pages stay stored (a paused sync's commit is bounded in time, PORTING.md D-268).
      */
-    suspend fun commit(now: Instant, drained: CommitPlanner.Drained): CommitResult
+    suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean = { true }): CommitResult
 
     companion object {
         /**
@@ -33,7 +35,7 @@ interface HistoryStore {
             override suspend fun append(page: ByteArray, receivedAt: Instant, drainId: Long?): Long =
                 throw IllegalStateException("this session keeps no history")
 
-            override suspend fun commit(now: Instant, drained: CommitPlanner.Drained): CommitResult = CommitResult()
+            override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean): CommitResult = CommitResult()
         }
     }
 }
@@ -61,4 +63,6 @@ data class CommitResult(
     val pagesKept: Int = 0,
     /** Transactions the commit ran. */
     val chunks: Int = 0,
+    /** Transactions it did not start because it was told to stop; their pages stay stored. */
+    val chunksLeft: Int = 0,
 )

@@ -32,7 +32,7 @@ class AckLaneIdleTest {
             return 1
         }
 
-        override suspend fun commit(now: Instant, drained: CommitPlanner.Drained) = CommitResult()
+        override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean) = CommitResult()
     }
 
     @Test

@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -32,6 +33,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 import java.time.Instant
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -119,6 +121,8 @@ data class SyncReport(
     val undeliveredFrames: Int = 0,
     /** What went wrong beside the outcome; empty when nothing did. */
     val faults: Set<SyncFault> = emptySet(),
+    /** The app was left during the sync and paused it ([HistoryDrainController.pause]): it is unfinished, and coming back resumes it. */
+    val paused: Boolean = false,
 )
 
 /** A fault a sync reports beside its outcome. */
@@ -207,6 +211,15 @@ class HistoryDrainController(
     /** The running sync's teardowns; null when no sync runs. */
     private val tally = AtomicReference<MutableStateFlow<List<LinkTeardown>>?>(null)
 
+    /** The running sync was asked to pause ([pause]). */
+    private val pauseRequested = MutableStateFlow(false)
+
+    /** When it was (monotonic); the paused commit starts no transaction [PAUSED_COMMIT_MILLIS] after it. */
+    private val pausedAt = AtomicReference<Long?>(null)
+
+    /** [resume] came while the pause was still finishing. */
+    private val resumeAfterPause = AtomicBoolean(false)
+
     /** What the Ring data card shows. */
     val state: StateFlow<SyncState> = stateFlow.asStateFlow()
 
@@ -225,6 +238,9 @@ class HistoryDrainController(
             if (started) current.copy(syncing = true, pagesThisSync = 0, channels = emptyList()) else current
         }
         if (!started) return false
+        pauseRequested.value = false
+        pausedAt.set(null)
+        resumeAfterPause.set(false)
         syncingFlow.value = true
         val teardowns = MutableStateFlow<List<LinkTeardown>>(emptyList())
         tally.set(teardowns)
@@ -240,8 +256,47 @@ class HistoryDrainController(
             tally.compareAndSet(teardowns, null)
             stateFlow.update { SyncState(syncing = false, pagesThisSync = it.pagesThisSync, last = report) }
             syncingFlow.value = false
+            // The user came back while the pause was finishing.
+            if (report.paused && resumeAfterPause.getAndSet(false)) syncNow()
         }
         return true
+    }
+
+    /**
+     * The user left the app during the sync (PORTING.md D-268; [SyncLifecycle] decides): the
+     * running sync opens, nudges and reopens nothing more, commits what is stored — starting no
+     * commit transaction 5 s after now — and, with the switch on, disconnects once the ACK lane is
+     * idle. Its report is [SyncReport.paused], and [resume] finishes it. Does nothing when no sync
+     * runs.
+     */
+    fun pause() {
+        if (!syncingFlow.value || pauseRequested.value) return
+        pausedAt.set(monotonicMillis())
+        pauseRequested.value = true
+        log("Sync paused: the app left the screen")
+    }
+
+    /**
+     * The user came back: a paused sync resumes — at once when its pause has finished, or as soon
+     * as it does. Any other state: nothing.
+     */
+    fun resume() {
+        if (syncingFlow.value && pauseRequested.value) {
+            resumeAfterPause.set(true)
+            return
+        }
+        if (stateFlow.value.last?.paused == true && !stateFlow.value.syncing) syncNow()
+    }
+
+    /** The app's activity stopped ([SyncLifecycle.onStop]); [changingConfigurations]: only to be recreated. */
+    fun onAppStopped(changingConfigurations: Boolean) {
+        if (SyncLifecycle.onStop(syncingFlow.value, changingConfigurations) == SyncLifecycle.Action.PAUSE) pause()
+    }
+
+    /** The app's activity started ([SyncLifecycle.onStart]): a paused sync, or one still pausing, resumes. */
+    fun onAppStarted() {
+        val unfinished = pauseRequested.value || stateFlow.value.last?.paused == true
+        if (SyncLifecycle.onStart(unfinished) == SyncLifecycle.Action.RESUME) resume()
     }
 
     /**
@@ -256,8 +311,12 @@ class HistoryDrainController(
         val plan = HistoryDrainPlan.steps(inBackground = false, allDayOnly = false, sportEnabled = false, now = wallClock(), nightWindowEnd = null)
         if (link.state.value != LinkState.Authenticated) {
             connect()
-            val up = withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) { link.state.first { it == LinkState.Authenticated } }
+            // A pause ends the wait as well: nothing was asked of the ring yet.
+            val up = withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) {
+                combine(link.state, pauseRequested) { state, paused -> state == LinkState.Authenticated || paused }.first { it }
+            }
             if (up == null) return commitAndReport(SyncOutcome.NOT_CONNECTED, emptyList(), plan, teardowns, linkWasUp = false)
+            if (link.state.value != LinkState.Authenticated) return commitAndReport(SyncOutcome.PARTIAL, emptyList(), plan, teardowns, linkWasUp = false)
         }
         awaitStatusQuiet()
         val run = SyncRun(deadline = monotonicMillis() + AndroidDrainTiming.WHOLE_SYNC.toMillis())
@@ -270,7 +329,15 @@ class HistoryDrainController(
                     link.state.first { it != LinkState.Authenticated }
                     signals.trySend(HistorySignal.LinkDown)
                 }
+                val pauser = launch {
+                    pauseRequested.first { it }
+                    signals.trySend(HistorySignal.Paused)
+                }
                 for (step in plan) {
+                    if (pauseRequested.value) {
+                        run.paused = true
+                        break
+                    }
                     if (link.state.value != LinkState.Authenticated) {
                         run.linkLost = true
                         break
@@ -279,6 +346,7 @@ class HistoryDrainController(
                     if (run.stopped) break
                 }
                 watcher.cancel()
+                pauser.cancel()
             }
         } finally {
             pages.detach(drainId)
@@ -421,6 +489,11 @@ class HistoryDrainController(
                         run.ackFailed = true
                         return finish(if (link.state.value == LinkState.Authenticated) HistoryChannelExitReason.CANCELLED else HistoryChannelExitReason.LINK_UNUSABLE)
                     }
+                    // The user left the app: open, nudge and reopen nothing more (PORTING.md D-268).
+                    HistorySignal.Paused -> {
+                        run.paused = true
+                        return finish(HistoryChannelExitReason.CANCELLED)
+                    }
                     HistorySignal.LinkDown -> {
                         run.linkLost = true
                         if (!sawPages && !answered) trace.openWriteFailed = true
@@ -511,8 +584,11 @@ class HistoryDrainController(
         teardowns: MutableStateFlow<List<LinkTeardown>>,
         linkWasUp: Boolean,
     ): SyncReport {
+        // A paused sync's commit starts no transaction 5 s after the pause, inside Android's
+        // 10 s cached-app freeze delay; what is left stays stored for the resumed sync.
+        val keepGoing = { pausedAt.get()?.let { monotonicMillis() < it + PAUSED_COMMIT_MILLIS } ?: true }
         val commit = try {
-            store.commit(wallClock(), drainedThrough(plan, channels))
+            store.commit(wallClock(), drainedThrough(plan, channels), keepGoing)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -541,6 +617,7 @@ class HistoryDrainController(
             pagesUnacknowledged = unacknowledged,
             undeliveredFrames = undelivered,
             faults = if (undelivered > 0) setOf(SyncFault.UNDELIVERED_FRAMES) else emptySet(),
+            paused = pauseRequested.value,
         )
     }
 
@@ -576,8 +653,9 @@ class HistoryDrainController(
         var ackFailed = false
         var linkLost = false
         var timedOut = false
+        var paused = false
 
-        val stopped: Boolean get() = saveFailed || openFailed || ackFailed || linkLost || timedOut
+        val stopped: Boolean get() = saveFailed || openFailed || ackFailed || linkLost || timedOut || paused
 
         fun outcome(planned: Int): SyncOutcome = when {
             saveFailed -> SyncOutcome.SAVE_FAILED
@@ -649,6 +727,9 @@ class HistoryDrainController(
 
         /** How long the report waits for the teardown of the sync's connection. */
         const val TEARDOWN_WAIT_MILLIS = 2_000L
+
+        /** After a pause, the commit starts no transaction later than this. */
+        const val PAUSED_COMMIT_MILLIS = 5_000L
 
         private val QUIET = AndroidDrainTiming.QUIET.toMillis()
         private val OPEN_ANSWER = AndroidDrainTiming.OPEN_ANSWER.toMillis()

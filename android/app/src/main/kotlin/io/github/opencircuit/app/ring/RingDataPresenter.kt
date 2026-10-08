@@ -61,7 +61,11 @@ object RingDataPresenter {
         }
         val last = sync.last
         return RingDataUi(
-            headline = if (last == null) NOT_SYNCED else "Last synced ${ago(last.finishedAt, now)}",
+            headline = when {
+                last == null -> NOT_SYNCED
+                last.paused -> PAUSED
+                else -> "Last synced ${ago(last.finishedAt, now)}"
+            },
             lastSync = last?.commit?.let { "${count(it.records)} records · ${outcomeWords(last.outcome)}" },
             problem = last?.let { problemOf(it.outcome) ?: if (SyncFault.UNDELIVERED_FRAMES in it.faults) FRAMES_NOT_READ else null },
             syncEnabled = !measuring,
@@ -118,7 +122,8 @@ object RingDataPresenter {
     /** ASCII digits with a comma every three, whatever the phone's locale ("4,312"). */
     private fun count(n: Int): String = String.format(Locale.ROOT, "%,d", n)
 
-    private const val FRAMES_NOT_READ = "Some data from the ring wasn't read — sync again"
+    private const val PAUSED = "Sync paused — open OpenCircuit to finish"
+    private const val FRAMES_NOT_READ ="Some data from the ring wasn't read — sync again"
     private const val STOP_MEASURING_TO_SYNC = "Stop measuring to sync"
     private const val NOT_SYNCED = "Not synced yet"
     private const val SYNCING = "Syncing…"

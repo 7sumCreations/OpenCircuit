@@ -11,11 +11,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import io.github.opencircuit.app.details.ConnectionDetailsCard
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.live.MeasureSection
+import io.github.opencircuit.app.sync.SyncLifecycle
 import io.github.opencircuit.ble.RememberedRing
 
 /** What the user can do on the Ring screen. */
@@ -52,6 +55,13 @@ sealed interface RingAction {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Modifier = Modifier, pulse: Boolean = true) {
+    // The screen stays on while a sync runs: the app stays on top and Android does not freeze it.
+    val view = LocalView.current
+    val keepOn = SyncLifecycle.keepScreenOn(state.ringData.syncing)
+    DisposableEffect(view, keepOn) {
+        view.keepScreenOn = keepOn
+        onDispose { view.keepScreenOn = false }
+    }
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = { TopAppBar(title = { Text(state.title) }) },

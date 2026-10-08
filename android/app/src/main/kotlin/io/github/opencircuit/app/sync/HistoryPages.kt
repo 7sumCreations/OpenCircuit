@@ -44,6 +44,9 @@ sealed interface HistorySignal {
 
     /** The link left `Authenticated` while the drain ran (raised by the drain itself, never by the routes). */
     data object LinkDown : HistorySignal
+
+    /** The user left the app and the sync is paused (raised by the drain itself, never by the routes). */
+    data object Paused : HistorySignal
 }
 
 /** The history routes' counts for this session. Counts only, never a page. */

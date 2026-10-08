@@ -47,9 +47,9 @@ internal class RecordingStore(private val real: HistoryStore, private val note: 
     /** How far each commit was told the sync drained the ring, in order. */
     val drained = CopyOnWriteArrayList<CommitPlanner.Drained>()
 
-    override suspend fun commit(now: Instant, drained: CommitPlanner.Drained): CommitResult {
+    override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean): CommitResult {
         this.drained += drained
-        val result = real.commit(now, drained)
+        val result = real.commit(now, drained, keepGoing)
         note("commit returned")
         return result
     }
@@ -81,14 +81,21 @@ internal suspend fun TestScope.syncWorld(
     RingFake(scope, now, mapOf(Command.SYNC_CHANNEL_SLEEP to sleepPages), endOfHistory = endOfHistory)
 }
 
-/** As [syncWorld], with the ring fake built by [makeRing] on the test's background scope and virtual clock. */
-internal suspend fun TestScope.syncWorld(makeRing: (CoroutineScope, () -> Long) -> RingFake): SyncWorld {
+/**
+ * As [syncWorld], with the ring fake built by [makeRing] on the test's background scope and virtual
+ * clock; [chunkRecords] and [insideChunk] are passed to the store's commit (a slow commit).
+ */
+internal suspend fun TestScope.syncWorld(
+    chunkRecords: Int = CommitPlanner.CHUNK_RECORDS,
+    insideChunk: suspend (Int) -> Unit = {},
+    makeRing: (CoroutineScope, () -> Long) -> RingFake,
+): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
     // moves virtual time on (the drain's quiet timer would otherwise race the store).
     val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
     val wall = { SYNC_TEST_EPOCH.plusMillis(testScheduler.currentTime) }
     val ring = makeRing(backgroundScope) { testScheduler.currentTime }
-    val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { ZoneOffset.UTC }), ring::note)
+    val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { ZoneOffset.UTC }, chunkRecords, insideChunk), ring::note)
     val prefs = PrefsAppPrefs(InMemoryKeyValues())
     val logs = CopyOnWriteArrayList<String>()
     val session = RingSessionController(
