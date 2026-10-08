@@ -85,7 +85,7 @@ class DemoRingLinkTest {
             advanceTo(120_000)
 
             assertEquals(18, BlobStore(db).loadEpochArchive("AA:BB:CC:DD:EE:00").records.size)
-            assertEquals("0 records · complete", viewModel.uiState.value.ringData.lastSync)
+            assertEquals("Up to date", viewModel.uiState.value.ringData.lastSync)
         } finally {
             db.close()
         }

@@ -14,7 +14,9 @@ import io.github.opencircuit.app.sync.CommitResult
 import io.github.opencircuit.app.sync.HistoryStore
 import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.app.sync.StoreHistory
+import io.github.opencircuit.app.sync.StoredData
 import io.github.opencircuit.app.sync.SyncEvidence
+import io.github.opencircuit.store.SyncLogEntry
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CommitPlanner
 import io.github.opencircuit.store.BlobStore
@@ -65,6 +67,18 @@ internal class RecordingStore(private val real: HistoryStore, private val note: 
         note("commit returned")
         return result
     }
+
+    /** Makes the sync log's write throw (a full disk). */
+    var failLogAppends: Boolean = false
+
+    override suspend fun syncLog(): List<SyncLogEntry> = real.syncLog()
+
+    override suspend fun appendSyncLog(entry: SyncLogEntry, now: Instant) {
+        if (failLogAppends) throw IllegalStateException("disk full")
+        real.appendSyncLog(entry, now)
+    }
+
+    override suspend fun storedData(): StoredData? = real.storedData()
 }
 
 /** One sync test's world: the real in-memory store, a ring fake, the session and the Ring screen's view model. */
@@ -108,11 +122,13 @@ internal suspend fun TestScope.syncWorld(
     zone: ZoneId = ZoneOffset.UTC,
     /** The wall clock at virtual time 0. */
     wallStart: Instant = SYNC_TEST_EPOCH,
+    /** The store to build over (a relaunch shares one); a fresh in-memory one when null. */
+    reuseDb: StoreDatabase? = null,
     makeRing: (CoroutineScope, () -> Long) -> RingFake,
 ): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
     // moves virtual time on (the drain's quiet timer would otherwise race the store).
-    val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
+    val db = reuseDb ?: StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
     val wall = { wallStart.plusMillis(testScheduler.currentTime) }
     val ring = makeRing(backgroundScope) { testScheduler.currentTime }
     val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { zone }, chunkRecords, insideChunk), ring::note)
@@ -133,9 +149,9 @@ internal suspend fun TestScope.syncWorld(
         backgroundScope,
         monotonicMillis = { testScheduler.currentTime },
         log = { logs += it },
-        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources),
+        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources, zone = { zone }),
     )
-    val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, prefs = prefs, wallClock = wall)
+    val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, prefs = prefs, wallClock = wall, zone = { zone })
     return SyncWorld(db, ring, store, prefs, session, viewModel, logs)
 }
 

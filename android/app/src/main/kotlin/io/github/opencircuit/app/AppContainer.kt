@@ -153,6 +153,7 @@ class AppContainer(context: Context) {
                 storedNights = { learningNights(database.await()) },
                 marks = PrefsSyncMarks(keyValues, ringId),
             ),
+            zone = { ZoneId.systemDefault() },
         )
     }
 

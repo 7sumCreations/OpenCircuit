@@ -31,6 +31,8 @@ sealed interface HistorySignal {
         val countdown: Int?,
         val counters: List<Long> = emptyList(),
         val nightCounters: List<Long> = emptyList(),
+        /** From the start of the page's journal write to its acknowledgement written; null when not measured. */
+        val ackLatencyMillis: Long? = null,
     ) : HistorySignal
 
     /** The ring's `0x82` answer to the sync open (its bytes are kept for the trace). */
@@ -91,6 +93,8 @@ class HistoryPages(
     scope: CoroutineScope,
     private val wallClock: () -> Instant,
     private val log: (String) -> Unit,
+    /** Monotonic milliseconds, for each page's acknowledgement latency. */
+    private val monotonicMillis: () -> Long = { wallClock().toEpochMilli() },
 ) {
     private class Arrival(val frame: ByteArray, val receivedAt: Instant, val drainId: Long?)
 
@@ -155,6 +159,7 @@ class HistoryPages(
     private suspend fun storeThenAcknowledge(arrival: Arrival) {
         val page = arrival.frame
         val opcode = page[0].toInt() and 0xFF
+        val writeStarted = monotonicMillis()
         try {
             store.append(page, arrival.receivedAt, arrival.drainId)
         } catch (e: CancellationException) {
@@ -168,12 +173,13 @@ class HistoryPages(
         }
         when (val result = acknowledge(page)) {
             SendResult.Sent -> {
+                val latency = (monotonicMillis() - writeStarted).coerceAtLeast(0)
                 countsFlow.update {
                     it.copy(acknowledged = it.acknowledged + 1, outsideDrain = it.outsideDrain + if (arrival.drainId == null) 1 else 0)
                 }
                 val records = if (opcode == PAGE_4C) BulkSleep.recordsFromPage(page) else emptyList()
                 val night = records.filter { it.layout == BulkRecord.Layout.SLEEP_VITALS }.map { it.counter }
-                signal(arrival, HistorySignal.PageStored(opcode, EpochRecord.remainingRecordCountdown(page), records.map { it.counter }, night))
+                signal(arrival, HistorySignal.PageStored(opcode, EpochRecord.remainingRecordCountdown(page), records.map { it.counter }, night, latency))
             }
             else -> {
                 countsFlow.update { it.copy(ackFailures = it.ackFailures + 1) }

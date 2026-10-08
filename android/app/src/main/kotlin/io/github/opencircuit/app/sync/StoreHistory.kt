@@ -21,6 +21,8 @@ import io.github.opencircuit.store.SleepNightExtras
 import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.SleepStoreException
 import io.github.opencircuit.store.StoreDatabase
+import io.github.opencircuit.store.SyncLog
+import io.github.opencircuit.store.SyncLogEntry
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -228,6 +230,25 @@ class StoreHistory(
         }
     }
 
+    override suspend fun syncLog(): List<SyncLogEntry> = SyncLog(database()).read(ringId).entries
+
+    override suspend fun appendSyncLog(entry: SyncLogEntry, now: Instant) {
+        SyncLog(database()).append(ringId, entry, now)
+    }
+
+    override suspend fun storedData(): StoredData? {
+        val db = database()
+        val samples = LocalStore(db)
+        val oldest = HISTORY_KINDS.mapNotNull { samples.earliestSample(it)?.start }.minOrNull()
+        val newest = HISTORY_KINDS.mapNotNull { samples.latestSample(it)?.start }.maxOrNull()
+        val sleep = SleepStore(db)
+        // Every night ever keyed.
+        val nights = sleep.sleepSummaries(Instant.EPOCH, FAR_FUTURE).size
+        val last = sleep.latestSleepSummary()?.let { StoredLastNight(it.currentOnset, it.currentWake, it.asleepMin) }
+        if (oldest == null && nights == 0) return null
+        return StoredData(oldest, newest, nights, last)
+    }
+
     /** The skin temperatures stored between [from] and [to] (none until live readings are kept). */
     private suspend fun temperatures(samples: LocalStore, from: Instant, to: Instant): List<TemperatureSample> =
         samples.samples(MetricKind.TEMPERATURE, from, to).map { TemperatureSample(it.start, it.value) }
@@ -240,5 +261,11 @@ class StoreHistory(
 
         /** Stored nights the baseline and the skin-temperature extras read (upstream reads 8 and 40). */
         const val RECENT_NIGHTS = 40
+
+        /** The kinds a history record's samples are stored as: the card's stored range spans them. */
+        val HISTORY_KINDS = listOf(MetricKind.HEART_RATE, MetricKind.HRV_SDNN, MetricKind.SPO2, MetricKind.RESPIRATORY_RATE)
+
+        /** Past every night key. */
+        val FAR_FUTURE: Instant = Instant.ofEpochMilli(Long.MAX_VALUE)
     }
 }

@@ -6,6 +6,7 @@ import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.StoreDatabase
 import java.time.Instant
 import java.time.ZoneId
+import java.time.ZoneOffset
 
 /** What a ring session needs to keep the ring's history: the store, the wall clock and the user's choice. */
 class SessionHistory(
@@ -17,6 +18,8 @@ class SessionHistory(
     val disconnectAfterSync: () -> Boolean,
     /** What the automatic syncs read ([SyncTriggers]); null: the session syncs only when asked. */
     val triggers: SyncTriggerSources? = null,
+    /** The phone's time zone: the sync log's local days. */
+    val zone: () -> ZoneId = { ZoneOffset.UTC },
 ) {
     companion object {
         /**

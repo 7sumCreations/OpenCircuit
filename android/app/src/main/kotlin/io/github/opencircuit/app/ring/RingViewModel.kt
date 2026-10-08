@@ -18,7 +18,9 @@ import io.github.opencircuit.app.live.measureUi
 import io.github.opencircuit.app.session.KeepaliveProblem
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.SessionHost
+import io.github.opencircuit.app.sync.StoredData
 import io.github.opencircuit.app.sync.SyncState
+import io.github.opencircuit.store.SyncLogEntry
 import io.github.opencircuit.ble.AdapterState
 import io.github.opencircuit.ble.LinkDiagnostic
 import io.github.opencircuit.ble.LinkDiagnostics
@@ -35,6 +37,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import java.time.Instant
+import java.time.ZoneId
 
 /** Everything the Ring screen shows. */
 data class RingUiState(
@@ -47,7 +50,7 @@ data class RingUiState(
     /** The Connection details card. */
     val details: ConnectionDetailsUi = ConnectionDetailsPresenter.present(DetailsInput()),
     /** The Ring data card: the last sync, Sync now and the "Disconnect after syncing" switch. */
-    val ringData: RingDataUi = RingDataPresenter.present(sync = null, disconnectAfterSync = true, now = Instant.EPOCH),
+    val ringData: RingDataUi = RingDataPresenter.present(RingDataInput(now = Instant.EPOCH)),
 )
 
 /**
@@ -77,6 +80,8 @@ class RingViewModel(
     private val prefs: AppPrefs? = null,
     /** The phone's wall clock, for "Last synced N ago". */
     private val wallClock: () -> Instant = Instant::now,
+    /** The phone's time zone, for the stored days and the last night's times. */
+    private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) : ViewModel(scope) {
 
     /** The Ring screen's state. */
@@ -105,7 +110,18 @@ class RingViewModel(
                     null
                 },
                 details = ConnectionDetailsPresenter.present(detailsInput.copy(scanToSelectedMillis = flow.scanToSelectedMillis)),
-                ringData = RingDataPresenter.present(parts.sync, disconnectAfter, wallClock(), measuring = measuring),
+                ringData = RingDataPresenter.present(
+                    RingDataInput(
+                        sync = parts.sync,
+                        log = parts.log,
+                        stored = parts.stored,
+                        liveFirmware = parts.firmware,
+                        disconnectAfterSync = disconnectAfter,
+                        now = wallClock(),
+                        zone = zone(),
+                        measuring = measuring,
+                    ),
+                ),
             )
         }
 
@@ -135,7 +151,11 @@ class RingViewModel(
                     session.state, session.deviceStatus.state, session.liveMeasure.state, session.keepalive.problem, session.sync.state,
                 ) { link, status, live, problem, sync ->
                     LinkParts(link, status, live, problem, session.link.ring.name, sync)
-                }
+                }.combine(
+                    combine(session.syncRecords.entries, session.syncRecords.stored, session.link.info) { log, stored, info ->
+                        Triple(log, stored, info.firmware.version.takeIf(String::isNotEmpty))
+                    },
+                ) { parts, (log, stored, firmware) -> parts.copy(log = log, stored = stored, firmware = firmware) }
             }
         }
         sessions?.reconnectRemembered()
@@ -235,5 +255,8 @@ class RingViewModel(
         val problem: KeepaliveProblem? = null,
         val ringName: String? = null,
         val sync: SyncState? = null,
+        val log: List<SyncLogEntry> = emptyList(),
+        val stored: StoredData? = null,
+        val firmware: String? = null,
     )
 }

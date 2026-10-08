@@ -118,7 +118,7 @@ class SyncTracerEndToEndTest {
             assertEquals(2, w.ring.events.count { it.what == "commit returned" })
             assertEquals(12, w.blobs.loadEpochArchive(TEST_RING_ID).records.size)
             assertEquals(samplesAfterFirst, local.samples(MetricKind.HEART_RATE, from, to))
-            assertEquals("0 records · complete", w.viewModel.uiState.value.ringData.lastSync)
+            assertEquals("Up to date", w.viewModel.uiState.value.ringData.lastSync)
         } finally {
             w.db.close()
         }

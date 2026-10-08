@@ -3,6 +3,7 @@ package io.github.opencircuit.app.sync
 import io.github.opencircuit.ringkit.CommitPlanner
 import io.github.opencircuit.ringkit.HistoryChannelOutcome
 import io.github.opencircuit.ringkit.HistoryCommitGate
+import io.github.opencircuit.store.SyncLogEntry
 import java.time.Instant
 
 /**
@@ -37,6 +38,18 @@ interface HistoryStore {
         keepGoing: () -> Boolean = { true },
         evidence: SyncEvidence = SyncEvidence.NONE,
     ): CommitResult
+
+    /** The ring's sync log, oldest entry first (PORTING.md D-273); empty when there is none. Throws when it cannot be read. */
+    suspend fun syncLog(): List<SyncLogEntry> = emptyList()
+
+    /** Adds [entry] to the ring's sync log, which keeps the last 50; throws when it could not be written. */
+    suspend fun appendSyncLog(entry: SyncLogEntry, now: Instant) {}
+
+    /**
+     * What is stored on this phone, for the Ring data card: the stored samples' range, the nights
+     * and the latest night; null when nothing is kept. Throws when it cannot be read.
+     */
+    suspend fun storedData(): StoredData? = null
 
     companion object {
         /**
@@ -111,3 +124,17 @@ data class CommitResult(
      */
     val stagingFault: String? = null,
 )
+
+/** What the store holds, for the Ring data card. Times only, never a value. */
+data class StoredData(
+    /** The oldest and newest stored sample of the history's kinds (heart rate, HRV, SpO₂, breathing); null when none is stored. */
+    val oldest: Instant?,
+    val newest: Instant?,
+    /** Nights stored. */
+    val nights: Int,
+    /** The latest stored night; null when none is. */
+    val lastNight: StoredLastNight?,
+)
+
+/** A stored night as the card shows it: asleep at [onset], awake at [wake], [asleepMinutes] asleep. */
+data class StoredLastNight(val onset: Instant, val wake: Instant, val asleepMinutes: Int)

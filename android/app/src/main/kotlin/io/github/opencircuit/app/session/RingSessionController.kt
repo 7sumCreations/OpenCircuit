@@ -5,6 +5,7 @@ import io.github.opencircuit.app.ring.DeviceStatusModel
 import io.github.opencircuit.app.sync.HistoryDrainController
 import io.github.opencircuit.app.sync.HistoryPages
 import io.github.opencircuit.app.sync.SessionHistory
+import io.github.opencircuit.app.sync.SyncRecords
 import io.github.opencircuit.app.sync.SyncTriggers
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
@@ -72,7 +73,15 @@ class RingSessionController(
     private val statusQueries = StatusQueries(monotonicMillis)
 
     /** The history frames: each page stored, then acknowledged; the sync answer and end report passed to the drain. */
-    val historyPages = HistoryPages(history.store, link::acknowledge, scope, history.wallClock, log)
+    val historyPages = HistoryPages(history.store, link::acknowledge, scope, history.wallClock, log, monotonicMillis)
+
+    /** The sync log and what is stored, kept across launches: read at the session's start, written after each sync. */
+    val syncRecords = SyncRecords(
+        store = history.store,
+        zone = history.zone,
+        firmware = { link.info.value.firmware.version.takeIf(String::isNotEmpty) },
+        log = log,
+    )
 
     /** Sync now: drains the ring's history into the store, then disconnects when the switch says so. Never during a measure. */
     val sync: HistoryDrainController = HistoryDrainController(
@@ -88,6 +97,7 @@ class RingSessionController(
         isMeasuring = { liveMeasure.isMeasuring.value },
         awaitStatusQuiet = statusQueries::awaitQuiet,
         nightWindow = { triggers?.nightWindow()?.window },
+        record = syncRecords::record,
     )
 
     /**
@@ -157,6 +167,7 @@ class RingSessionController(
     fun start() {
         if (!started.compareAndSet(false, true)) return
         scope.launch { link.frames.collect { dispatcher.dispatch(it) } }
+        scope.launch { syncRecords.load() }
         keepalive.start()
         triggers?.start()
         scope.launch {

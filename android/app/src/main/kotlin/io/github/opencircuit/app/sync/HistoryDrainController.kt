@@ -17,6 +17,7 @@ import io.github.opencircuit.ringkit.HistoryChannelOutcome
 import io.github.opencircuit.ringkit.HistoryChannelTrace
 import io.github.opencircuit.ringkit.HistoryChannelVerdict
 import io.github.opencircuit.ringkit.HistoryDrainPlan
+import io.github.opencircuit.ringkit.SyncMeasurement
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
@@ -102,7 +103,20 @@ data class ChannelReport(
     val statusReplies: Int,
     /** The highest counter of the `0x4c` records this channel delivered, or null when none came. */
     val lastCounter: Long? = null,
+    /** The lowest counter of the `0x4c` records this channel delivered, or null when none came. */
+    val firstCounter: Long? = null,
+    /** The gaps between consecutive pages of each round, in arrival order (monotonic milliseconds). */
+    val pageGapsMillis: List<Long> = emptyList(),
+    /** For each page stored and acknowledged: from the start of its journal write to its acknowledgement written. */
+    val ackLatenciesMillis: List<Long> = emptyList(),
+    /** Each `0x4c` page, in arrival order: its newest record's counter and how many records it added. */
+    val pages: List<PageSeen> = emptyList(),
+    /** The charge markers in this channel's `0x50` end reports. */
+    val chargeMarkers: List<Instant> = emptyList(),
 )
+
+/** One `0x4c` page as a channel saw it: its [newest] record's counter and the records it [added] that the sync had not had yet. */
+data class PageSeen(val newest: Long, val added: Int)
 
 /** One finished sync, as the Ring data card shows it. */
 data class SyncReport(
@@ -125,6 +139,12 @@ data class SyncReport(
     val faults: Set<SyncFault> = emptySet(),
     /** The app was left during the sync and paused it ([HistoryDrainController.pause]): it is unfinished, and coming back resumes it. */
     val paused: Boolean = false,
+    /** When the sync started. */
+    val startedAt: Instant = finishedAt,
+    /** The channels the sync planned to drain, by label, in order (a channel it never reached is not in [channels]). */
+    val planned: List<String> = emptyList(),
+    /** The distinct `0x4c` record counters the sync delivered, over every channel. */
+    val counters: Set<Long> = emptySet(),
 )
 
 /** A fault a sync reports beside its outcome. */
@@ -211,6 +231,12 @@ class HistoryDrainController(
      * automatic syncs in this session): every sleep-vitals record another channel delivers counts.
      */
     private val nightWindow: suspend () -> DateInterval? = { null },
+    /**
+     * Keeps each finished sync's report (the sync log, [SyncRecords.record]); called before the
+     * report is published, so the card never shows a result its log does not have. A failure is
+     * logged, never thrown: the sync's data is stored either way.
+     */
+    private val record: suspend (SyncReport) -> Unit = {},
 ) {
     private val stateFlow = MutableStateFlow(SyncState())
     private val syncingFlow = MutableStateFlow(false)
@@ -261,6 +287,13 @@ class HistoryDrainController(
                 throw e
             }
             tally.compareAndSet(teardowns, null)
+            try {
+                record(report)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("The sync's log entry could not be kept: ${e::class.java.simpleName}")
+            }
             stateFlow.update { SyncState(syncing = false, pagesThisSync = it.pagesThisSync, last = report) }
             syncingFlow.value = false
             // The user came back while the pause was finishing.
@@ -315,15 +348,16 @@ class HistoryDrainController(
     }
 
     private suspend fun sync(teardowns: MutableStateFlow<List<LinkTeardown>>): SyncReport {
-        val plan = HistoryDrainPlan.steps(inBackground = false, allDayOnly = false, sportEnabled = false, now = wallClock(), nightWindowEnd = null)
+        val startedAt = wallClock()
+        val plan = HistoryDrainPlan.steps(inBackground = false, allDayOnly = false, sportEnabled = false, now = startedAt, nightWindowEnd = null)
         if (link.state.value != LinkState.Authenticated) {
             connect()
             // A pause ends the wait as well: nothing was asked of the ring yet.
             val up = withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) {
                 combine(link.state, pauseRequested) { state, paused -> state == LinkState.Authenticated || paused }.first { it }
             }
-            if (up == null) return commitAndReport(SyncOutcome.NOT_CONNECTED, emptyList(), plan, teardowns, linkWasUp = false)
-            if (link.state.value != LinkState.Authenticated) return commitAndReport(SyncOutcome.PARTIAL, emptyList(), plan, teardowns, linkWasUp = false)
+            if (up == null) return commitAndReport(SyncOutcome.NOT_CONNECTED, emptyList(), plan, teardowns, linkWasUp = false, startedAt = startedAt)
+            if (link.state.value != LinkState.Authenticated) return commitAndReport(SyncOutcome.PARTIAL, emptyList(), plan, teardowns, linkWasUp = false, startedAt = startedAt)
         }
         awaitStatusQuiet()
         val run = SyncRun(deadline = monotonicMillis() + AndroidDrainTiming.WHOLE_SYNC.toMillis(), window = nightWindow())
@@ -360,7 +394,10 @@ class HistoryDrainController(
         }
         val sleep = run.reports.firstOrNull { it.channel == Command.SYNC_CHANNEL_SLEEP }
         val evidence = SyncEvidence(sleep?.verdict, sleep?.records ?: 0, run.nightOnOtherChannels.size)
-        return commitAndReport(run.outcome(plan.size), run.reports, plan, teardowns, linkWasUp = true, evidence = evidence)
+        return commitAndReport(
+            run.outcome(plan.size), run.reports, plan, teardowns, linkWasUp = true, evidence = evidence,
+            startedAt = startedAt, counters = run.counters.toSet(),
+        )
     }
 
     /** One channel: rounds until one ends without earning a reopen. */
@@ -430,6 +467,7 @@ class HistoryDrainController(
         var nudgesThisRound = 0
         var uniqueAtLastNudge = -1
         var fellBack = false
+        var lastPageAt: Long? = null
 
         while (true) {
             val deadline = when {
@@ -471,6 +509,9 @@ class HistoryDrainController(
                         sawPages = true
                         quietFrom = now
                         if (fellBack) channel.fallbackHelped = true
+                        lastPageAt?.let { channel.pageGaps += now - it }
+                        lastPageAt = now
+                        signal.ackLatencyMillis?.let { channel.ackLatencies += it }
                         val added = signal.counters.count { run.counters.add(it) }
                         // Only those inside the night window count (upstream RingSession.swift:3757-3765): an
                         // afternoon's SpO₂ epoch shares the layout. With no window every one counts, as isNightRecord.
@@ -481,7 +522,11 @@ class HistoryDrainController(
                         }
                         stateFlow.update { it.copy(pagesThisSync = it.pagesThisSync + 1) }
                         if (signal.opcode == PAGE_4C) {
-                            signal.counters.maxOrNull()?.let { newest -> channel.lastCounter = maxOf(channel.lastCounter ?: newest, newest) }
+                            signal.counters.maxOrNull()?.let { newest ->
+                                channel.lastCounter = maxOf(channel.lastCounter ?: newest, newest)
+                                channel.pages += PageSeen(newest, added)
+                            }
+                            signal.counters.minOrNull()?.let { oldest -> channel.firstCounter = minOf(channel.firstCounter ?: oldest, oldest) }
                             channel.onEpochPage(signal.countdown, added, now)
                             publish(channel)
                         }
@@ -493,6 +538,7 @@ class HistoryDrainController(
                         } else {
                             trace.noteOpcode(END_OF_HISTORY)
                             trace.endMarkerCount++
+                            channel.chargeMarkers += SyncMeasurement.chargeMarkers(signal.frame)
                             return finish(HistoryChannelExitReason.END_MARKER)
                         }
                     }
@@ -600,6 +646,8 @@ class HistoryDrainController(
         teardowns: MutableStateFlow<List<LinkTeardown>>,
         linkWasUp: Boolean,
         evidence: SyncEvidence = SyncEvidence.NONE,
+        startedAt: Instant,
+        counters: Set<Long> = emptySet(),
     ): SyncReport {
         // A paused sync's commit starts no transaction 5 s after the pause, inside Android's
         // 10 s cached-app freeze delay; what is left stays stored for the resumed sync.
@@ -642,6 +690,9 @@ class HistoryDrainController(
             undeliveredFrames = undelivered,
             faults = if (undelivered > 0) setOf(SyncFault.UNDELIVERED_FRAMES) else emptySet(),
             paused = pauseRequested.value,
+            startedAt = startedAt,
+            planned = plan.map { it.label },
+            counters = counters,
         )
     }
 
@@ -705,6 +756,11 @@ class HistoryDrainController(
         var records = 0
         var statusReplies = 0
         var lastCounter: Long? = null
+        var firstCounter: Long? = null
+        val pageGaps = mutableListOf<Long>()
+        val ackLatencies = mutableListOf<Long>()
+        val pages = mutableListOf<PageSeen>()
+        val chargeMarkers = mutableListOf<Instant>()
         var done = false
         private var firstPageAt: Long? = null
         private var firstPageRecords = 0
@@ -742,6 +798,11 @@ class HistoryDrainController(
             records = records,
             statusReplies = statusReplies,
             lastCounter = lastCounter,
+            firstCounter = firstCounter,
+            pageGapsMillis = pageGaps.toList(),
+            ackLatenciesMillis = ackLatencies.toList(),
+            pages = pages.toList(),
+            chargeMarkers = chargeMarkers.distinct().sorted(),
         )
     }
 

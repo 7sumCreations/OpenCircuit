@@ -32,6 +32,7 @@ class AppContainerHistoryWiringTest {
         assertTrue("storedNights = { learningNights(database.await()) }" in source)
         assertTrue("marks = PrefsSyncMarks(keyValues, ringId)" in source)
         // The night is the phone's local one, read at each evaluation (a zone change takes effect).
-        assertEquals(2, Regex("""zone = \{ ZoneId\.systemDefault\(\) \}""").findAll(source).count(), "the store's zone and the triggers' zone")
+        // So are the sync log's local days (the session history's own zone).
+        assertEquals(3, Regex("""zone = \{ ZoneId\.systemDefault\(\) \}""").findAll(source).count(), "the store's, the triggers' and the sync log's zone")
     }
 }

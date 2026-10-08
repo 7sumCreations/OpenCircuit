@@ -37,7 +37,7 @@ class UndeliveredFramesFaultTest {
             assertEquals(SyncOutcome.COMPLETE, report.outcome, "what came is stored: the outcome is unchanged")
             assertEquals(2, report.undeliveredFrames)
             assertEquals(setOf(SyncFault.UNDELIVERED_FRAMES), report.faults)
-            assertEquals("Some data from the ring wasn't read — sync again", w.viewModel.uiState.value.ringData.problem)
+            assertEquals("2 frames from the ring weren't read — sync again", w.viewModel.uiState.value.ringData.problem)
         } finally {
             w.db.close()
         }
