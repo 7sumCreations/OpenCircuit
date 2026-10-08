@@ -49,11 +49,11 @@ class SingleCollectorTest {
         controller.connect()
         controller.connect()
         runCurrent()
-        link.emitFrame(TestFrames.historyPage4c)
+        link.emitFrame(TestFrames.unknown)
         runCurrent()
 
         assertEquals(2, link.connectCalls)
-        assertEquals(mapOf(0x4c to 1), controller.dispatcher.counts.value.unhandled, "each frame routed once")
+        assertEquals(mapOf(0xee to 1), controller.dispatcher.counts.value.unhandled, "each frame routed once")
     }
 
     @Test
@@ -89,15 +89,15 @@ class SingleCollectorTest {
     fun aThrowingHandlerDoesNotEndTheCollection() = runTest {
         val link = FakeRingLink(ring)
         val controller = RingSessionController(link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it })
-        controller.dispatcher.register(0x4c) { throw IllegalStateException("a page handler bug") }
+        controller.dispatcher.register(0xee) { throw IllegalStateException("a handler bug") }
         controller.start()
         runCurrent()
 
-        link.emitFrame(TestFrames.historyPage4c)
+        link.emitFrame(TestFrames.unknown)
         link.emitFrame(TestFrames.wornDescriptor)
         runCurrent()
 
         assertEquals(66, controller.deviceStatus.state.value.batteryPercent, "the frame after the failure arrived")
-        assertEquals(mapOf(0x4c to 1), controller.dispatcher.counts.value.handlerFailures)
+        assertEquals(mapOf(0xee to 1), controller.dispatcher.counts.value.handlerFailures)
     }
 }

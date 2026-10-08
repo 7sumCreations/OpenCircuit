@@ -5,6 +5,7 @@ import androidx.room3.useWriterConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlin.coroutines.CoroutineContext
 
 /**
  * The one way to open the store. Each target adds its entry points (a file or in-memory database
@@ -25,10 +26,13 @@ object StoreFactory {
      * instead of inside the first write. On failure the handle is closed and the error rethrown (a
      * failure to close is suppressed on it, never thrown instead); nothing is deleted.
      */
-    internal suspend fun openWith(builder: RoomDatabase.Builder<StoreDatabase>): StoreDatabase {
+    internal suspend fun openWith(
+        builder: RoomDatabase.Builder<StoreDatabase>,
+        queryContext: CoroutineContext = Dispatchers.IO,
+    ): StoreDatabase {
         val db = builder
             .setDriver(BundledSQLiteDriver())
-            .setQueryCoroutineContext(Dispatchers.IO)
+            .setQueryCoroutineContext(queryContext)
             .build()
         closeOnFailure(close = db::close) {
             db.useWriterConnection { connection -> connection.usePrepared("PRAGMA user_version") { it.step() } }

@@ -2,6 +2,9 @@ package io.github.opencircuit.app.session
 
 import io.github.opencircuit.app.live.LiveMeasureController
 import io.github.opencircuit.app.ring.DeviceStatusModel
+import io.github.opencircuit.app.sync.HistoryDrainController
+import io.github.opencircuit.app.sync.HistoryPages
+import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
 import io.github.opencircuit.ble.RingLink
@@ -47,6 +50,8 @@ class RingSessionController(
     /** Monotonic milliseconds (never jumps with the wall clock); virtual time in tests. */
     monotonicMillis: () -> Long,
     log: (String) -> Unit,
+    /** Where the ring's history is kept; without one every page is refused and stays on the ring. */
+    history: SessionHistory = SessionHistory.NONE,
 ) {
     /** Routes every frame; register a handler here to receive an opcode. */
     val dispatcher = FrameDispatcher(log)
@@ -64,6 +69,21 @@ class RingSessionController(
         linkState = link.state,
         isMeasuring = liveMeasure.isMeasuring,
         batteryReadings = { deviceStatus.state.value.batteryReadings },
+        log = log,
+    )
+
+    /** The history frames: each page stored, then acknowledged; the sync answer and end report passed to the drain. */
+    val historyPages = HistoryPages(history.store, link::acknowledge, scope, history.wallClock, log)
+
+    /** Sync now: drains the ring's history into the store, then disconnects when the switch says so. */
+    val sync = HistoryDrainController(
+        link = link,
+        connect = ::connect,
+        pages = historyPages,
+        store = history.store,
+        wallClock = history.wallClock,
+        disconnectAfterSync = history.disconnectAfterSync,
+        scope = scope,
         log = log,
     )
 
@@ -87,6 +107,8 @@ class RingSessionController(
         dispatcher.register(MODE_REPLY, liveMeasure::onModeReply)
         dispatcher.ignore(HEARTBEAT)
         dispatcher.ignore(STATUS_REPLY)
+        // Here, at construction: routes are fixed by the first frame dispatched.
+        HistoryPages.OPCODES.forEach { dispatcher.register(it, historyPages::onFrame) }
     }
 
     /** Starts the collections. Calling it again does nothing: the session collects each flow once. */

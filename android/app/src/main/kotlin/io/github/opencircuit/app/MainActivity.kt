@@ -74,6 +74,8 @@ class MainActivity : ComponentActivity() {
                     connectFlow,
                     container.adapterStates.state,
                     container.detailsSources,
+                    prefs = container.appPrefs,
+                    wallClock = { java.time.Instant.ofEpochMilli(container.clock.nowMillis()) },
                 )
             }
         }

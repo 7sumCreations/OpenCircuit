@@ -34,11 +34,18 @@ sealed interface RingAction {
 
     /** Tapped Copy on Connection details: the masked text goes to the clipboard. */
     data object CopyDetails : RingAction
+
+    /** Tapped Sync now on the Ring data card. */
+    data object SyncNow : RingAction
+
+    /** Turned the Ring data card's "Disconnect after syncing" switch [on] or off. */
+    data class SetDisconnectAfterSync(val on: Boolean) : RingAction
 }
 
 /**
- * The Ring screen: the connection card (link state and battery), then — once the ring is
- * authenticated — the Measure section, then Connection details (in every build). Takes its whole state as a value so it renders the same
+ * The Ring screen: the connection card (link state and battery), the Ring data card (last sync,
+ * Sync now, the switch), then — once the ring is authenticated — the Measure section, then
+ * Connection details (in every build). Takes its whole state as a value so it renders the same
  * from the app or from a hand-built state in a test. [pulse] animates the live chart's endpoint;
  * the app turns it off when the system asks for reduced motion, tests turn it off.
  */
@@ -54,6 +61,11 @@ fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Mod
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ConnectionCard(state.card, onAction = { onAction(RingAction.Link(it)) }, onPick = { onAction(RingAction.Pick(it)) })
+            RingDataCard(
+                state.ringData,
+                onSyncNow = { onAction(RingAction.SyncNow) },
+                onDisconnectAfterSync = { onAction(RingAction.SetDisconnectAfterSync(it)) },
+            )
             state.measure?.let { measure ->
                 MeasureSection(
                     measure = measure,

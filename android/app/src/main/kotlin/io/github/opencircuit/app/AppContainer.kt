@@ -10,18 +10,29 @@ import io.github.opencircuit.app.connect.RingScannerFactory
 import io.github.opencircuit.app.data.AppPrefs
 import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.data.PrefsRememberedRingStore
+import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.details.DetailsSources
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.RingSessions
+import io.github.opencircuit.app.sync.SessionHistory
+import io.github.opencircuit.app.sync.StoreHistory
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.RingScanner
 import io.github.opencircuit.ble.ScanDiagnostics
+import io.github.opencircuit.store.StoreDatabase
+import io.github.opencircuit.store.StoreFactory
+import io.github.opencircuit.store.open
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import java.time.Instant
+import java.time.ZoneId
 
 /** Wall-clock time in milliseconds; a seam so tests can supply virtual time. */
 fun interface Clock {
@@ -51,6 +62,14 @@ class AppContainer(context: Context) {
 
     /** Process-lifetime scope for the sessions' frame and teardown collections. */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * The on-device database: one for the app, opened on first use and kept for the process. If
+     * it cannot be opened, every history page is refused (never acknowledged), so the ring keeps
+     * them until a later run can store them.
+     */
+    private val database: Deferred<StoreDatabase> =
+        appScope.async(start = CoroutineStart.LAZY) { StoreFactory.open(context.applicationContext) }
 
     /**
      * Links to a ring over the phone's Bluetooth (`:ble`'s Android factory). In debug builds the
@@ -85,7 +104,7 @@ class AppContainer(context: Context) {
         rings = rememberedRings,
         companion = companionPairing,
         scope = appScope,
-        newSession = { link, scope -> RingSessionController(link, scope, monotonicMillis, log) },
+        newSession = { link, scope -> RingSessionController(link, scope, monotonicMillis, log, history = historyFor(link)) },
         log = log,
     )
 
@@ -110,6 +129,20 @@ class AppContainer(context: Context) {
 
     /** The Ring screen's title; debug builds say when the ring is the demo. */
     val ringTitle: String = "Ring" + VariantLinks.titleSuffix
+
+    /**
+     * Where [link]'s session keeps the ring's history: the app's one database, the ring keyed by
+     * its address, the phone's wall clock and time zone, and the "Disconnect after syncing" switch.
+     */
+    private fun historyFor(link: RingLink): SessionHistory = SessionHistory(
+        store = StoreHistory(
+            database = { database.await() },
+            ringId = RingAddress.normalized(link.ring.address) ?: link.ring.address,
+            zone = { ZoneId.systemDefault() },
+        ),
+        wallClock = { Instant.ofEpochMilli(clock.nowMillis()) },
+        disconnectAfterSync = { appPrefs.disconnectAfterSync },
+    )
 
     private companion object {
         const val LOG_TAG = "OpenCircuit"
