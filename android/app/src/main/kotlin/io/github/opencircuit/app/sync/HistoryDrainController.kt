@@ -7,6 +7,7 @@ import io.github.opencircuit.ringkit.AndroidDrainTiming
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.DrainBudget
 import io.github.opencircuit.ringkit.DrainContinuation
+import io.github.opencircuit.ringkit.DrainProgress
 import io.github.opencircuit.ringkit.HistoryChannelExitReason
 import io.github.opencircuit.ringkit.HistoryChannelOutcome
 import io.github.opencircuit.ringkit.HistoryChannelTrace
@@ -106,6 +107,20 @@ data class SyncReport(
     val channels: List<ChannelReport> = emptyList(),
 )
 
+/**
+ * How far one channel of the running sync has come ([io.github.opencircuit.ringkit.DrainProgress]):
+ * [records] new `0x4c` records so far, [expected] that plus the latest page's countdown (null
+ * before a page), [etaSeconds] at the record rate since the channel's first page (null until a
+ * second page), [done] once the channel has ended.
+ */
+data class ChannelProgress(
+    val label: String,
+    val records: Int,
+    val expected: Int?,
+    val etaSeconds: Long?,
+    val done: Boolean,
+)
+
 /** The sync's state for the screen. */
 data class SyncState(
     /** A sync is running. */
@@ -114,6 +129,8 @@ data class SyncState(
     val pagesThisSync: Int = 0,
     /** The last sync that finished in this session, or null before the first. */
     val last: SyncReport? = null,
+    /** The running sync's channels so far, in order; empty when no sync runs. */
+    val channels: List<ChannelProgress> = emptyList(),
 )
 
 /**
@@ -182,7 +199,7 @@ class HistoryDrainController(
         var started = false
         stateFlow.update { current ->
             started = !current.syncing
-            if (started) current.copy(syncing = true, pagesThisSync = 0) else current
+            if (started) current.copy(syncing = true, pagesThisSync = 0, channels = emptyList()) else current
         }
         if (!started) return false
         syncingFlow.value = true
@@ -190,7 +207,7 @@ class HistoryDrainController(
             val report = try {
                 sync()
             } catch (e: CancellationException) {
-                stateFlow.update { it.copy(syncing = false) }
+                stateFlow.update { it.copy(syncing = false, channels = emptyList()) }
                 syncingFlow.value = false
                 throw e
             }
@@ -236,7 +253,8 @@ class HistoryDrainController(
 
     /** One channel: rounds until one ends without earning a reopen. */
     private suspend fun drainChannel(step: HistoryDrainPlan.Step, signals: Channel<HistorySignal>, run: SyncRun): ChannelReport {
-        val channel = ChannelRun(step)
+        val channel = ChannelRun(step, index = stateFlow.value.channels.size)
+        stateFlow.update { it.copy(channels = it.channels + channel.progress()) }
         var round = 0
         while (true) {
             val before = run.counters.size
@@ -255,7 +273,16 @@ class HistoryDrainController(
             if (!reopen) break
             round++
         }
+        channel.done = true
+        publish(channel)
         return channel.report()
+    }
+
+    /** Puts [channel]'s progress on the screen's state. */
+    private fun publish(channel: ChannelRun) {
+        stateFlow.update { state ->
+            state.copy(channels = state.channels.mapIndexed { i, p -> if (i == channel.index) channel.progress() else p })
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -333,8 +360,11 @@ class HistoryDrainController(
                         quietFrom = now
                         if (fellBack) channel.fallbackHelped = true
                         val added = signal.counters.count { run.counters.add(it) }
-                        if (signal.opcode == PAGE_4C) channel.onSleepPage(signal.countdown, added)
                         stateFlow.update { it.copy(pagesThisSync = it.pagesThisSync + 1) }
+                        if (signal.opcode == PAGE_4C) {
+                            channel.onEpochPage(signal.countdown, added, now)
+                            publish(channel)
+                        }
                     }
                     is HistorySignal.EndOfHistory -> {
                         // Before this round's 0x82 a 0x50 is the ring's answer to a status query.
@@ -478,7 +508,7 @@ class HistoryDrainController(
     }
 
     /** What one channel has seen over its rounds. Touched only by the sync's own coroutine. */
-    private class ChannelRun(val step: HistoryDrainPlan.Step) {
+    private class ChannelRun(val step: HistoryDrainPlan.Step, val index: Int) {
         val rounds = mutableListOf<HistoryChannelTrace>()
         val syncAcks = mutableListOf<String>()
         var openFallback = OpenFallback.NONE
@@ -487,13 +517,28 @@ class HistoryDrainController(
         var lastCountdown: Int? = null
         var records = 0
         var statusReplies = 0
+        var done = false
+        private var firstPageAt: Long? = null
+        private var firstPageRecords = 0
+        private var lastPageAt = 0L
 
-        fun onSleepPage(countdown: Int?, added: Int) {
+        /** A `0x4c` page with [added] new records and its [countdown] arrived at monotonic [at]. */
+        fun onEpochPage(countdown: Int?, added: Int, at: Long) {
             records += added
+            if (firstPageAt == null) {
+                firstPageAt = at
+                firstPageRecords = added
+            }
+            lastPageAt = at
             if (countdown != null) {
                 if (firstCountdown == null) firstCountdown = countdown
                 lastCountdown = countdown
             }
+        }
+
+        fun progress(): ChannelProgress {
+            val estimate = DrainProgress.of(records, lastCountdown, firstPageRecords, firstPageAt ?: lastPageAt, lastPageAt)
+            return ChannelProgress(step.label, records, estimate.expected, estimate.etaSeconds, done)
         }
 
         fun report() = ChannelReport(

@@ -1,5 +1,6 @@
 package io.github.opencircuit.app.ring
 
+import io.github.opencircuit.app.sync.ChannelProgress
 import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.app.sync.SyncState
 import java.time.Duration
@@ -22,6 +23,8 @@ data class RingDataUi(
     val syncLabel: String = SYNC_NOW,
     /** Why Sync now cannot be tapped right now (a live measure runs); null when nothing blocks it. */
     val syncBlockedBy: String? = null,
+    /** While a sync runs, one line per channel so far ("Sleep channel done · 18 records"); empty otherwise. */
+    val progress: List<String> = emptyList(),
     /** The "Disconnect after syncing" switch. */
     val disconnectAfterSync: Boolean = true,
     /** The help line under the switch. */
@@ -52,6 +55,7 @@ object RingDataPresenter {
                 syncLabel = SYNCING,
                 disconnectAfterSync = disconnectAfterSync,
                 help = if (disconnectAfterSync) KEEP_OPEN_THEN_DISCONNECT else KEEP_OPEN,
+                progress = sync.channels.map(::progressLine),
             )
         }
         val last = sync.last
@@ -63,6 +67,26 @@ object RingDataPresenter {
             syncBlockedBy = if (measuring) STOP_MEASURING_TO_SYNC else null,
             disconnectAfterSync = disconnectAfterSync,
         )
+    }
+
+    /**
+     * One channel's line while a sync runs: "Sleep channel done · 18 records", "All-day channel
+     * 120 of 723 records · about 6 min left", or "… N records so far" before a countdown is known.
+     */
+    internal fun progressLine(p: ChannelProgress): String {
+        val name = when (p.label) {
+            "sleep" -> "Sleep channel"
+            "all-day" -> "All-day channel"
+            else -> "Channel ${p.label}"
+        }
+        if (p.done) return "$name done · ${count(p.records)} records"
+        val expected = p.expected ?: return "$name ${count(p.records)} records so far"
+        val left = when (val eta = p.etaSeconds) {
+            null -> ""
+            in 0 until 60 -> " · less than a minute left"
+            else -> " · about ${(eta + 59) / 60} min left"
+        }
+        return "$name ${count(p.records)} of ${count(expected)} records$left"
     }
 
     private fun outcomeWords(outcome: SyncOutcome): String = when (outcome) {

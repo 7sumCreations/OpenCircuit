@@ -41,6 +41,7 @@ fun RingDataCard(
                 // Announced when it changes ("Syncing…" → "Last synced just now").
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
+            ui.progress.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
             ui.lastSync?.let { DataRow(label = "Last sync", value = it) }
             ui.problem?.let {
                 Text(
