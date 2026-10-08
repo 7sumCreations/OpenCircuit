@@ -1079,6 +1079,38 @@ flow through the existing `BulkSleep` decode → Apple Health (same schema, no n
 staging by the `latestNightRecords` overnight gate. The on-device `byte[6]` sweep (`DataSyncProbe`,
 `sweepAllDayStreams`) is **removed** — superseded by this finding.
 
+#### 5.6.2 The history drain as OpenCircuit Android does it — 🟡 Android, unverified on ring
+**Confidence: 🟡 for every row below — built and tested against a ring-faithful fake on the JVM and
+the emulator's demo ring; the owner's first real-ring sync (release 0.2.0) re-tags each row
+"Android-verified" or corrects it.** Where it differs from the iOS app, `android/PORTING.md` names
+the row.
+
+| Step | What the Android app does | Tag / source |
+|---|---|---|
+| Before the first open | The keepalive `d0 00 00` is paused for the whole sync; the first open waits until the status query `:ble` writes after its auth reply (and any keepalive query) is answered by `0x10` / `0x87` / `0x50`, or 2 s | 🟡 Android, unverified on ring (D-266) |
+| Open | `02 00 <now, sync-epoch seconds BE4> <channel> 01 00`, then exactly 300 ms later `07 00 00`. **No `01 00 00` before it** — the iOS app sends one (`RingSession.swift:3939`); live SpO₂ already works without it (§2.1) | 🟡 Android, unverified on ring (D-262) |
+| Channels | `0x00` (sleep) then `0x03` (all-day), every sync; sport `0x02` is not opened | 🟢 channels (§5.6.1) · order 🟡 |
+| No answer | Neither `0x82` nor a page within 5 s of the open: the link runs the ring's auth again once per sync (`:ble` writes `01 00 00` and answers the challenge) and the open is sent again; nothing 20 s after the open ends the channel "the ring didn't answer" (NO_ACK), link kept | 🟡 Android, unverified on ring (D-264) |
+| `0x82` | `82 <b1> <b2> <xor>`: `[2]` is the ACK flag, `[1] = ff` means nothing to send (`82 ff 00 7d`) | 🟢 layout (iOS `RingSession.swift:4610-4635`) |
+| Pages | Each `0x4c` / `0x47` / `0x4d` page is written to the phone's history journal FIRST and only then acknowledged (`cc 00 00` / `c7 00 00` / `cd 00 00`); the ring sends the next page only after the acknowledgement. A page that could not be stored is never acknowledged. An acknowledgement is written only for a page the same connection delivered — the ACK bytes carry no page identity | 🟡 Android, unverified on ring (D-261) |
+| Countdown | Bytes 1–2 of a page header are a 16-bit big-endian count of records still queued (§3) — the progress shown while syncing | 🟡 third-party capture (D-259) |
+| `0x50` | The end of the channel only after this channel's `0x82`; a `0x50` before it is the answer to a status query (§4) | 🟡 Android, unverified on ring (D-266) |
+| End of a round | `0x50` after `0x82`; 6 s after `82 ff`; 20 s after an answered open with no page; 6 s of quiet after a page (one `07 00 00` nudge first); a round still receiving pages runs 45 s, extended 45 s at a time up to 3,600 s; a round that added records and went quiet is reopened, up to 12 times; the whole sync stops at 90 min | 🟡 Android-tuned values, re-check on the first real trace (D-265, D-34) |
+| Pages outside a sync | A page that arrives with no sync running is stored and acknowledged the same way; the next commit takes it | 🟡 Android, unverified on ring (D-261) |
+| Commit | Records are stored only up to the least-drained channel (a channel that told the sync nothing holds every record back), oldest first in transactions of at most 5,000 records; held-back pages stay journaled for the next sync | 🟡 Android, unverified on ring (D-267) |
+| Disconnect | With "Disconnect after syncing" on, the link closes only after the commit returned and no page is still being stored or acknowledged (at most 2 s) | 🟡 Android, unverified on ring (D-268) |
+| Pointer after ACK | Expected: the ring moves its resume pointer only on an acknowledgement, so a page cut by a teardown is offered again (the next sync's continuity reads OVERLAP or CONTIGUOUS, never GAP) | 🟡 GB 4a386317 observed it; unverified with this app |
+
+**What the first real-ring sync records.** Connection details' **Sync log** (Copy masks the address)
+holds, per channel, every `0x82` byte for byte, whether the re-auth fallback ran and helped, the
+first and last countdown, pages by opcode, records, first and last record time, exit reason, whether
+the `0x50` came, rounds, duration, page gap p50 / max and acknowledgement latency p50 / p95; per sync
+the oldest and newest record, records per local day, the `0x50` charge markers, continuity against
+the previous sync (±60 s), and a capacity verdict — OVERWRITES_OLDEST / STOPS_WHEN_FULL / a lower
+bound / inconclusive with its reason (fewer than half of 576 records a day over the span is
+inconclusive). These are the numbers that turn the rows above green, answer the ring's storage
+capacity and overwrite-vs-stop, and re-check the D-34 drain constants and the D-43 channel verdicts.
+
 ### 5.7 `0x81` — status replies (← `0x01`)
 **`81 00 XX YY`** (← `01 00 00`): `[2]` is the only varying byte, full 8-bit range,
 >100 → **not battery %** 🟢; a **per-session token / nonce** 🟡 (issue #4 — see confirmation below).
