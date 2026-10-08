@@ -71,6 +71,7 @@ object RingDataPresenter {
         SyncOutcome.SAVE_FAILED, SyncOutcome.COMMIT_FAILED -> "Couldn't save — will retry"
         SyncOutcome.NOT_CONNECTED -> "Couldn't reach the ring — try again"
         SyncOutcome.OPEN_FAILED -> "The ring link refused the sync — try again"
+        SyncOutcome.NO_ACK -> "The ring didn't answer the sync request"
     }
 
     /** "just now", "5 min ago", "3 h ago", "1 day ago", "2 days ago". A time ahead of [now] reads "just now". */

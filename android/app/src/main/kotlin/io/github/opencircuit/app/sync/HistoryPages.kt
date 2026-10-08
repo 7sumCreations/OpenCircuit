@@ -1,6 +1,7 @@
 package io.github.opencircuit.app.sync
 
 import io.github.opencircuit.ble.SendResult
+import io.github.opencircuit.ringkit.BulkSleep
 import io.github.opencircuit.ringkit.EpochRecord
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -16,8 +17,12 @@ import kotlin.coroutines.cancellation.CancellationException
 
 /** What a running drain hears from the history routes, in the order the ring sent it. */
 sealed interface HistorySignal {
-    /** A page is stored and acknowledged; [countdown] is the records the ring says are still queued after it. */
-    data class PageStored(val opcode: Int, val countdown: Int?) : HistorySignal
+    /**
+     * A page is stored and acknowledged; [countdown] is the records the ring says are still queued
+     * after it (16 bits, `0x47` / `0x4c` only), and [counters] the counters of the `0x4c` records it
+     * held (empty for any other page), so a drain counts unique records, not pages.
+     */
+    data class PageStored(val opcode: Int, val countdown: Int?, val counters: List<Long> = emptyList()) : HistorySignal
 
     /** The ring's `0x82` answer to the sync open (its bytes are kept for the trace). */
     class SyncAck(frame: ByteArray) : HistorySignal {
@@ -34,6 +39,9 @@ sealed interface HistorySignal {
 
     /** A stored page's acknowledgement was refused or failed: the ring keeps it and offers it again. */
     data class AckFailed(val result: SendResult) : HistorySignal
+
+    /** The link left `Authenticated` while the drain ran (raised by the drain itself, never by the routes). */
+    data object LinkDown : HistorySignal
 }
 
 /** The history routes' counts for this session. Counts only, never a page. */
@@ -130,7 +138,8 @@ class HistoryPages(
                 countsFlow.update {
                     it.copy(acknowledged = it.acknowledged + 1, outsideDrain = it.outsideDrain + if (arrival.drainId == null) 1 else 0)
                 }
-                signal(arrival, HistorySignal.PageStored(opcode, EpochRecord.remainingRecordCountdown(page)))
+                val counters = if (opcode == PAGE_4C) BulkSleep.recordsFromPage(page).map { it.counter } else emptyList()
+                signal(arrival, HistorySignal.PageStored(opcode, EpochRecord.remainingRecordCountdown(page), counters))
             }
             else -> {
                 countsFlow.update { it.copy(ackFailures = it.ackFailures + 1) }
@@ -150,6 +159,7 @@ class HistoryPages(
         /** The frames this handler is registered for. */
         val OPCODES: List<Int> = listOf(0x47, 0x4C, 0x4D, 0x82, 0x50)
 
+        private const val PAGE_4C = 0x4C
         private const val SYNC_ACK = 0x82
         private const val END_OF_HISTORY = 0x50
     }

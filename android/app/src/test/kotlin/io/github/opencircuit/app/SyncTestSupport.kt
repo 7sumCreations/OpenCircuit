@@ -13,9 +13,11 @@ import io.github.opencircuit.store.HistoryJournal
 import io.github.opencircuit.store.StoreDatabase
 import io.github.opencircuit.store.StoreFactory
 import io.github.opencircuit.store.openInMemory
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import java.time.Instant
+import java.util.concurrent.CopyOnWriteArrayList
 import java.time.ZoneOffset
 
 /** The wall clock of every sync test: 2026-10-08T09:00:00Z at virtual time 0. */
@@ -52,6 +54,8 @@ internal class SyncWorld(
     val prefs: PrefsAppPrefs,
     val session: RingSessionController,
     val viewModel: RingViewModel,
+    /** Every line the session logged, in order. */
+    val logs: List<String>,
 ) {
     val journal = HistoryJournal(db)
     val blobs = BlobStore(db)
@@ -64,21 +68,27 @@ internal class SyncWorld(
 internal suspend fun TestScope.syncWorld(
     sleepPages: List<ByteArray>,
     endOfHistory: ByteArray? = RingFake.END_OF_HISTORY,
-): SyncWorld {
+): SyncWorld = syncWorld { scope, now ->
+    RingFake(scope, now, mapOf(Command.SYNC_CHANNEL_SLEEP to sleepPages), endOfHistory = endOfHistory)
+}
+
+/** As [syncWorld], with the ring fake built by [makeRing] on the test's background scope and virtual clock. */
+internal suspend fun TestScope.syncWorld(makeRing: (CoroutineScope, () -> Long) -> RingFake): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
     // moves virtual time on (the drain's quiet timer would otherwise race the store).
     val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
     val wall = { SYNC_TEST_EPOCH.plusMillis(testScheduler.currentTime) }
-    val ring = RingFake(backgroundScope, { testScheduler.currentTime }, mapOf(Command.SYNC_CHANNEL_SLEEP to sleepPages), endOfHistory = endOfHistory)
+    val ring = makeRing(backgroundScope) { testScheduler.currentTime }
     val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { ZoneOffset.UTC }), ring::note)
     val prefs = PrefsAppPrefs(InMemoryKeyValues())
+    val logs = CopyOnWriteArrayList<String>()
     val session = RingSessionController(
         ring,
         backgroundScope,
         monotonicMillis = { testScheduler.currentTime },
-        log = {},
+        log = { logs += it },
         history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }),
     )
     val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, prefs = prefs, wallClock = wall)
-    return SyncWorld(db, ring, store, prefs, session, viewModel)
+    return SyncWorld(db, ring, store, prefs, session, viewModel, logs)
 }

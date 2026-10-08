@@ -82,6 +82,7 @@ class RingSessionController(
         pages = historyPages,
         store = history.store,
         wallClock = history.wallClock,
+        monotonicMillis = monotonicMillis,
         disconnectAfterSync = history.disconnectAfterSync,
         scope = scope,
         log = log,

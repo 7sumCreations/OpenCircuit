@@ -28,9 +28,34 @@ internal object HistoryTestPages {
      * Page [index] (0-based) of a [count]-page backlog: the real page's records moved
      * `index × 6` epochs later, header countdown = the records still queued after this page.
      */
-    fun sleepPage(index: Int, count: Int): ByteArray {
-        val shift = index * RECORDS_PER_PAGE * EPOCH_SECONDS
-        val queuedAfter = (count - 1 - index) * RECORDS_PER_PAGE
+    fun sleepPage(index: Int, count: Int): ByteArray = page(index, queuedAfter = (count - 1 - index) * RECORDS_PER_PAGE, firstEpoch = 0)
+
+    /**
+     * The real `0x47` page `47 00 00 0c 65 86 3a 02 9f 00 30 3c` (upstream's truncated optical
+     * page, the `:ble` tests' `ppgPage47Truncated`): a sensor page the drain acknowledges and counts.
+     */
+    val PPG_PAGE: ByteArray get() = hex("4700000c65863a029f00303c")
+
+    /** The epoch (records after the real page's first) where the all-day backlog starts: past any sleep backlog here. */
+    private const val ALL_DAY_FIRST_EPOCH = 600
+
+    /** Page [index] of a [count]-page all-day (`0x03`) backlog: records of their own, after every sleep page's. */
+    fun allDayPage(index: Int, count: Int): ByteArray =
+        page(index, queuedAfter = (count - 1 - index) * RECORDS_PER_PAGE, firstEpoch = ALL_DAY_FIRST_EPOCH)
+
+    /** The counters of all-day page [index]. */
+    fun allDayCounters(index: Int): List<Long> = REAL_COUNTERS.map { it + (ALL_DAY_FIRST_EPOCH + index * RECORDS_PER_PAGE) * EPOCH_SECONDS }
+
+    /** A [count]-page all-day backlog, oldest first. */
+    fun allDayBacklog(count: Int): List<ByteArray> = (0 until count).map { allDayPage(it, count) }
+
+    /**
+     * Page [index] with its header countdown set to [queuedAfter] (16 bits, bytes 1–2) and its
+     * records moved `firstEpoch + index × 6` epochs later than the real page's.
+     */
+    fun page(index: Int, queuedAfter: Int, firstEpoch: Int): ByteArray {
+        require(queuedAfter in 0..0xFFFF)
+        val shift = (firstEpoch + index * RECORDS_PER_PAGE) * EPOCH_SECONDS
         val body = ArrayList<Byte>()
         body += 0x4C.toByte()
         body += ((queuedAfter ushr 8) and 0xFF).toByte()

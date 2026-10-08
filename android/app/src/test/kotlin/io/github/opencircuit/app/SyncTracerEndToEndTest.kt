@@ -114,7 +114,7 @@ class SyncTracerEndToEndTest {
             w.viewModel.onAction(RingAction.SyncNow)
             advanceTo(120_000)
 
-            assertEquals(2, w.ring.writes.count { it.hex.startsWith("02") }, "two opens")
+            assertEquals(4, w.ring.writes.count { it.hex.startsWith("02") }, "two opens per sync: sleep, then all-day")
             assertEquals(2, w.ring.events.count { it.what == "commit returned" })
             assertEquals(12, w.blobs.loadEpochArchive(TEST_RING_ID).records.size)
             assertEquals(samplesAfterFirst, local.samples(MetricKind.HEART_RATE, from, to))
