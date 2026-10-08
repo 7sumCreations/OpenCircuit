@@ -40,8 +40,10 @@ import kotlin.time.TimeSource
  * operation waits for the previous one's answer (PORTING.md D-184), for at most its own timeout
  * (PORTING.md D-185).
  *
- * Once data flows: every `0x47` / `0x4c` / `0x4d` page and `0x11` heartbeat is acknowledged once,
- * in arrival order, on the link lane, ahead of any waiting feature write (PORTING.md D-190);
+ * Once data flows: every `0x11` heartbeat is acknowledged once, in arrival order, on the link
+ * lane, ahead of any waiting feature write (PORTING.md D-190); a `0x47` / `0x4c` / `0x4d` history
+ * page is acknowledged on the same lane only when the app asks, through [acknowledge], once it has
+ * stored the page (PORTING.md D-261);
  * every `81 00` challenge is answered, held until the MAC is settled (PORTING.md D-188); every
  * frame but that challenge waits for the one collector of [frames] in a per-connection buffer
  * whose leftovers a teardown counts (PORTING.md D-189); and [send] refuses what the ring must not get
@@ -67,6 +69,7 @@ internal class LinkCore(
 
     private val inbox = Channel<LinkEvent>(Channel.UNLIMITED) { undelivered ->
         if (undelivered is LinkEvent.Send) undelivered.reply.complete(SendResult.Failed(SendFailure.LINK_LOST))
+        if (undelivered is LinkEvent.Acknowledge) undelivered.reply.complete(SendResult.Failed(SendFailure.LINK_LOST))
     }
     private val loopDispatcher = loopDispatcherFor(scope)
     private val stateFlow = MutableStateFlow<LinkState>(LinkState.Idle)
@@ -91,6 +94,9 @@ internal class LinkCore(
 
     /** Challenges that arrived before the MAC was settled, in arrival order (PORTING.md D-188). */
     private val heldChallenges = mutableListOf<Int>()
+
+    /** History pages this connection delivered that nobody acknowledged yet, in arrival order (copies). */
+    private val pendingPages = ArrayDeque<ByteArray>()
 
     /** The user asked for a connection: `connect()` and no `disconnect()` since. */
     private var wanted = false
@@ -184,6 +190,21 @@ internal class LinkCore(
         }
     }
 
+    override suspend fun acknowledge(page: ByteArray): SendResult {
+        if (page.isEmpty() || pageAckFor(page.u8(0)) == null) return SendResult.Refused(RefusalReason.NOT_A_PAGE)
+        val reply = CompletableDeferred<SendResult>()
+        if (inbox.trySend(LinkEvent.Acknowledge(page.copyOf(), reply)).isFailure) {
+            return SendResult.Failed(SendFailure.LINK_LOST)
+        }
+        return try {
+            reply.await()
+        } catch (e: CancellationException) {
+            // As for send: an acknowledgement still waiting is dropped, never written.
+            reply.cancel()
+            throw e
+        }
+    }
+
     override fun connect() {
         inbox.trySend(LinkEvent.Connect)
     }
@@ -207,6 +228,7 @@ internal class LinkCore(
             LinkEvent.Connect -> onConnectAsked()
             LinkEvent.Disconnect -> onDisconnectAsked()
             is LinkEvent.Send -> sendFeature(event)
+            is LinkEvent.Acknowledge -> acknowledgePage(event)
             is LinkEvent.Gatt -> onGatt(event.event)
             is LinkEvent.TimerFired -> onTimer(event)
             is LinkEvent.AdapterChanged -> onAdapter(event.state)
@@ -297,6 +319,7 @@ internal class LinkCore(
         mac = null
         macSettled = false
         heldChallenges.clear()
+        pendingPages.clear()
         // The model name is the ring's advertised name, as upstream RingSession.swift:930.
         infoFlow.value = LinkInfo(firmware = FirmwareInfo(modelName = ring.name.orEmpty()), mac = addressMac?.let(::formatMac))
         stateFlow.value = if (standingConnection) LinkState.WaitingForRing else LinkState.Connecting
@@ -310,6 +333,21 @@ internal class LinkCore(
             return
         }
         queue.add(GattOp.Write(event.command, Purpose.FEATURE, event.reply))
+    }
+
+    /**
+     * Writes the acknowledgement of [event]'s page on the link lane, if this connection delivered
+     * that page and it is not acknowledged yet (the oldest such copy is taken, PORTING.md D-261);
+     * otherwise refuses and writes nothing.
+     */
+    private fun acknowledgePage(event: LinkEvent.Acknowledge) {
+        val index = pendingPages.indexOfFirst { it.contentEquals(event.page) }
+        if (session == null || index < 0) {
+            event.reply.complete(SendResult.Refused(RefusalReason.PAGE_NOT_PENDING))
+            return
+        }
+        pendingPages.removeAt(index)
+        queue.add(GattOp.Write(checkNotNull(pageAckFor(event.page.u8(0))), Purpose.ACK, event.reply))
     }
 
     /** Submits waiting operations; the queue hands out the next one only when none is in flight. */
@@ -561,9 +599,12 @@ internal class LinkCore(
             answerChallenge(frame.u8(2)) // the link's own exchange: never delivered
             return
         }
-        // Acknowledged by its opcode alone, whatever it holds (a page that fails its checksum
-        // too): the ring waits for this before its next page (RingSession.swift:5130-5249).
-        ackFor(frame.u8(0))?.let { queue.add(GattOp.Write(it, Purpose.ACK)) }
+        // The heartbeat is answered here, whatever it holds. A history page is NOT: the ring waits
+        // for its acknowledgement before the next page and drops the page once it has it, so only
+        // the app, after storing the page, acknowledges it (acknowledge(), PORTING.md D-261).
+        // Upstream acknowledged every page on receipt (RingSession.swift:5130-5249).
+        if (frame.u8(0) == HEARTBEAT) queue.add(GattOp.Write(Command.heartbeatAck, Purpose.ACK))
+        if (pageAckFor(frame.u8(0)) != null) pendingPages.addLast(frame.copyOf())
         if (frame.u8(0) != 0x81) onDataFrame()
         frameBuffer.add(frame)
     }
@@ -731,10 +772,18 @@ internal class LinkCore(
         cancelTimer(LinkTimer.EARLY_DROP)
         closePort()
         session = null
-        // The buffer is per connection: what its collector never took is dropped and counted.
+        // The buffer is per connection: what its collector never took is dropped and counted. So
+        // are the pages nobody acknowledged: the ring keeps them and offers them again.
         val undelivered = frameBuffer.clear()
-        if (connected) teardownBuffer.add(LinkTeardown(reason, undelivered))
-        if (noted) note("closed", if (connected) "${reason.rawValue}, $undelivered undelivered frames" else reason.rawValue)
+        val unacknowledged = pendingPages.size
+        pendingPages.clear()
+        if (connected) teardownBuffer.add(LinkTeardown(reason, undelivered, unacknowledged))
+        if (noted) {
+            note(
+                "closed",
+                if (connected) "${reason.rawValue}, $undelivered undelivered frames, $unacknowledged pages unacknowledged" else reason.rawValue,
+            )
+        }
         connected = false
         awaitingBond = false
     }
@@ -753,7 +802,9 @@ internal class LinkCore(
             session = null
             queue.clear().forEach { (it as? GattOp.Write)?.reply?.complete(SendResult.Failed(SendFailure.LINK_LOST)) }
             val undelivered = frameBuffer.clear()
-            if (connected) teardownBuffer.add(LinkTeardown(TeardownReason.USER_DISCONNECTED, undelivered))
+            val unacknowledged = pendingPages.size
+            pendingPages.clear()
+            if (connected) teardownBuffer.add(LinkTeardown(TeardownReason.USER_DISCONNECTED, undelivered, unacknowledged))
             connected = false
         }
         stateFlow.value = LinkState.Idle
@@ -919,11 +970,16 @@ private val GattOp.isBringUpStep: Boolean
 /** `00002a23-…` → `2a23`: the characteristic's number, never its value. */
 private val GattPort.Characteristic.shortName: String get() = uuid.substringBefore('-').takeLast(4)
 
-/** The acknowledgement the ring waits for after a frame with [opcode], or null when it waits for none. */
-private fun ackFor(opcode: Int): ByteArray? = when (opcode) {
+/** The ring's `0x11` heartbeat, which the link answers itself with `91 00 00`. */
+private const val HEARTBEAT = 0x11
+
+/**
+ * The acknowledgement the ring waits for after a history page with [opcode], or null when
+ * [opcode] is not a page. Written only through [RingLink.acknowledge].
+ */
+private fun pageAckFor(opcode: Int): ByteArray? = when (opcode) {
     0x47 -> Command.pageAck47
     0x4C -> Command.pageAck4C
     0x4D -> Command.pageAck4D
-    0x11 -> Command.heartbeatAck
     else -> null
 }

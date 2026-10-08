@@ -37,6 +37,21 @@ interface RingLink {
      */
     suspend fun send(command: ByteArray): SendResult
 
+    /**
+     * Tells the ring that [page], a history page (`0x47`, `0x4c` or `0x4d`) this link delivered on
+     * [frames], is stored: the link writes its acknowledgement (`c7` / `cc` / `cd 00 00`), ahead
+     * of waiting [send] writes, and the ring moves on to its next page. The link never
+     * acknowledges a page by itself (only the `0x11` heartbeat): a page with an acknowledgement is
+     * gone from the ring for good, so call this only once the page is durably stored.
+     *
+     * Written only for a page the CURRENT connection delivered and nobody acknowledged yet, matched
+     * by its bytes: anything else is refused with [RefusalReason.PAGE_NOT_PENDING] and nothing is
+     * written (an acknowledgement names no page, so one meant for a torn-down connection's page
+     * would acknowledge whatever the ring offers now). A frame of any other opcode is refused with
+     * [RefusalReason.NOT_A_PAGE]. Never throws.
+     */
+    suspend fun acknowledge(page: ByteArray): SendResult
+
     /** Starts connecting (no scan: by the ring's address). Does nothing while already connecting or connected. */
     fun connect()
 

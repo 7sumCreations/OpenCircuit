@@ -28,6 +28,10 @@ class FakeRingLink(override val ring: RememberedRing) : RingLink, LinkDiagnostic
     private val scriptedResults = ConcurrentLinkedQueue<SendResult>()
     private val connects = AtomicInteger()
     private val disconnects = AtomicInteger()
+    private val pendingPages = ArrayList<ByteArray>()
+    private val acknowledgedPages = CopyOnWriteArrayList<ByteArray>()
+    private val refusedAcks = CopyOnWriteArrayList<RefusalReason>()
+    private val scriptedAcks = ConcurrentLinkedQueue<SendResult>()
 
     override val state: StateFlow<LinkState> = stateFlow.asStateFlow()
     override val info: StateFlow<LinkInfo> = infoFlow.asStateFlow()
@@ -60,15 +64,60 @@ class FakeRingLink(override val ring: RememberedRing) : RingLink, LinkDiagnostic
         infoFlow.value = value
     }
 
-    /** The ring sends [frame]: it is queued for the collector of [frames] (a copy). */
+    /**
+     * The ring sends [frame]: it is queued for the collector of [frames] (a copy). A history page
+     * (`0x47` / `0x4c` / `0x4d`) waits for [acknowledge], as on the real link.
+     */
     fun emitFrame(frame: ByteArray) {
+        if (isPage(frame)) synchronized(pendingPages) { pendingPages += frame.copyOf() }
         frameBuffer.add(frame.copyOf())
     }
 
-    /** A connection is torn down: [teardown] is queued for the collector of [teardowns]. */
+    /**
+     * A connection is torn down: [teardown] is queued for the collector of [teardowns], and the
+     * pages it delivered can no longer be acknowledged (the real link refuses them from now on).
+     */
     fun emitTeardown(teardown: LinkTeardown) {
+        synchronized(pendingPages) { pendingPages.clear() }
         teardownBuffer.add(teardown)
     }
+
+    /** Every page passed to [acknowledge] and written, in order (copies); never mixed into [sent]. */
+    val acknowledged: List<ByteArray> get() = acknowledgedPages.map { it.copyOf() }
+
+    /** Every call to [acknowledge] that was refused, with its reason, in order. */
+    val refusedAcknowledgements: List<RefusalReason> get() = refusedAcks.toList()
+
+    /** The next calls to [acknowledge] of a pending page answer with [results], in order; after them, [SendResult.Sent]. */
+    fun answerAcknowledgesWith(vararg results: SendResult) {
+        scriptedAcks.addAll(results)
+    }
+
+    /**
+     * As the real link: [SendResult.Refused] with [RefusalReason.NOT_A_PAGE] for any other opcode,
+     * with [RefusalReason.PAGE_NOT_PENDING] for a page this connection did not deliver or already
+     * acknowledged; otherwise the scripted answer, recorded in [acknowledged] when it is `Sent`.
+     */
+    override suspend fun acknowledge(page: ByteArray): SendResult {
+        if (!isPage(page)) return refuse(RefusalReason.NOT_A_PAGE)
+        val taken = synchronized(pendingPages) {
+            val index = pendingPages.indexOfFirst { it.contentEquals(page) }
+            if (index >= 0) pendingPages.removeAt(index)
+            index >= 0
+        }
+        if (!taken) return refuse(RefusalReason.PAGE_NOT_PENDING)
+        val result = scriptedAcks.poll() ?: SendResult.Sent
+        if (result == SendResult.Sent) acknowledgedPages += page.copyOf()
+        return result
+    }
+
+    private fun refuse(reason: RefusalReason): SendResult {
+        refusedAcks += reason
+        return SendResult.Refused(reason)
+    }
+
+    private fun isPage(frame: ByteArray): Boolean =
+        frame.isNotEmpty() && (frame[0].toInt() and 0xFF) in PAGE_OPCODES
 
     /** The next calls to [send] answer with [results], in order; after them, [SendResult.Sent]. */
     fun answerSendsWith(vararg results: SendResult) {
@@ -86,5 +135,10 @@ class FakeRingLink(override val ring: RememberedRing) : RingLink, LinkDiagnostic
 
     override fun disconnect() {
         disconnects.incrementAndGet()
+    }
+
+    private companion object {
+        /** The history pages the ring waits on an acknowledgement for. */
+        val PAGE_OPCODES = setOf(0x47, 0x4C, 0x4D)
     }
 }

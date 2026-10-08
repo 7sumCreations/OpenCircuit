@@ -17,6 +17,9 @@ internal sealed interface LinkEvent {
     /** A feature write; [command] is already the link's own copy. */
     class Send(val command: ByteArray, val reply: CompletableDeferred<SendResult>) : LinkEvent
 
+    /** The app stored history [page] (already the link's own copy) and asks for its acknowledgement. */
+    class Acknowledge(val page: ByteArray, val reply: CompletableDeferred<SendResult>) : LinkEvent
+
     /** A timer of the link ran out. [ticket] tells it from a timer that was cancelled or replaced since. */
     class TimerFired(val timer: LinkTimer, val ticket: Any) : LinkEvent
 

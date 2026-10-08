@@ -147,4 +147,35 @@ class FakeRingLinkTest {
         assertEquals(2, link.connectCalls)
         assertEquals(1, link.disconnectCalls)
     }
+
+    @Test
+    fun acknowledgeKeepsTheRealLinksRulesAndIsRecordedApartFromSend() = runTest {
+        val link = FakeRingLink(Fixtures.ring)
+        link.emitFrame(Fixtures.sleepPage4c)
+        link.emitFrame(Fixtures.descriptor10)
+
+        val results = listOf(
+            link.acknowledge(Fixtures.descriptor10), // not a page
+            link.acknowledge(Fixtures.ppgPage47Truncated), // a page never emitted
+            link.acknowledge(Fixtures.sleepPage4c), // the emitted page
+            link.acknowledge(Fixtures.sleepPage4c), // a second time
+        )
+        link.emitFrame(Fixtures.sleepPage4c)
+        link.emitTeardown(LinkTeardown(HistoryDrainPlan.TeardownReason.LINK_DROPPED, undeliveredFrames = 0))
+        val afterTeardown = link.acknowledge(Fixtures.sleepPage4c) // a page of the torn-down connection
+
+        assertEquals(
+            listOf(
+                SendResult.Refused(RefusalReason.NOT_A_PAGE),
+                SendResult.Refused(RefusalReason.PAGE_NOT_PENDING),
+                SendResult.Sent,
+                SendResult.Refused(RefusalReason.PAGE_NOT_PENDING),
+            ),
+            results,
+        )
+        assertEquals(SendResult.Refused(RefusalReason.PAGE_NOT_PENDING), afterTeardown)
+        assertEquals(1, link.acknowledged.size)
+        assertContentEquals(Fixtures.sleepPage4c, link.acknowledged.single())
+        assertEquals(emptyList(), link.sent, "an acknowledgement is not a send")
+    }
 }

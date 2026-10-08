@@ -75,6 +75,9 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
     private var pollsSinceEntry = 0
     private var valueIndex = 0
 
+    // History pages sent on this connection and not acknowledged yet. Guarded by `this`.
+    private val pendingPages = ArrayList<ByteArray>()
+
     override suspend fun send(command: ByteArray): SendResult = when {
         isReservedAuthCommand(command) -> SendResult.Refused(RefusalReason.AUTH_COMMAND_RESERVED)
         stateFlow.value != LinkState.Authenticated -> SendResult.Refused(RefusalReason.NOT_AUTHENTICATED)
@@ -82,6 +85,19 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
             answerLive(command)
             SendResult.Sent
         }
+    }
+
+    /**
+     * As the real link: a frame that is not a history page is refused with `NOT_A_PAGE`; a page
+     * this connection did not send, or already acknowledged, with `PAGE_NOT_PENDING`.
+     */
+    override suspend fun acknowledge(page: ByteArray): SendResult = synchronized(this) {
+        val opcode = if (page.isEmpty()) -1 else page[0].toInt() and 0xFF
+        if (opcode !in PAGE_OPCODES) return SendResult.Refused(RefusalReason.NOT_A_PAGE)
+        val index = pendingPages.indexOfFirst { it.contentEquals(page) }
+        if (index < 0) return SendResult.Refused(RefusalReason.PAGE_NOT_PENDING)
+        pendingPages.removeAt(index)
+        SendResult.Sent
     }
 
     @Synchronized
@@ -145,7 +161,9 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
         pollsSinceEntry = 0
         stateFlow.value = LinkState.Idle
         infoFlow.value = LinkInfo()
-        teardownChannel.trySend(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 0))
+        val unacknowledged = pendingPages.size
+        pendingPages.clear()
+        teardownChannel.trySend(LinkTeardown(TeardownReason.USER_DISCONNECTED, undeliveredFrames = 0, pagesUnacknowledged = unacknowledged))
         note("disconnected", "by the user")
     }
 
@@ -172,6 +190,9 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
 
         private const val HEART_RATE_MODE = 0x01
         private const val SPO2_MODE = 0x02
+
+        /** The history pages the ring waits on an acknowledgement for. */
+        private val PAGE_OPCODES = setOf(0x47, 0x4C, 0x4D)
 
         /** Polls answered with the warm-up sentinel after each entry (PROTOCOL.md §5.1). */
         private const val WARM_UP_POLLS = 2

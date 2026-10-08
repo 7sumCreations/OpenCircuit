@@ -137,7 +137,10 @@ private fun KeepaliveProblem.words(): String = when (this) {
     is KeepaliveProblem.Refused -> when (reason) {
         RefusalReason.NOT_AUTHENTICATED -> "the ring isn't connected"
         RefusalReason.NOT_BONDED -> "this phone isn't paired with the ring"
-        RefusalReason.AUTH_COMMAND_RESERVED, RefusalReason.HISTORY_UNSAFE -> "the ring link refused it"
+        // NOT_A_PAGE / PAGE_NOT_PENDING answer only an acknowledgement, never a keepalive.
+        RefusalReason.AUTH_COMMAND_RESERVED, RefusalReason.HISTORY_UNSAFE,
+        RefusalReason.NOT_A_PAGE, RefusalReason.PAGE_NOT_PENDING,
+        -> "the ring link refused it"
     }
     is KeepaliveProblem.Failed -> "the ring stopped answering"
 }

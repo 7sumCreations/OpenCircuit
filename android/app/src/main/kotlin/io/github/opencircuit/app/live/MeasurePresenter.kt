@@ -64,7 +64,10 @@ fun MeasureFailure.message(): String = when (this) {
     is MeasureFailure.CommandRefused -> when (reason) {
         RefusalReason.NOT_AUTHENTICATED -> "Couldn't measure — the ring isn't connected."
         RefusalReason.NOT_BONDED -> "Couldn't measure — this phone isn't paired with the ring."
-        RefusalReason.AUTH_COMMAND_RESERVED, RefusalReason.HISTORY_UNSAFE ->
+        // NOT_A_PAGE / PAGE_NOT_PENDING answer only an acknowledgement, never a measure's write.
+        RefusalReason.AUTH_COMMAND_RESERVED, RefusalReason.HISTORY_UNSAFE,
+        RefusalReason.NOT_A_PAGE, RefusalReason.PAGE_NOT_PENDING,
+        ->
             "Couldn't measure — the ring link refused the command."
     }
     is MeasureFailure.CommandFailed -> "Measurement stopped — the ring stopped answering."
