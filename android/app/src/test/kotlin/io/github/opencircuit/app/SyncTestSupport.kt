@@ -1,6 +1,13 @@
 package io.github.opencircuit.app
 
 import io.github.opencircuit.app.data.PrefsAppPrefs
+import io.github.opencircuit.app.data.PrefsSyncMarks
+import io.github.opencircuit.app.sync.SyncTriggerSources
+import io.github.opencircuit.app.sync.learningNights
+import io.github.opencircuit.ringkit.SleepStaging
+import io.github.opencircuit.store.SleepStore
+import java.time.Duration
+import java.time.ZoneId
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.sync.CommitResult
@@ -93,23 +100,78 @@ internal suspend fun TestScope.syncWorld(
 internal suspend fun TestScope.syncWorld(
     chunkRecords: Int = CommitPlanner.CHUNK_RECORDS,
     insideChunk: suspend (Int) -> Unit = {},
+    /** Build the automatic syncs too, as the app does; off for the tests that drive Sync now alone. */
+    triggers: Boolean = false,
+    /** The app's preferences file (share one between two worlds for a relaunch). */
+    keyValues: InMemoryKeyValues = InMemoryKeyValues(),
+    /** The phone's time zone. */
+    zone: ZoneId = ZoneOffset.UTC,
+    /** The wall clock at virtual time 0. */
+    wallStart: Instant = SYNC_TEST_EPOCH,
     makeRing: (CoroutineScope, () -> Long) -> RingFake,
 ): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
     // moves virtual time on (the drain's quiet timer would otherwise race the store).
     val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
-    val wall = { SYNC_TEST_EPOCH.plusMillis(testScheduler.currentTime) }
+    val wall = { wallStart.plusMillis(testScheduler.currentTime) }
     val ring = makeRing(backgroundScope) { testScheduler.currentTime }
-    val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { ZoneOffset.UTC }, chunkRecords, insideChunk), ring::note)
-    val prefs = PrefsAppPrefs(InMemoryKeyValues())
+    val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { zone }, chunkRecords, insideChunk), ring::note)
+    val prefs = PrefsAppPrefs(keyValues)
     val logs = CopyOnWriteArrayList<String>()
+    // As the app's AppContainer.historyFor: the store's latest nights, the ring's marks in the preferences.
+    val sources = if (triggers) {
+        SyncTriggerSources(
+            zone = { zone },
+            storedNights = { learningNights(db) },
+            marks = PrefsSyncMarks(keyValues, TEST_RING_ID),
+        )
+    } else {
+        null
+    }
     val session = RingSessionController(
         ring,
         backgroundScope,
         monotonicMillis = { testScheduler.currentTime },
         log = { logs += it },
-        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }),
+        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources),
     )
     val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, prefs = prefs, wallClock = wall)
     return SyncWorld(db, ring, store, prefs, session, viewModel, logs)
 }
+
+/**
+ * Stores one night per (onset, wake) pair through the real sleep store, keyed at the wake day's
+ * local midnight in [zone] — as a staged night is.
+ */
+internal suspend fun SyncWorld.storeNights(zone: ZoneId, vararg nights: Pair<Instant, Instant>) {
+    val store = SleepStore(db)
+    for ((onset, wake) in nights) {
+        val inBed = Duration.between(onset, wake)
+        store.saveSleepSummary(
+            SleepStaging.Summary(inBed = inBed, awake = Duration.ZERO, light = inBed, deep = Duration.ZERO, rem = Duration.ZERO),
+            night = wake.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant(),
+            inBedStart = onset,
+            inBedEnd = wake,
+            sleepOnset = onset,
+            sleepWake = wake,
+            now = wake,
+            zone = zone,
+        )
+    }
+}
+
+/**
+ * When each sync opened the sleep channel's first round: the app's `02 00 <cursor> 00 01 00`
+ * writes, as the ring saw them. A sync that drains the channel in one round writes one.
+ */
+internal fun SyncWorld.sleepOpens(): List<Long> =
+    ring.writes.filter { it.hex.length == 18 && it.hex.startsWith("02") && it.hex.endsWith("000100") }.map { it.atMillis }
+
+/** A ring holding [pages] on the sleep channel and nothing on the all-day one; both end with `0x50`. */
+internal fun ringWith(pages: List<ByteArray>, endOfHistory: ByteArray? = RingFake.END_OF_HISTORY): (CoroutineScope, () -> Long) -> RingFake =
+    { scope, now ->
+        RingFake(scope, now, mapOf(Command.SYNC_CHANNEL_SLEEP to pages, Command.SYNC_CHANNEL_ALL_DAY to emptyList()), endOfHistory = endOfHistory)
+    }
+
+/** A worn `0x10` descriptor whose quarter-hour step bucket (`[4:6]`) holds 42 steps: the wearer is walking. */
+internal val walkingDescriptor: ByteArray get() = hex("10420200002a0140013e000000000fa100ff00")

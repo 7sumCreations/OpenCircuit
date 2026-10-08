@@ -7,6 +7,8 @@ import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.AndroidDrainTiming
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CommitPlanner
+import io.github.opencircuit.ringkit.DateInterval
+import io.github.opencircuit.ringkit.HistoryCommitGate
 import io.github.opencircuit.ringkit.DrainBudget
 import io.github.opencircuit.ringkit.DrainContinuation
 import io.github.opencircuit.ringkit.DrainProgress
@@ -204,6 +206,11 @@ class HistoryDrainController(
     private val isMeasuring: () -> Boolean = { false },
     /** Returns once no status query (`d0 00 00`) is waiting for its answer, or after at most 2 s. */
     private val awaitStatusQuiet: suspend () -> Unit = {},
+    /**
+     * The night window, resolved once at each sync's start ([SyncTriggers.nightWindow]); null (no
+     * automatic syncs in this session): every sleep-vitals record another channel delivers counts.
+     */
+    private val nightWindow: suspend () -> DateInterval? = { null },
 ) {
     private val stateFlow = MutableStateFlow(SyncState())
     private val syncingFlow = MutableStateFlow(false)
@@ -319,7 +326,7 @@ class HistoryDrainController(
             if (link.state.value != LinkState.Authenticated) return commitAndReport(SyncOutcome.PARTIAL, emptyList(), plan, teardowns, linkWasUp = false)
         }
         awaitStatusQuiet()
-        val run = SyncRun(deadline = monotonicMillis() + AndroidDrainTiming.WHOLE_SYNC.toMillis())
+        val run = SyncRun(deadline = monotonicMillis() + AndroidDrainTiming.WHOLE_SYNC.toMillis(), window = nightWindow())
         val drainId = wallClock().toEpochMilli()
         val signals = Channel<HistorySignal>(Channel.UNLIMITED)
         pages.attach(drainId) { signals.trySend(it) }
@@ -465,9 +472,13 @@ class HistoryDrainController(
                         quietFrom = now
                         if (fellBack) channel.fallbackHelped = true
                         val added = signal.counters.count { run.counters.add(it) }
-                        // Upstream counts only those inside the cached night window (RingSession.swift:3757-3765);
-                        // with no window resolved yet every one counts, as its isNightRecord does without one.
-                        if (step.channel != Command.SYNC_CHANNEL_SLEEP) run.nightOnOtherChannels += signal.nightCounters
+                        // Only those inside the night window count (upstream RingSession.swift:3757-3765): an
+                        // afternoon's SpO₂ epoch shares the layout. With no window every one counts, as isNightRecord.
+                        if (step.channel != Command.SYNC_CHANNEL_SLEEP) {
+                            run.nightOnOtherChannels += signal.nightCounters.filter { counter ->
+                                HistoryCommitGate.isNightRecord(Instant.ofEpochSecond(Command.SYNC_EPOCH + counter), run.window)
+                            }
+                        }
                         stateFlow.update { it.copy(pagesThisSync = it.pagesThisSync + 1) }
                         if (signal.opcode == PAGE_4C) {
                             signal.counters.maxOrNull()?.let { newest -> channel.lastCounter = maxOf(channel.lastCounter ?: newest, newest) }
@@ -657,7 +668,7 @@ class HistoryDrainController(
             "statusReplies=${channel.statusReplies}"
 
     /** What one sync has done so far. Touched only by the sync's own coroutine. */
-    private class SyncRun(val deadline: Long) {
+    private class SyncRun(val deadline: Long, val window: DateInterval?) {
         val counters = HashSet<Long>()
 
         /** Sleep-vitals records a channel other than the sleep channel delivered (a ring can hand it the night). */

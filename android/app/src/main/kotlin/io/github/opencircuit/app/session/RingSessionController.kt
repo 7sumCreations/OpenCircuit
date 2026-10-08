@@ -5,6 +5,7 @@ import io.github.opencircuit.app.ring.DeviceStatusModel
 import io.github.opencircuit.app.sync.HistoryDrainController
 import io.github.opencircuit.app.sync.HistoryPages
 import io.github.opencircuit.app.sync.SessionHistory
+import io.github.opencircuit.app.sync.SyncTriggers
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
 import io.github.opencircuit.ble.RingLink
@@ -86,7 +87,25 @@ class RingSessionController(
         log = log,
         isMeasuring = { liveMeasure.isMeasuring.value },
         awaitStatusQuiet = statusQueries::awaitQuiet,
+        nightWindow = { triggers?.nightWindow()?.window },
     )
+
+    /**
+     * The automatic syncs — on link-up, on the cadence while the link is held, the catch-up after
+     * the night — or null when the session was given nothing to drive them with (the E8 sessions).
+     */
+    val triggers: SyncTriggers? = history.triggers?.let { sources ->
+        SyncTriggers(
+            sync = sync,
+            linkState = link.state,
+            isMeasuring = liveMeasure.isMeasuring,
+            sources = sources,
+            wallClock = history.wallClock,
+            disconnectAfterSync = history.disconnectAfterSync,
+            scope = scope,
+            log = log,
+        )
+    }
 
     /** The idle `d0 00 00` keepalive and the status refresh after a measure; paused for a whole sync. */
     val keepalive = KeepaliveTicker(
@@ -117,8 +136,9 @@ class RingSessionController(
 
     init {
         // Descriptors and 0x50 frames also answer a status query (PROTOCOL.md §4).
-        dispatcher.register(DESCRIPTOR) { deviceStatus.onDescriptor(it); statusQueries.onAnswer() }
-        dispatcher.register(DESCRIPTOR_RESPONSE) { deviceStatus.onDescriptor(it); statusQueries.onAnswer() }
+        // A descriptor's step bucket can confirm the wearer is up, ending the night's quiet.
+        dispatcher.register(DESCRIPTOR) { deviceStatus.onDescriptor(it); statusQueries.onAnswer(); triggers?.onDescriptor(it) }
+        dispatcher.register(DESCRIPTOR_RESPONSE) { deviceStatus.onDescriptor(it); statusQueries.onAnswer(); triggers?.onDescriptor(it) }
         dispatcher.register(LIVE_SAMPLE, liveMeasure::onFrame)
         dispatcher.register(MODE_REPLY, liveMeasure::onModeReply)
         dispatcher.ignore(HEARTBEAT)
@@ -138,6 +158,7 @@ class RingSessionController(
         if (!started.compareAndSet(false, true)) return
         scope.launch { link.frames.collect { dispatcher.dispatch(it) } }
         keepalive.start()
+        triggers?.start()
         scope.launch {
             link.teardowns.collect { teardown ->
                 teardownsFlow.update {

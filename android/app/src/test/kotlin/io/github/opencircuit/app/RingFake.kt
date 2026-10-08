@@ -211,6 +211,9 @@ internal class RingFake(
         fake.emitFrame(page)
     }
 
+    /** The ring sends a `0x10` descriptor on its own (as it does every minute or so while worn). */
+    fun sendDescriptor(frame: ByteArray) = emit(frame, "descriptor")
+
     private fun emit(frame: ByteArray, what: String) {
         record("frame ${frame.toPlainHex()} ($what)")
         fake.emitFrame(frame)

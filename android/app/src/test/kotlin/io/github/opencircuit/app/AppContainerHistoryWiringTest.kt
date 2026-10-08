@@ -24,4 +24,14 @@ class AppContainerHistoryWiringTest {
         assertTrue("database = { database.await() }" in source)
         assertTrue("disconnectAfterSync = { appPrefs.disconnectAfterSync }" in source)
     }
+
+    @Test
+    fun everySessionGetsTheAutomaticSyncsOverTheSameDatabaseZoneAndRing() {
+        // Without these a session syncs only on Sync now: no link-up sync, no cadence, no catch-up.
+        assertEquals(1, Regex("""triggers = SyncTriggerSources\(""").findAll(source).count())
+        assertTrue("storedNights = { learningNights(database.await()) }" in source)
+        assertTrue("marks = PrefsSyncMarks(keyValues, ringId)" in source)
+        // The night is the phone's local one, read at each evaluation (a zone change takes effect).
+        assertEquals(2, Regex("""zone = \{ ZoneId\.systemDefault\(\) \}""").findAll(source).count(), "the store's zone and the triggers' zone")
+    }
 }

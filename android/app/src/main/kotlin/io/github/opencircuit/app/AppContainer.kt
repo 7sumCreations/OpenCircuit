@@ -10,6 +10,7 @@ import io.github.opencircuit.app.connect.RingScannerFactory
 import io.github.opencircuit.app.data.AppPrefs
 import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.data.PrefsRememberedRingStore
+import io.github.opencircuit.app.data.PrefsSyncMarks
 import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
@@ -18,6 +19,8 @@ import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.RingSessions
 import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.app.sync.StoreHistory
+import io.github.opencircuit.app.sync.SyncTriggerSources
+import io.github.opencircuit.app.sync.learningNights
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.RingScanner
@@ -134,15 +137,24 @@ class AppContainer(context: Context) {
      * Where [link]'s session keeps the ring's history: the app's one database, the ring keyed by
      * its address, the phone's wall clock and time zone, and the "Disconnect after syncing" switch.
      */
-    private fun historyFor(link: RingLink): SessionHistory = SessionHistory(
-        store = StoreHistory(
-            database = { database.await() },
-            ringId = RingAddress.normalized(link.ring.address) ?: link.ring.address,
-            zone = { ZoneId.systemDefault() },
-        ),
-        wallClock = { Instant.ofEpochMilli(clock.nowMillis()) },
-        disconnectAfterSync = { appPrefs.disconnectAfterSync },
-    )
+    private fun historyFor(link: RingLink): SessionHistory {
+        val ringId = RingAddress.normalized(link.ring.address) ?: link.ring.address
+        return SessionHistory(
+            store = StoreHistory(
+                database = { database.await() },
+                ringId = ringId,
+                zone = { ZoneId.systemDefault() },
+            ),
+            wallClock = { Instant.ofEpochMilli(clock.nowMillis()) },
+            disconnectAfterSync = { appPrefs.disconnectAfterSync },
+            // The link-up sync, the cadence while the link is held and the catch-up after the night.
+            triggers = SyncTriggerSources(
+                zone = { ZoneId.systemDefault() },
+                storedNights = { learningNights(database.await()) },
+                marks = PrefsSyncMarks(keyValues, ringId),
+            ),
+        )
+    }
 
     private companion object {
         const val LOG_TAG = "OpenCircuit"
