@@ -27,7 +27,8 @@ class AppendFailureNoAckTest {
             assertEquals(listOf(pages[0].toPlainHex()), w.ring.acknowledgedPages.map { it.toPlainHex() }, "only the saved page")
             assertEquals(pages.drop(1).map { it.toPlainHex() }, w.ring.stillHeld(Command.SYNC_CHANNEL_SLEEP).map { it.toPlainHex() })
             assertEquals(1, w.session.historyPages.counts.value.saveFailures)
-            assertEquals(HistoryTestPages.counters(0), w.blobs.loadEpochArchive(TEST_RING_ID).records.map { it.counter })
+            // The saved page stays stored: the sync stopped before the all-day channel, which may hold older records (PORTING.md D-267).
+            assertEquals(listOf(pages[0].toPlainHex()), w.journal.read(TEST_RING_ID).entries.map { it.page.toPlainHex() })
             assertEquals("Couldn't save — will retry", w.viewModel.uiState.value.ringData.problem)
 
             // The disk has room again; the ring offers the page it kept.

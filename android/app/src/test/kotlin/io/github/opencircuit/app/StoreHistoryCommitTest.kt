@@ -3,6 +3,7 @@ package io.github.opencircuit.app
 import io.github.opencircuit.app.sync.CommitResult
 import io.github.opencircuit.app.sync.StoreHistory
 import io.github.opencircuit.ringkit.Command
+import io.github.opencircuit.ringkit.CommitPlanner
 import io.github.opencircuit.store.BlobStore
 import io.github.opencircuit.store.HistoryJournal
 import io.github.opencircuit.store.StoreFactory
@@ -42,12 +43,12 @@ class StoreHistoryCommitTest {
             store.append(hex("4700000c65863a029f00303c"), now, drainId = 1) // a truncated 0x47 page
             store.append(hex("4d004d"), now, drainId = null) // a 0x4d sport page
 
-            val result = store.commit(now)
+            val result = store.commit(now, CommitPlanner.Drained.Everything)
 
-            assertEquals(CommitResult(pages = 3, records = 6, samplesStored = result.samplesStored, droppedAfterBound = 1, unreadablePages = 0, pagesNotKept = 2), result)
+            assertEquals(CommitResult(pages = 3, records = 6, samplesStored = result.samplesStored, droppedAfterBound = 1, unreadablePages = 0, pagesNotKept = 2, chunks = 1), result)
             assertEquals(HistoryTestPages.counters(0).dropLast(1), BlobStore(db).loadEpochArchive(TEST_RING_ID).records.map { it.counter })
             assertEquals(emptyList(), HistoryJournal(db).read(TEST_RING_ID).entries)
-            assertEquals(CommitResult(), store.commit(now), "an empty journal commits nothing")
+            assertEquals(CommitResult(), store.commit(now, CommitPlanner.Drained.Everything), "an empty journal commits nothing")
         } finally {
             db.close()
         }

@@ -188,6 +188,17 @@ internal class RingFake(
         tearDown(TeardownReason.LINK_DROPPED)
     }
 
+    /**
+     * The ring holds [pages] on [channel] again, ahead of what it still holds — a ring whose
+     * pointer stepped back offers pages the app already stored (and acknowledged).
+     */
+    fun holdAgain(channel: Int, pages: List<ByteArray>) {
+        synchronized(this) {
+            val queue = (held as Map<Int, ArrayDeque<ByteArray>>)[channel] ?: error("the ring has no channel $channel")
+            pages.reversed().forEach { queue.addFirst(it.copyOf()) }
+        }
+    }
+
     /** The ring sends [page] with no drain open; it waits for its acknowledgement like any page. */
     fun sendStray(page: ByteArray) {
         synchronized(this) {

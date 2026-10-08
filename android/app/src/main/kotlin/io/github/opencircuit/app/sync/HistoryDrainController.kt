@@ -5,6 +5,7 @@ import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.AndroidDrainTiming
 import io.github.opencircuit.ringkit.Command
+import io.github.opencircuit.ringkit.CommitPlanner
 import io.github.opencircuit.ringkit.DrainBudget
 import io.github.opencircuit.ringkit.DrainContinuation
 import io.github.opencircuit.ringkit.DrainProgress
@@ -93,6 +94,8 @@ data class ChannelReport(
     val records: Int,
     /** `0x50` frames that came before this channel's `0x82`: answers to a status query, not the end. */
     val statusReplies: Int,
+    /** The highest counter of the `0x4c` records this channel delivered, or null when none came. */
+    val lastCounter: Long? = null,
 )
 
 /** One finished sync, as the Ring data card shows it. */
@@ -218,13 +221,13 @@ class HistoryDrainController(
     }
 
     private suspend fun sync(): SyncReport {
+        val plan = HistoryDrainPlan.steps(inBackground = false, allDayOnly = false, sportEnabled = false, now = wallClock(), nightWindowEnd = null)
         if (link.state.value != LinkState.Authenticated) {
             connect()
             val up = withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) { link.state.first { it == LinkState.Authenticated } }
-            if (up == null) return commitAndReport(SyncOutcome.NOT_CONNECTED, emptyList())
+            if (up == null) return commitAndReport(SyncOutcome.NOT_CONNECTED, emptyList(), plan)
         }
         awaitStatusQuiet()
-        val plan = HistoryDrainPlan.steps(inBackground = false, allDayOnly = false, sportEnabled = false, now = wallClock(), nightWindowEnd = null)
         val run = SyncRun(deadline = monotonicMillis() + AndroidDrainTiming.WHOLE_SYNC.toMillis())
         val drainId = wallClock().toEpochMilli()
         val signals = Channel<HistorySignal>(Channel.UNLIMITED)
@@ -248,7 +251,7 @@ class HistoryDrainController(
         } finally {
             pages.detach(drainId)
         }
-        return commitAndReport(run.outcome(plan.size), run.reports)
+        return commitAndReport(run.outcome(plan.size), run.reports, plan)
     }
 
     /** One channel: rounds until one ends without earning a reopen. */
@@ -362,6 +365,7 @@ class HistoryDrainController(
                         val added = signal.counters.count { run.counters.add(it) }
                         stateFlow.update { it.copy(pagesThisSync = it.pagesThisSync + 1) }
                         if (signal.opcode == PAGE_4C) {
+                            signal.counters.maxOrNull()?.let { newest -> channel.lastCounter = maxOf(channel.lastCounter ?: newest, newest) }
                             channel.onEpochPage(signal.countdown, added, now)
                             publish(channel)
                         }
@@ -461,9 +465,9 @@ class HistoryDrainController(
         return link.send(Command.fetch) == SendResult.Sent
     }
 
-    private suspend fun commitAndReport(outcome: SyncOutcome, channels: List<ChannelReport>): SyncReport {
+    private suspend fun commitAndReport(outcome: SyncOutcome, channels: List<ChannelReport>, plan: List<HistoryDrainPlan.Step>): SyncReport {
         val commit = try {
-            store.commit(wallClock())
+            store.commit(wallClock(), drainedThrough(plan, channels))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -474,6 +478,19 @@ class HistoryDrainController(
         if (disconnectAfterSync()) link.disconnect()
         return SyncReport(wallClock(), outcome, commit, channels)
     }
+
+    /**
+     * How far this sync drained the ring: the least drained of the PLANNED channels (a channel it
+     * never reached counts as drained through nothing — it may still hold records of any age), so
+     * the commit never moves the store's cursor past a record a channel still holds (D-267).
+     */
+    private fun drainedThrough(plan: List<HistoryDrainPlan.Step>, channels: List<ChannelReport>): CommitPlanner.Drained =
+        CommitPlanner.leastDrained(
+            plan.map { step ->
+                val report = channels.firstOrNull { it.channel == step.channel }
+                CommitPlanner.drained(report?.verdict, report?.lastCounter)
+            },
+        )
 
     /** One `history-drain` row per round: counts and flags only, never a frame's bytes. */
     private fun drainRow(trace: HistoryChannelTrace, channel: ChannelRun): String =
@@ -517,6 +534,7 @@ class HistoryDrainController(
         var lastCountdown: Int? = null
         var records = 0
         var statusReplies = 0
+        var lastCounter: Long? = null
         var done = false
         private var firstPageAt: Long? = null
         private var firstPageRecords = 0
@@ -553,6 +571,7 @@ class HistoryDrainController(
             lastCountdown = lastCountdown,
             records = records,
             statusReplies = statusReplies,
+            lastCounter = lastCounter,
         )
     }
 

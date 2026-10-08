@@ -8,6 +8,7 @@ import io.github.opencircuit.app.sync.HistoryStore
 import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.app.sync.StoreHistory
 import io.github.opencircuit.ringkit.Command
+import io.github.opencircuit.ringkit.CommitPlanner
 import io.github.opencircuit.store.BlobStore
 import io.github.opencircuit.store.HistoryJournal
 import io.github.opencircuit.store.StoreDatabase
@@ -39,8 +40,12 @@ internal class RecordingStore(private val real: HistoryStore, private val note: 
         return real.append(page, receivedAt, drainId)
     }
 
-    override suspend fun commit(now: Instant): CommitResult {
-        val result = real.commit(now)
+    /** How far each commit was told the sync drained the ring, in order. */
+    val drained = CopyOnWriteArrayList<CommitPlanner.Drained>()
+
+    override suspend fun commit(now: Instant, drained: CommitPlanner.Drained): CommitResult {
+        this.drained += drained
+        val result = real.commit(now, drained)
         note("commit returned")
         return result
     }

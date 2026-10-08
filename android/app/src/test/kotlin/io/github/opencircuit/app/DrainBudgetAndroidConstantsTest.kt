@@ -120,10 +120,14 @@ class DrainBudgetAndroidConstantsTest {
             assertEquals(listOf(HistoryChannelExitReason.HARD_TIMEOUT), report.channels[0].rounds.map { it.exitReason }, "no reopen after the ceiling")
             assertEquals(listOf(HistoryChannelExitReason.HARD_TIMEOUT), report.channels[1].rounds.map { it.exitReason })
             assertEquals(SyncOutcome.PARTIAL, report.outcome)
-            // Sleep pages 6 500 … 3 596 500 (719), all-day 3 606 500 … 5 396 500 (359): every one stored and committed.
+            // Sleep pages 6 500 … 3 596 500 (719), all-day 3 606 500 … 5 396 500 (359): every one stored.
             assertEquals(1_078, w.ring.acknowledgedPages.size)
             assertEquals(listOf(719 * 6, 359 * 6), report.channels.map { it.records })
-            assertEquals(emptyList(), w.journal.read(TEST_RING_ID).entries)
+            // The sleep channel still holds records older than every all-day record (PORTING.md D-267):
+            // the sleep records are committed, the all-day pages stay stored for the next sync.
+            assertEquals(719 * 6, report.commit!!.records)
+            assertEquals(359 * 6, report.commit!!.heldBack)
+            assertEquals(w.ring.acknowledgedPages.drop(719).map { it.toPlainHex() }, w.journal.read(TEST_RING_ID).entries.map { it.page.toPlainHex() })
         } finally {
             w.db.close()
         }

@@ -60,6 +60,8 @@ class HistoryJournal internal constructor(private val db: StoreDatabase, private
         val unreadable: Int,
         /** The largest sequence number in the range, readable or not; null when the journal is empty. */
         val lastSeq: Long?,
+        /** The sequence numbers of the [unreadable] rows, oldest first, so a commit can consume them with [delete]. */
+        val unreadableSeqs: List<Long> = emptyList(),
     )
 
     /**
@@ -94,14 +96,43 @@ class HistoryJournal internal constructor(private val db: StoreDatabase, private
         val rows = kv.range(prefix + FIRST_KEY, prefix + END)
         val entries = ArrayList<Entry>(rows.size)
         var unreadable = 0
+        val unreadableSeqs = ArrayList<Long>()
         var lastSeq: Long? = null
         for (row in rows) {
             val seq = seqOf(prefix, row.key)
             if (seq != null) lastSeq = maxOf(lastSeq ?: seq, seq)
             val entry = seq?.let { decode(it, row.value) }
-            if (entry == null) unreadable++ else entries += entry
+            if (entry == null) {
+                unreadable++
+                if (seq != null) unreadableSeqs += seq
+            } else {
+                entries += entry
+            }
         }
-        return Read(entries, unreadable, lastSeq)
+        return Read(entries, unreadable, lastSeq, unreadableSeqs)
+    }
+
+    /**
+     * Deletes the rows of the ring's journal with the sequence numbers [seqs], wherever they sit
+     * in the range, readable or not; returns how many were there. A commit that holds some pages
+     * back for a later sync deletes exactly the pages it consumed. Joins the caller's transaction
+     * when one is open.
+     */
+    suspend fun delete(ringId: String, seqs: Collection<Long>): Int {
+        val prefix = prefixOf(ringId)
+        if (seqs.isEmpty()) return 0
+        return db.withWriteTransaction {
+            var deleted = 0
+            for (seq in seqs.toSortedSet()) {
+                if (seq < FIRST_SEQ || seq > MAX_SEQ) continue
+                val key = keyOf(prefix, seq)
+                if (kv.get(key) != null) {
+                    kv.delete(key)
+                    deleted++
+                }
+            }
+            deleted
+        }
     }
 
     /**

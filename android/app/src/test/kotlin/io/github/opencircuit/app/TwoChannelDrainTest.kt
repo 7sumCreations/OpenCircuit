@@ -108,7 +108,11 @@ class TwoChannelDrainTest {
             assertEquals(listOf(4_000L), w.ring.events.filter { it.what == "commit returned" }.map { it.atMillis }, "committed at once")
             advanceTo(60_000)
             assertTrue(w.ring.writes.none { it.hex.startsWith("02") && it.hex.endsWith("030100") }, "no all-day open on a lost link")
-            assertEquals(6, w.blobs.loadEpochArchive(TEST_RING_ID).records.size, "the stored page's records are kept")
+            // The page is kept on the phone, but the all-day channel was never reached and may hold
+            // older records: nothing is committed past it yet (PORTING.md D-267).
+            assertEquals(listOf(HistoryTestPages.sleepPage(0, 3).toPlainHex()), w.journal.read(TEST_RING_ID).entries.map { it.page.toPlainHex() })
+            assertEquals(0, w.blobs.loadEpochArchive(TEST_RING_ID).records.size)
+            assertEquals(6, w.session.sync.state.value.last!!.commit!!.heldBack)
 
             val report = w.session.sync.state.value.last!!
             val sleep = report.channels.single()

@@ -137,6 +137,42 @@ class HistoryJournalTest {
     }
 
     @Test
+    fun deleteRemovesExactlyTheNamedRowsWhereverTheySitAndLeavesTheRest() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val journal = HistoryJournal(db)
+            val seqs = (0 until 5).map { journal.append("ring-A", if (it % 2 == 0) page4c else page47, at, drainId = 3) }
+            journal.append("ring-B", page4c, at, drainId = null)
+
+            // Rows 2 and 4 of five (not a prefix of the range), plus one that is not there.
+            val deleted = journal.delete("ring-A", listOf(seqs[1], seqs[3], 999L))
+
+            assertEquals(2, deleted)
+            assertEquals(listOf(seqs[0], seqs[2], seqs[4]), journal.read("ring-A").entries.map { it.seq })
+            assertEquals(1, journal.read("ring-B").entries.size, "another ring's journal is untouched")
+            assertEquals(0, journal.delete("ring-A", emptyList()))
+            // A deleted number is never handed out again.
+            assertEquals(seqs[4] + 1, journal.append("ring-A", page47, at, drainId = null))
+        }
+    }
+
+    @Test
+    fun unreadableRowsAreListedBySequenceNumberSoTheyCanBeConsumed() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val journal = HistoryJournal(db)
+            journal.append("ring-A", page4c, at, drainId = null)
+            db.plant("history.journal/ring-A/0000000000000002", "not json")
+            db.plant("history.journal.next/ring-A", "3")
+            journal.append("ring-A", page47, at, drainId = null)
+
+            val read = journal.read("ring-A")
+            assertEquals(listOf(2L), read.unreadableSeqs)
+            assertEquals(1, journal.delete("ring-A", read.unreadableSeqs))
+            assertEquals(listOf(1L, 3L), journal.read("ring-A").entries.map { it.seq })
+            assertEquals(emptyList(), journal.read("ring-A").unreadableSeqs)
+        }
+    }
+
+    @Test
     fun anAppendedPageIsACopyAndAReadPageIsACopy() = runBlocking<Unit> {
         withInMemoryStore { db ->
             val journal = HistoryJournal(db)
