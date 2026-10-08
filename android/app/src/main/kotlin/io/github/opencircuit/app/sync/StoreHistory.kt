@@ -4,6 +4,7 @@ import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.BulkRecord
 import io.github.opencircuit.ringkit.BulkSleep
 import io.github.opencircuit.ringkit.CommitPlanner
+import io.github.opencircuit.ringkit.Frame
 import io.github.opencircuit.ringkit.HistoryCommitGate
 import io.github.opencircuit.ringkit.MeasuredCoverage
 import io.github.opencircuit.ringkit.MetricKind
@@ -77,6 +78,8 @@ class StoreHistory(
         val read = journal.read(ringId)
         val opcodes = read.entries.associate { it.seq to (it.page.firstOrNull()?.toInt()?.and(0xFF)) }
         val pages = read.entries.map { CommitPlanner.Page(it.seq, if (opcodes[it.seq] == PAGE_4C) BulkSleep.recordsFromPage(it.page) else emptyList()) }
+        // A 0x4c page whose XOR trailer fails yields no record; it was acknowledged, so its loss is counted.
+        val unparsed = read.entries.filter { opcodes[it.seq] == PAGE_4C && Frame.parse(it.page) == null }.map { it.seq }.toHashSet()
         val plan = CommitPlanner.plan(pages, drained, read.unreadableSeqs, chunkRecords)
 
         var result = CommitResult(heldBack = plan.heldBackRecords, pagesKept = plan.kept.size)
@@ -102,7 +105,7 @@ class StoreHistory(
                 samplesStored = result.samplesStored + stored.second,
                 droppedAfterBound = result.droppedAfterBound + stored.first,
                 unreadablePages = result.unreadablePages + (chunk.consumed.size - consumedPages.size),
-                pagesNotKept = result.pagesNotKept + consumedPages.count { opcodes[it] != PAGE_4C },
+                pagesNotKept = result.pagesNotKept + consumedPages.count { opcodes[it] != PAGE_4C || it in unparsed },
                 chunks = result.chunks + 1,
             )
         }

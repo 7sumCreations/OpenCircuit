@@ -115,7 +115,7 @@ class SyncTriggers(
     private suspend fun onLinkUp() {
         if (sync.isSyncing.value || isMeasuring.value) return
         val now = wallClock()
-        val lastComplete = sources.marks.lastCompleteSync
+        val lastComplete = sources.marks.lastCompleteSync.notAfter(now)
         if (lastComplete == null) {
             start("link-up, no complete sync yet")
             return
@@ -152,7 +152,7 @@ class SyncTriggers(
             return TICK_MILLIS
         }
         if (disconnectAfterSync()) return TICK_MILLIS
-        val last = listOfNotNull(lastSyncFinished.get(), sources.marks.lastCompleteSync).maxOrNull()
+        val last = listOfNotNull(lastSyncFinished.get().notAfter(now), sources.marks.lastCompleteSync.notAfter(now)).maxOrNull()
         val due = HistoryDrainCadence.isDue(last, now, isNight = false, batterySaver = false)
         if (HistoryDrainCadence.shouldDrain(manual = false, inSleepWindow = false, isDue = due)) {
             start("periodic")
@@ -166,6 +166,12 @@ class SyncTriggers(
     private fun start(reason: String) {
         if (sync.syncNow()) log("sync-trigger: $reason")
     }
+
+    /**
+     * This mark, unless it is after [now]: the phone's clock was stepped back since it was taken,
+     * and a mark from the future would hold every sync until the clock caught up with it.
+     */
+    private fun Instant?.notAfter(now: Instant): Instant? = this?.takeUnless { it.isAfter(now) }
 
     private fun untilOrTick(now: Instant, at: Instant): Long =
         Duration.between(now, at).toMillis().coerceIn(0, TICK_MILLIS)

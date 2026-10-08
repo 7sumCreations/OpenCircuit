@@ -1,5 +1,6 @@
 package io.github.opencircuit.app.sync
 
+import io.github.opencircuit.ble.SendFailure
 import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.BulkRecord
 import io.github.opencircuit.ringkit.BulkSleep
@@ -115,6 +116,11 @@ class HistoryPages(
             for (arrival in queue) {
                 try {
                     handle(arrival)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // A defect while one frame was handled: never the end of this session's one ACK lane.
+                    log("A history frame could not be handled: ${e::class.java.simpleName}")
                 } finally {
                     inFlight.update { it - 1 }
                 }
@@ -171,7 +177,15 @@ class HistoryPages(
             signal(arrival, HistorySignal.SaveFailed)
             return
         }
-        when (val result = acknowledge(page)) {
+        val acknowledgement = try {
+            acknowledge(page)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Not written: the ring keeps the page and offers it again.
+            SendResult.Failed(SendFailure.GATT_ERROR)
+        }
+        when (val result = acknowledgement) {
             SendResult.Sent -> {
                 val latency = (monotonicMillis() - writeStarted).coerceAtLeast(0)
                 countsFlow.update {

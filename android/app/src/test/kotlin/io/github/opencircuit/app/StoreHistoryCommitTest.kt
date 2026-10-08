@@ -56,4 +56,25 @@ class StoreHistoryCommitTest {
             db.close()
         }
     }
+    @Test
+    fun aRecordPageWhoseChecksumFailsIsCountedAsNotKept() = runTest {
+        val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
+        try {
+            val store = StoreHistory({ db }, TEST_RING_ID, { ZoneOffset.UTC })
+            // A 0x4c page already acknowledged (the ring dropped it) whose XOR trailer does not match:
+            // none of its records can be read, so its loss must be counted, never silent.
+            val corrupt = HistoryTestPages.sleepPage(0, 1).copyOf()
+            corrupt[corrupt.size - 1] = (corrupt[corrupt.size - 1].toInt() xor 0x01).toByte()
+            store.append(corrupt, now, drainId = 1)
+
+            val result = store.commit(now, CommitPlanner.Drained.Everything)
+
+            assertEquals(1, result.pages)
+            assertEquals(0, result.records)
+            assertEquals(1, result.pagesNotKept, "a 0x4c page with no readable record is a page not kept")
+            assertEquals(emptyList(), HistoryJournal(db).read(TEST_RING_ID).entries)
+        } finally {
+            db.close()
+        }
+    }
 }

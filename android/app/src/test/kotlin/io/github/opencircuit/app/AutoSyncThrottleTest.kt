@@ -54,6 +54,21 @@ class AutoSyncThrottleTest {
     }
 
     @Test
+    fun aCompleteSyncMarkedInTheFutureDoesNotHoldTheLinkUpSync() = runTest {
+        // The phone's clock was stepped back after that sync: its mark reads a day ahead of now.
+        val kv = InMemoryKeyValues()
+        PrefsSyncMarks(kv, TEST_RING_ID).setLastCompleteSync(linkUp.plus(java.time.Duration.ofDays(1)))
+        val w = syncWorld(triggers = true, keyValues = kv, wallStart = wallStart, makeRing = ringWith(HistoryTestPages.backlog(3)))
+        try {
+            advanceTo(60_000)
+            assertEquals(1, w.sleepOpens().size, "a mark ahead of the clock is no throttle: the link-up syncs")
+            assertTrue(w.sleepOpens().single() < 3_000, "at the link-up, not later: ${w.sleepOpens()}")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
     fun aCompleteSyncSetsTheMarkAndTheNextLinkUpWithin300SecondsDoesNotSync() = runTest {
         val kv = InMemoryKeyValues()
         val w = syncWorld(triggers = true, keyValues = kv, wallStart = wallStart, makeRing = ringWith(HistoryTestPages.backlog(3)))

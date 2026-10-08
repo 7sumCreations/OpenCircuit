@@ -278,13 +278,22 @@ class HistoryDrainController(
         val teardowns = MutableStateFlow<List<LinkTeardown>>(emptyList())
         tally.set(teardowns)
         scope.launch {
-            val report = try {
-                sync(teardowns)
-            } catch (e: CancellationException) {
+            fun release() {
                 tally.compareAndSet(teardowns, null)
                 stateFlow.update { it.copy(syncing = false, channels = emptyList()) }
                 syncingFlow.value = false
+            }
+            val report = try {
+                sync(teardowns)
+            } catch (e: CancellationException) {
+                release()
                 throw e
+            } catch (e: Exception) {
+                // A defect, not an outcome: whatever was stored stays journaled for the next sync, and the
+                // flag is released so the keepalive, the measure and the next sync are not held off for good.
+                log("The sync stopped on an unexpected error: ${e::class.java.simpleName}; the stored pages stay for the next sync")
+                release()
+                return@launch
             }
             tally.compareAndSet(teardowns, null)
             try {

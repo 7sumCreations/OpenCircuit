@@ -26,12 +26,14 @@ import io.github.opencircuit.ble.LinkDiagnostic
 import io.github.opencircuit.ble.LinkDiagnostics
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -82,6 +84,11 @@ class RingViewModel(
     private val wallClock: () -> Instant = Instant::now,
     /** The phone's time zone, for the stored days and the last night's times. */
     private val zone: () -> ZoneId = ZoneId::systemDefault,
+    /**
+     * Re-reads [wallClock] on its own: "Last synced N ago" and the overdue warning must move on
+     * while nothing else changes (the link idle after a sync, the ring out of reach).
+     */
+    clockTicks: Flow<Unit> = everyMinute(),
 ) : ViewModel(scope) {
 
     /** The Ring screen's state. */
@@ -162,7 +169,8 @@ class RingViewModel(
         sessions?.reconnectRemembered()
         val flowState: StateFlow<ConnectFlowState> = connectFlow?.state ?: MutableStateFlow(ConnectFlowState())
         val initialDetails = DetailsInput(pairing = details.pairingOutcome.value, scanKept = scanKept, scan = details.scanMatch?.value)
-        uiState = combine(linkParts, flowState, adapterState, detailsInput, disconnectAfterSync, ::render)
+        val switchAndClock: Flow<Boolean> = disconnectAfterSync.combine(clockTicks) { on, _ -> on }
+        uiState = combine(linkParts, flowState, adapterState, detailsInput, switchAndClock, ::render)
             .stateIn(scope, SharingStarted.Eagerly, render(LinkParts(), flowState.value, adapterState.value, initialDetails, disconnectAfterSync.value))
     }
 
@@ -260,4 +268,12 @@ class RingViewModel(
         val stored: StoredData? = null,
         val firmware: String? = null,
     )
+}
+
+/** One tick at once, then one a minute: the Ring screen's clock for its "N ago" ages. */
+internal fun everyMinute(): Flow<Unit> = flow {
+    while (true) {
+        emit(Unit)
+        delay(60_000)
+    }
 }

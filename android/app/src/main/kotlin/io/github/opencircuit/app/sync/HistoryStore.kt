@@ -98,7 +98,8 @@ data class CommitResult(
     val unreadablePages: Int = 0,
     /**
      * Pages consumed without records: `0x47` (raw sensor pages, not decoded into samples) and
-     * `0x4d` (sport history, which this version does not keep). Counted, so the loss is shown.
+     * `0x4d` (sport history, which this version does not keep), and a `0x4c` page whose XOR trailer
+     * fails (none of its records can be read). Counted, so the loss is shown.
      */
     val pagesNotKept: Int = 0,
     /** Distinct records held back for a later commit, because a channel may still hold older ones. */

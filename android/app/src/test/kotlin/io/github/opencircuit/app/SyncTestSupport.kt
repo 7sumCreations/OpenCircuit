@@ -124,6 +124,8 @@ internal suspend fun TestScope.syncWorld(
     wallStart: Instant = SYNC_TEST_EPOCH,
     /** The store to build over (a relaunch shares one); a fresh in-memory one when null. */
     reuseDb: StoreDatabase? = null,
+    /** The automatic syncs' time zone; [zone] when null (a test makes it throw). */
+    triggerZone: (() -> ZoneId)? = null,
     makeRing: (CoroutineScope, () -> Long) -> RingFake,
 ): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
@@ -137,7 +139,7 @@ internal suspend fun TestScope.syncWorld(
     // As the app's AppContainer.historyFor: the store's latest nights, the ring's marks in the preferences.
     val sources = if (triggers) {
         SyncTriggerSources(
-            zone = { zone },
+            zone = triggerZone ?: { zone },
             storedNights = { learningNights(db) },
             marks = PrefsSyncMarks(keyValues, TEST_RING_ID),
         )
