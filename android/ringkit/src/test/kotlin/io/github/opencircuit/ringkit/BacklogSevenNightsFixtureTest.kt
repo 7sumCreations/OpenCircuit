@@ -15,38 +15,13 @@ import kotlin.test.assertTrue
  */
 class BacklogSevenNightsFixtureTest {
 
-    private class Backlog(
-        val zone: String,
-        val nights: List<Triple<String, Long, Long>>,
-        val records: List<BulkRecord>,
-        val temps: List<TemperatureSample>,
-    )
-
-    private fun load(): Backlog {
-        val stream = checkNotNull(javaClass.classLoader.getResourceAsStream("backlog-7-nights/backlog.txt"))
-        val lines = stream.bufferedReader(Charsets.UTF_8).use { it.readLines() }.filter { !it.startsWith("#") }
-        var zone = ""
-        val nights = mutableListOf<Triple<String, Long, Long>>()
-        val records = mutableListOf<BulkRecord>()
-        val temps = mutableListOf<TemperatureSample>()
-        for (line in lines) {
-            val f = line.split(' ')
-            when (f[0]) {
-                "zone" -> zone = f[1]
-                "night" -> nights += Triple(f[2], f[3].toLong(16), f[4].toLong(16))
-                "r" -> records += assertNotNull(BulkRecord.of(hex(f[1])), line)
-                "t" -> temps += TemperatureSample(Instant.ofEpochSecond(f[1].toLong()), SleepDifferentialFixtures.bitsToDouble(f[2]))
-                else -> error("unexpected line: $line")
-            }
-        }
-        return Backlog(zone, nights, records, temps)
-    }
+    private fun load() = BacklogSevenNights.load()
 
     @Test
     fun theBacklogIsSevenNightsOnOneUnbrokenEpochGrid() {
         val b = load()
 
-        assertEquals("UTC", b.zone)
+        assertEquals("UTC", b.zone.id)
         assertEquals(7, b.nights.size)
         assertEquals(3654, b.records.size)
         assertEquals(562, b.temps.size)

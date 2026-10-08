@@ -720,7 +720,26 @@ object BulkSleep {
         observedGapCoverageCut: Double = OBSERVED_GAP_ABSORB_COVERAGE_CUT,
         declinedBridgeMayReanchor: Boolean = DECLINED_BRIDGE_MAY_REANCHOR,
         motionPolicy: MotionChannelPolicy = MotionChannelPolicy.DEFAULT,
-    ): List<BulkRecord> {
+    ): List<BulkRecord> =
+        latestNightRecordsOrNull(
+            records, zone, temperatures, epoch, morningContinuationGap, observedGapCoverageCut, declinedBridgeMayReanchor, motionPolicy,
+        ) ?: distinctRecords(records).sortedBy { it.counter }
+
+    /**
+     * [latestNightRecords] with "no overnight night" answered as null instead of the whole input, so
+     * a caller can tell a night that happens to be every record it passed from no night at all
+     * ([completeNights]; the size-equality test misreads exactly that case).
+     */
+    internal fun latestNightRecordsOrNull(
+        records: List<BulkRecord>,
+        zone: ZoneId,
+        temperatures: List<TemperatureSample> = emptyList(),
+        epoch: Long = Command.SYNC_EPOCH,
+        morningContinuationGap: Duration = MORNING_CONTINUATION_MAX_GAP,
+        observedGapCoverageCut: Double = OBSERVED_GAP_ABSORB_COVERAGE_CUT,
+        declinedBridgeMayReanchor: Boolean = DECLINED_BRIDGE_MAY_REANCHOR,
+        motionPolicy: MotionChannelPolicy = MotionChannelPolicy.DEFAULT,
+    ): List<BulkRecord>? {
         // Detection needs a time-ordered timeline; sort defensively so any caller is served. Each
         // counter once, its first copy (D-70) — so the guard's coverage counts each epoch once too.
         val sorted = distinctRecords(records).sortedBy { it.counter }
@@ -739,7 +758,7 @@ object BulkSleep {
                 SleepWindow.isOvernightBlock(it.start, it.end, onsetIsUnobserved = onsetIsUnobserved(block, sorted, epoch), zone = zone)
             }
         }
-        var anchor = nights.maxByOrNull { it.end } ?: return sorted
+        var anchor = nights.maxByOrNull { it.end } ?: return null
         // A NaN cut is OFF here, as upstream (and could never fire anyway: `ratio >= NaN` is false).
         val guardOn = observedGapCoverageCut > 0
         val times = if (guardOn) sorted.map { it.date(epoch) } else emptyList()
@@ -794,6 +813,53 @@ object BulkSleep {
         val lo = clusterStart.minus(margin)
         val hi = clusterEnd.plus(margin)
         return sorted.filter { val t = it.date(epoch); !t.isBefore(lo) && !t.isAfter(hi) }
+    }
+
+    /**
+     * How far past a night's last record a drain must reach before the ring is known to be done with
+     * that night when no later record says so: the same 30 min [latestNightRecords] keeps around a
+     * night, so a wake inside it can no longer move the slice.
+     */
+    val NIGHT_COMPLETE_MARGIN: Duration = Duration.ofMinutes(30)
+
+    /**
+     * Every night in [records] the ring has finished with, oldest first, each as the slice
+     * [latestNightRecords] gives for it (Kotlin-only, PORTING.md D-269: upstream stages only the
+     * latest night of a drain, `RingSession.swift:4156` @ b1c2fdd).
+     *
+     * A peel: take the latest night's slice, drop every record at or after its first counter, repeat
+     * on the rest until no overnight night is left. Every round removes at least the slice, so the
+     * loop ends, and no record is in two nights even where two nights' 30 min margins would meet.
+     *
+     * A night is COMPLETE when a record later than its slice's last record exists in [records], or
+     * when [drainedThrough] — the time a sync drained every channel through, null when it did not —
+     * is at least [NIGHT_COMPLETE_MARGIN] past that last record. [records] must be records every
+     * channel has delivered through (the commit's released records, D-267): then any later record
+     * proves the channel that carried the night got past it too. An incomplete night (only ever the
+     * newest) is left out, for a later commit.
+     */
+    fun completeNights(
+        records: List<BulkRecord>,
+        zone: ZoneId,
+        drainedThrough: Instant?,
+        temperatures: List<TemperatureSample> = emptyList(),
+        epoch: Long = Command.SYNC_EPOCH,
+    ): List<List<BulkRecord>> {
+        val all = distinctRecords(records).sortedBy { it.counter }
+        val newest = all.lastOrNull()?.date(epoch) ?: return emptyList()
+        val nights = ArrayDeque<List<BulkRecord>>()
+        var remaining = all
+        while (remaining.isNotEmpty()) {
+            val night = latestNightRecordsOrNull(remaining, zone, temperatures, epoch) ?: break
+            if (night.isEmpty()) break // a slice always holds its anchor block's records; never loop on nothing
+            nights.addFirst(night)
+            val cut = night.first().counter
+            remaining = remaining.takeWhile { it.counter < cut }
+        }
+        return nights.filter { night ->
+            val end = night.last().date(epoch)
+            newest.isAfter(end) || (drainedThrough != null && !end.plus(NIGHT_COMPLETE_MARGIN).isAfter(drainedThrough))
+        }
     }
 
     /**
