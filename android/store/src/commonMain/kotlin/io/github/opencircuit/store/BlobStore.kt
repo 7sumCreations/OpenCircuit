@@ -10,6 +10,7 @@ import io.github.opencircuit.ringkit.HistoricalSportFrame
 import io.github.opencircuit.ringkit.HistoryFrameCapture
 import io.github.opencircuit.ringkit.RingActivityEventLedger
 import io.github.opencircuit.ringkit.RingAlarm
+import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SyncAlert
 import io.github.opencircuit.ringkit.WorkoutSessionSnapshot
 import io.github.opencircuit.store.codec.BatterySamplesCodec
@@ -21,11 +22,13 @@ import io.github.opencircuit.store.codec.HistoryFrameCaptureCodec
 import io.github.opencircuit.store.codec.LastFiredLedgerCodec
 import io.github.opencircuit.store.codec.RingActivityEventLedgerCodec
 import io.github.opencircuit.store.codec.RingAlarmCodec
+import io.github.opencircuit.store.codec.SleepSegmentCodec
 import io.github.opencircuit.store.codec.SportSampleListCodec
 import io.github.opencircuit.store.codec.StrandedCountersCodec
 import io.github.opencircuit.store.codec.WorkoutSessionSnapshotCodec
 import java.time.Instant
 import java.time.LocalDate
+import java.util.Collections
 
 // Typed access to the values upstream keeps in `UserDefaults`, here in the `store_kv` table of the
 // same database as the samples (ios/OpenCircuit/Store/EpochArchiveStore.swift,
@@ -39,10 +42,11 @@ import java.time.LocalDate
 // - The epoch archive and its drain facts are one value; records reach it only through a merge
 //   bounded by `notAfter`; a drain fact that cannot be read reads as upstream's default.
 // - Every save takes `now` (stored as the row's update time) instead of reading the clock.
+// - The pending sleep segments' two views are written and cleared in one transaction, and a view
+//   that cannot be read is empty while the other is kept (upstream decodes each with `try?`).
 // Not given a home: the history-sync evidence list (its wrapper type belongs to the sync epic; the
-// trace codec is here), the pending sleep segments (their publish-as-a-pair rule belongs to the
-// sleep write flow; the segment codec is here), and `UnattributedPageBuffer` (in memory upstream,
-// RingSession.swift:499).
+// trace codec is here), and `UnattributedPageBuffer` (in memory upstream, RingSession.swift:499;
+// the history journal's rows with no drain replace it).
 
 /**
  * The stored values that are not sample rows: one key each, named as upstream names its
@@ -212,6 +216,57 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
         }
     }
 
+    // Pending sleep segments (upstream EpochArchiveStore.swift:207-226, PORTING.md D-180): the last
+    // night a commit staged, as two views published together, kept until the health store took them.
+
+    /**
+     * One published night: [coarse] (the wear-gated motion segments) and [staged] (the staged
+     * hypnogram), each empty when that view staged nothing. Both lists are read-only copies.
+     */
+    class PendingSleepSegments(coarse: List<SleepSegment>, staged: List<SleepSegment>) {
+        val coarse: List<SleepSegment> = Collections.unmodifiableList(ArrayList(coarse))
+        val staged: List<SleepSegment> = Collections.unmodifiableList(ArrayList(staged))
+
+        /**
+         * What the health-store write takes (upstream `ContentView.flushHealth()`'s choice): [staged]
+         * when both views are non-empty, else [coarse] — so a staged view with no coarse view is not
+         * taken, as upstream.
+         */
+        val preferred: List<SleepSegment> get() = if (staged.isNotEmpty() && coarse.isNotEmpty()) staged else coarse
+    }
+
+    /**
+     * Publishes one night's two views as a pair, replacing the pair stored for [ringId] in one
+     * transaction, so the two can never come from different commits. A pass that staged nothing in
+     * either view writes nothing: the published pair stays (an empty pass is not an instruction to
+     * forget it — only [clearPendingSleepSegments] is).
+     */
+    suspend fun savePendingSleepSegments(ringId: String, coarse: List<SleepSegment>, staged: List<SleepSegment>, now: Instant) {
+        if (coarse.isEmpty() && staged.isEmpty()) return
+        val coarseKey = perRing(PENDING_COARSE, ringId)
+        val stagedKey = perRing(PENDING_STAGED, ringId)
+        db.withWriteTransaction {
+            put(coarseKey, SleepSegmentCodec.encode(coarse), now)
+            put(stagedKey, SleepSegmentCodec.encode(staged), now)
+        }
+    }
+
+    /** The pair stored for [ringId]; a view that is absent or cannot be read is empty, the other is kept. */
+    suspend fun loadPendingSleepSegments(ringId: String): PendingSleepSegments = PendingSleepSegments(
+        coarse = load(perRing(PENDING_COARSE, ringId), SleepSegmentCodec::decode) ?: emptyList(),
+        staged = load(perRing(PENDING_STAGED, ringId), SleepSegmentCodec::decode) ?: emptyList(),
+    )
+
+    /** Forgets the pair stored for [ringId] (after the health store confirmed its write). */
+    suspend fun clearPendingSleepSegments(ringId: String) {
+        val coarseKey = perRing(PENDING_COARSE, ringId)
+        val stagedKey = perRing(PENDING_STAGED, ringId)
+        db.withWriteTransaction {
+            kv.delete(coarseKey)
+            kv.delete(stagedKey)
+        }
+    }
+
     /** Replaces the archive's drain facts, keeping its records. */
     suspend fun saveEpochArchiveMarks(ringId: String, marks: EpochArchiveMarks, now: Instant) {
         val key = perRing(EPOCH_ARCHIVE, ringId)
@@ -245,6 +300,8 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
         const val SPORT_SAMPLES = "workout.automaticDetection.samples.v1"
         const val STRANDED_COUNTERS = "sleep.unpersistedEpochCounters"
         const val EPOCH_ARCHIVE = "sleep.epochArchive"
+        const val PENDING_COARSE = "sleep.pendingCoarseSegments"
+        const val PENDING_STAGED = "sleep.pendingStagedSegments"
         const val ENERGY_LEDGER = "hk.activeEnergy"
 
         fun perRing(name: String, ringId: String): String {
