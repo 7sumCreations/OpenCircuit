@@ -51,6 +51,7 @@ fun RingDataCard(
                 )
             }
             FilledTonalButton(onClick = onSyncNow, enabled = ui.syncEnabled) { Text(ui.syncLabel) }
+            ui.syncBlockedBy?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

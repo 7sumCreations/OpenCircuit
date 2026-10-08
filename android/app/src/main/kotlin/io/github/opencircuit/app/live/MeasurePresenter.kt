@@ -45,13 +45,17 @@ data class MeasureUi(val heartRate: MeasureCardUi, val spo2: MeasureCardUi, val 
 /**
  * The words and numbers for [state]; pure, so it is tested on the JVM. While [onCharger] (the
  * descriptor's charger byte, never the inference) no new measure can start: a ring on its charger
- * is not on a finger. A running one can still be stopped.
+ * is not on a finger. While [syncing] (a history sync runs) none can start either, and the card
+ * says why. A running one can still be stopped.
  */
-fun measureUi(state: LiveMeasureState, onCharger: Boolean = false): MeasureUi = MeasureUi(
-    heartRate = card(state, LiveMode.HEART_RATE, onCharger),
-    spo2 = card(state, LiveMode.SPO2, onCharger),
+fun measureUi(state: LiveMeasureState, onCharger: Boolean = false, syncing: Boolean = false): MeasureUi = MeasureUi(
+    heartRate = card(state, LiveMode.HEART_RATE, onCharger, syncing),
+    spo2 = card(state, LiveMode.SPO2, onCharger, syncing),
     live = state.mode?.let { liveCard(state, it) },
 )
+
+/** The line a Measure card shows while a history sync runs. */
+const val WAIT_FOR_SYNC = "Wait for the sync to finish"
 
 /** The line a failed measure leaves on its card. */
 fun MeasureFailure.message(): String = when (this) {
@@ -73,10 +77,11 @@ fun MeasureFailure.message(): String = when (this) {
     is MeasureFailure.CommandFailed -> "Measurement stopped — the ring stopped answering."
 }
 
-private fun card(state: LiveMeasureState, mode: LiveMode, onCharger: Boolean): MeasureCardUi {
+private fun card(state: LiveMeasureState, mode: LiveMode, onCharger: Boolean, syncing: Boolean): MeasureCardUi {
     val result = if (mode == LiveMode.HEART_RATE) state.heartRate else state.spo2
     val measuring = state.mode == mode
     val caption = when {
+        syncing && !measuring -> WAIT_FOR_SYNC
         measuring && state.preparing -> "preparing…"
         measuring && mode == LiveMode.HEART_RATE && state.settledHeartRate != null ->
             "${state.settledHeartRate} bpm (settled) · measuring…"
@@ -93,7 +98,7 @@ private fun card(state: LiveMeasureState, mode: LiveMode, onCharger: Boolean): M
         failure = result.failure?.message(),
         measuring = measuring,
         actionLabel = if (measuring) "Stop measuring $name" else "Measure $name",
-        enabled = measuring || !onCharger,
+        enabled = measuring || (!onCharger && !syncing),
     )
 }
 

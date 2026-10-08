@@ -59,24 +59,22 @@ class RingSessionController(
     /** The ring's battery and status, from its descriptors. */
     val deviceStatus = DeviceStatusModel(scope, monotonicMillis)
 
-    /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames. */
-    val liveMeasure = LiveMeasureController(send = link::send, scope = scope, monotonicMillis = monotonicMillis)
-
-    /** The idle `d0 00 00` keepalive and the status refresh after a measure. */
-    val keepalive = KeepaliveTicker(
+    /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames; none starts during a sync. */
+    val liveMeasure: LiveMeasureController = LiveMeasureController(
         send = link::send,
         scope = scope,
-        linkState = link.state,
-        isMeasuring = liveMeasure.isMeasuring,
-        batteryReadings = { deviceStatus.state.value.batteryReadings },
-        log = log,
+        monotonicMillis = monotonicMillis,
+        isSyncing = { sync.isSyncing.value },
     )
+
+    /** Whether a status query waits for its answer: the drain's first open waits for it (or 2 s). */
+    private val statusQueries = StatusQueries(monotonicMillis)
 
     /** The history frames: each page stored, then acknowledged; the sync answer and end report passed to the drain. */
     val historyPages = HistoryPages(history.store, link::acknowledge, scope, history.wallClock, log)
 
-    /** Sync now: drains the ring's history into the store, then disconnects when the switch says so. */
-    val sync = HistoryDrainController(
+    /** Sync now: drains the ring's history into the store, then disconnects when the switch says so. Never during a measure. */
+    val sync: HistoryDrainController = HistoryDrainController(
         link = link,
         connect = ::connect,
         pages = historyPages,
@@ -86,6 +84,22 @@ class RingSessionController(
         disconnectAfterSync = history.disconnectAfterSync,
         scope = scope,
         log = log,
+        isMeasuring = { liveMeasure.isMeasuring.value },
+        awaitStatusQuiet = statusQueries::awaitQuiet,
+    )
+
+    /** The idle `d0 00 00` keepalive and the status refresh after a measure; paused for a whole sync. */
+    val keepalive = KeepaliveTicker(
+        send = { command ->
+            statusQueries.onQuery() // the keepalive writes only the status query
+            link.send(command)
+        },
+        scope = scope,
+        linkState = link.state,
+        isMeasuring = liveMeasure.isMeasuring,
+        batteryReadings = { deviceStatus.state.value.batteryReadings },
+        log = log,
+        isSyncing = sync.isSyncing,
     )
 
     /** Where the link stands. */
@@ -102,14 +116,21 @@ class RingSessionController(
     private val started = AtomicBoolean(false)
 
     init {
-        dispatcher.register(DESCRIPTOR, deviceStatus::onDescriptor)
-        dispatcher.register(DESCRIPTOR_RESPONSE, deviceStatus::onDescriptor)
+        // Descriptors and 0x50 frames also answer a status query (PROTOCOL.md §4).
+        dispatcher.register(DESCRIPTOR) { deviceStatus.onDescriptor(it); statusQueries.onAnswer() }
+        dispatcher.register(DESCRIPTOR_RESPONSE) { deviceStatus.onDescriptor(it); statusQueries.onAnswer() }
         dispatcher.register(LIVE_SAMPLE, liveMeasure::onFrame)
         dispatcher.register(MODE_REPLY, liveMeasure::onModeReply)
         dispatcher.ignore(HEARTBEAT)
         dispatcher.ignore(STATUS_REPLY)
         // Here, at construction: routes are fixed by the first frame dispatched.
-        HistoryPages.OPCODES.forEach { dispatcher.register(it, historyPages::onFrame) }
+        HistoryPages.OPCODES.forEach { opcode ->
+            if (opcode == END_OF_HISTORY) {
+                dispatcher.register(opcode) { historyPages.onFrame(it); statusQueries.onAnswer() }
+            } else {
+                dispatcher.register(opcode, historyPages::onFrame)
+            }
+        }
     }
 
     /** Starts the collections. Calling it again does nothing: the session collects each flow once. */
@@ -129,6 +150,8 @@ class RingSessionController(
         scope.launch {
             link.state.collect {
                 timer.onState(it)
+                // The link writes its own d0 right after its auth reply (PORTING.md D-257).
+                if (it == LinkState.Authenticated) statusQueries.onQuery()
                 if (it != LinkState.Authenticated) liveMeasure.onLinkLost()
             }
         }
@@ -159,5 +182,8 @@ class RingSessionController(
 
         /** Status replies, `81 …` (PROTOCOL.md §5.7); the link keeps the `81 00` challenge to itself. */
         const val STATUS_REPLY = 0x81
+
+        /** The ring's `0x50` frame: the end of a history channel, or an answer to `d0 00 00` (PROTOCOL.md §4). */
+        const val END_OF_HISTORY = 0x50
     }
 }

@@ -20,6 +20,8 @@ data class RingDataUi(
     val syncEnabled: Boolean = false,
     /** The button's label. */
     val syncLabel: String = SYNC_NOW,
+    /** Why Sync now cannot be tapped right now (a live measure runs); null when nothing blocks it. */
+    val syncBlockedBy: String? = null,
     /** The "Disconnect after syncing" switch. */
     val disconnectAfterSync: Boolean = true,
     /** The help line under the switch. */
@@ -38,7 +40,8 @@ const val STEPS_HELP = "Steps and skin temperature are only recorded while the r
  */
 object RingDataPresenter {
 
-    fun present(sync: SyncState?, disconnectAfterSync: Boolean, now: Instant): RingDataUi {
+    /** [measuring]: a live measure runs, so Sync now is disabled and says why. */
+    fun present(sync: SyncState?, disconnectAfterSync: Boolean, now: Instant, measuring: Boolean = false): RingDataUi {
         if (sync == null) return RingDataUi(headline = NOT_SYNCED, disconnectAfterSync = disconnectAfterSync)
         if (sync.syncing) {
             return RingDataUi(
@@ -56,7 +59,8 @@ object RingDataPresenter {
             headline = if (last == null) NOT_SYNCED else "Last synced ${ago(last.finishedAt, now)}",
             lastSync = last?.commit?.let { "${count(it.records)} records · ${outcomeWords(last.outcome)}" },
             problem = last?.let { problemOf(it.outcome) },
-            syncEnabled = true,
+            syncEnabled = !measuring,
+            syncBlockedBy = if (measuring) STOP_MEASURING_TO_SYNC else null,
             disconnectAfterSync = disconnectAfterSync,
         )
     }
@@ -89,6 +93,7 @@ object RingDataPresenter {
     /** ASCII digits with a comma every three, whatever the phone's locale ("4,312"). */
     private fun count(n: Int): String = String.format(Locale.ROOT, "%,d", n)
 
+    private const val STOP_MEASURING_TO_SYNC = "Stop measuring to sync"
     private const val NOT_SYNCED = "Not synced yet"
     private const val SYNCING = "Syncing…"
     private const val KEEP_OPEN = "Keep the app open until the sync finishes."

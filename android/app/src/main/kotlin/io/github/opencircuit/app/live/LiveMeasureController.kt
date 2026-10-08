@@ -123,6 +123,8 @@ class LiveMeasureController(
     private val send: suspend (ByteArray) -> SendResult,
     private val scope: CoroutineScope,
     private val monotonicMillis: () -> Long,
+    /** True while a history sync runs: no measure starts then (its writes would land mid-drain). */
+    private val isSyncing: () -> Boolean = { false },
 ) {
     private val lock = Any()
     private val stateFlow = MutableStateFlow(LiveMeasureState())
@@ -145,8 +147,9 @@ class LiveMeasureController(
     /** True from a start until the measure stops, for whatever must stay quiet meanwhile. */
     val isMeasuring: StateFlow<Boolean> = measuringFlow.asStateFlow()
 
-    /** The user tapped Measure for [mode]. */
+    /** The user tapped Measure for [mode]. Ignored while a history sync runs (the button is disabled then, with the reason). */
     fun start(mode: LiveMode) = synchronized(lock) {
+        if (isSyncing()) return@synchronized
         val current = stateFlow.value
         val measuring = current.mode != null
         val action = LiveMeasureOwnership.decide(

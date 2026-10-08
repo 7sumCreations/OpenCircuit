@@ -98,9 +98,14 @@ class RingViewModel(
                 card = connectionCardUi(parts.link, parts.ringName, parts.status, measuring, parts.problem, flowCard),
                 // Measuring needs an authenticated link (upstream draws the buttons only when ready, VT:319-337).
                 // Only the charger byte blocks Measure; an inferred charge never does (PORTING D-242).
-                measure = if (parts.link == LinkState.Authenticated) measureUi(parts.live, onCharger = parts.status.onCharger) else null,
+                // Measure and Sync now never run at once: each disables the other, with the reason.
+                measure = if (parts.link == LinkState.Authenticated) {
+                    measureUi(parts.live, onCharger = parts.status.onCharger, syncing = parts.sync?.syncing == true)
+                } else {
+                    null
+                },
                 details = ConnectionDetailsPresenter.present(detailsInput.copy(scanToSelectedMillis = flow.scanToSelectedMillis)),
-                ringData = RingDataPresenter.present(parts.sync, disconnectAfter, wallClock()),
+                ringData = RingDataPresenter.present(parts.sync, disconnectAfter, wallClock(), measuring = measuring),
             )
         }
 
