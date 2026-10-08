@@ -55,9 +55,10 @@ class ScriptedDrainTest {
             if (trace.firstOpcode == null) trace.firstOpcode = op
             trace.lastOpcode = op
             when (op) {
-                0x82 -> {
+                0x82 -> { // upstream RingSession.swift:4610-4616: flag = byte 2, byte 1 ff = empty channel
                     trace.sawSyncAck = true
-                    trace.syncAckFlag = frame[1].toInt() and 0xFF
+                    trace.syncAckFlag = if (frame.size > 2) frame[2].toInt() and 0xFF else null
+                    if (frame.size > 1 && (frame[1].toInt() and 0xFF) == 0xFF) trace.sawEmptyHistorySignal = true
                 }
                 0x4C -> {
                     trace.page4CCount += 1
@@ -107,6 +108,21 @@ class ScriptedDrainTest {
             HistoryCommitGate.Decision.STAGE,
             HistoryCommitGate.decide(sleep.trace.outcome, recordsAdded = sleep.trace.recordsAdded, adoptedRecordCount = 0),
         )
+    }
+
+    @Test
+    fun theSyncAckFlagIsByteTwoAndAnFfByteOneMarksAnEmptyChannel() { // upstream RingSession.swift:4610-4616
+        val flagged = drain(HistoryDrainPlan.SLEEP_STEP, listOf(hex("82000183")), exitWithoutEndMarker = null)
+        assertEquals(0x01, flagged.trace.syncAckFlag, "82 00 01 83: the flag is byte 2")
+        assertFalse(flagged.trace.sawEmptyHistorySignal, "byte 1 00 precedes a real page stream")
+
+        val empty = drain(HistoryDrainPlan.SLEEP_STEP, listOf(hex("82ff007d")), exitWithoutEndMarker = null)
+        assertEquals(0x00, empty.trace.syncAckFlag, "82 ff 00 7d: byte 2 is 00")
+        assertTrue(empty.trace.sawEmptyHistorySignal, "byte 1 ff: the ring's history pointer is already at the end")
+
+        val short = drain(HistoryDrainPlan.SLEEP_STEP, listOf(hex("82ff")), exitWithoutEndMarker = null)
+        assertNull(short.trace.syncAckFlag, "a two-byte 0x82 carries no flag")
+        assertTrue(short.trace.sawEmptyHistorySignal)
     }
 
     @Test
