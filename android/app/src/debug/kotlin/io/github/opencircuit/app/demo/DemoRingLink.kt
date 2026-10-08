@@ -10,6 +10,7 @@ import io.github.opencircuit.ble.RefusalReason
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.SendResult
+import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.Frame
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
 import kotlinx.coroutines.CoroutineScope
@@ -42,8 +43,18 @@ import kotlinx.coroutines.flow.consumeAsFlow
  * each `95 00 00` poll gets one `0x15` frame. Heart rate sends the warm-up value 8 for the first
  * two polls after an entry, then made-up resting values; SpO₂ sends one frame without a valid
  * reading, then made-up values in the high 90s. A poll before any mode was chosen gets nothing.
+ *
+ * It answers a history sync like a ring: after `02 00 <cursor> <channel> 01 00` and `07 00 00`
+ * it sends `82 00 00 82`, then three `0x4c` pages of made-up records ending at [wallClock], each
+ * only once the previous one is acknowledged ([acknowledge]), then a `0x50` end report. A page
+ * sent and not acknowledged is offered again by the next sync; once drained, the demo has
+ * nothing new for later syncs.
  */
-class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable, LinkDiagnostics {
+class DemoRingLink(
+    private val scope: CoroutineScope,
+    /** The phone's wall clock in milliseconds: the demo's history records end at it. */
+    private val wallClock: () -> Long = System::currentTimeMillis,
+) : RingLink, AutoCloseable, LinkDiagnostics {
 
     override val ring = RING
 
@@ -78,6 +89,12 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
     // History pages sent on this connection and not acknowledged yet. Guarded by `this`.
     private val pendingPages = ArrayList<ByteArray>()
 
+    // The demo's history: made at the first sync, drained page by page, never refilled (a second
+    // sync finds nothing new). A sync open waiting for its `07 00 00`, and the running sync. Guarded by `this`.
+    private var backlog: ArrayDeque<ByteArray>? = null
+    private var syncOpened = false
+    private var syncJob: Job? = null
+
     override suspend fun send(command: ByteArray): SendResult = when {
         isReservedAuthCommand(command) -> SendResult.Refused(RefusalReason.AUTH_COMMAND_RESERVED)
         stateFlow.value != LinkState.Authenticated -> SendResult.Refused(RefusalReason.NOT_AUTHENTICATED)
@@ -97,7 +114,39 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
         val index = pendingPages.indexOfFirst { it.contentEquals(page) }
         if (index < 0) return SendResult.Refused(RefusalReason.PAGE_NOT_PENDING)
         pendingPages.removeAt(index)
+        // The ring drops an acknowledged page and sends its next one.
+        val drained = backlog
+        if (drained != null && drained.firstOrNull()?.contentEquals(page) == true) {
+            drained.removeFirst()
+            syncJob = scope.launch { sendNextPage() }
+        }
         SendResult.Sent
+    }
+
+    /** `07 00 00` after a sync open: answer `82 00 00 82`, then the first page still held. With the lock held. */
+    private fun startSync() {
+        if (backlog == null) backlog = ArrayDeque(demoBacklog(wallClock()))
+        syncJob?.cancel()
+        syncJob = scope.launch {
+            delay(SYNC_ANSWER_MILLIS)
+            frameChannel.trySend(SYNC_ACK)
+            sendNextPage()
+        }
+    }
+
+    /** After a page gap: the next page held (it waits for its acknowledgement), or the end report when none is left. */
+    private suspend fun sendNextPage() {
+        delay(PAGE_GAP_MILLIS)
+        synchronized(this) {
+            if (stateFlow.value != LinkState.Authenticated) return
+            val next = backlog?.firstOrNull()
+            if (next == null) {
+                frameChannel.trySend(END_OF_HISTORY)
+            } else {
+                pendingPages += next.copyOf()
+                frameChannel.trySend(next.copyOf())
+            }
+        }
     }
 
     @Synchronized
@@ -109,7 +158,15 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
             // The ring answers the status query with its descriptor (PROTOCOL.md §5.4).
             opcode == 0xd0 -> frameChannel.trySend(demoDescriptor())
             opcode == 0x06 && (sub == HEART_RATE_MODE || sub == SPO2_MODE) -> liveMode = sub
-            opcode == 0x07 -> pollsSinceEntry = 0
+            // A sync open `02 00 <cursor> <channel> 01 00`; the ring answers after the `07 00 00`.
+            opcode == 0x02 && command.size == SYNC_OPEN_LENGTH -> syncOpened = true
+            opcode == 0x07 -> {
+                pollsSinceEntry = 0
+                if (syncOpened) {
+                    syncOpened = false
+                    startSync()
+                }
+            }
             opcode == 0x95 -> liveMode?.let { mode ->
                 frameChannel.trySend(if (mode == HEART_RATE_MODE) nextHeartRateFrame() else nextSpO2Frame())
                 pollsSinceEntry++
@@ -156,6 +213,10 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
         if (stateFlow.value == LinkState.Idle) return
         descriptorJob?.cancel()
         descriptorJob = null
+        // A page sent and not acknowledged stays the backlog's first: the next sync offers it again.
+        syncJob?.cancel()
+        syncJob = null
+        syncOpened = false
         // A new connection starts with no live mode chosen, as a real ring's does.
         liveMode = null
         pollsSinceEntry = 0
@@ -193,6 +254,60 @@ class DemoRingLink(private val scope: CoroutineScope) : RingLink, AutoCloseable,
 
         /** The history pages the ring waits on an acknowledgement for. */
         private val PAGE_OPCODES = setOf(0x47, 0x4C, 0x4D)
+
+        /** `02 00 <cursor, 4 bytes> <channel> 01 00`. */
+        private const val SYNC_OPEN_LENGTH = 9
+
+        /** From `07 00 00` to the `0x82` answer, and between pages. */
+        private const val SYNC_ANSWER_MILLIS = 200L
+        private const val PAGE_GAP_MILLIS = 800L
+
+        /** The ring's answer to a sync open that pages follow (PROTOCOL.md §3). */
+        private val SYNC_ACK = byteArrayOf(0x82.toByte(), 0x00, 0x00, 0x82.toByte())
+
+        /** The end-of-history report's 12-byte form (PROTOCOL.md §5.5.1); its cursors are not read by the app. */
+        private val END_OF_HISTORY = byteArrayOf(0x50, 0x00, 0x00, 0x12, 0x0c, 0x22, 0xaa.toByte(), 0xe4.toByte(), 0x0c, 0x22, 0xac.toByte(), 0xb5.toByte())
+
+        private const val PAGES = 3
+        private const val RECORDS_PER_PAGE = 6
+        private const val EPOCH_SECONDS = 150L
+
+        /**
+         * The body (bytes after the four-byte counter) of the six records of upstream's public
+         * overnight test page (`RingKitVerify/main.swift:305-309` @ b1c2fdd): a well-formed shape
+         * for the demo's made-up history, given new counters.
+         */
+        private val RECORD_BODIES: List<String> = listOf(
+            "55210a7d120a01010101010000040240040000",
+            "55000300120a010101010100003c00000d0120",
+            "540001005f0a010101010100001101b00f0044",
+            "6027077b120a010101010100402501c02235a0",
+            "51260577120b010101010108a0100000040130",
+            "502d0378120a01010101010160200000040ff0",
+        )
+
+        /**
+         * Three `0x4c` pages of six records each, one epoch (150 s) apart, the last at [nowMillis]
+         * rounded down to an epoch, oldest first; each with its countdown and XOR trailer.
+         */
+        private fun demoBacklog(nowMillis: Long): List<ByteArray> {
+            val last = (nowMillis / 1_000 - Command.SYNC_EPOCH) / EPOCH_SECONDS * EPOCH_SECONDS
+            val first = last - (PAGES * RECORDS_PER_PAGE - 1) * EPOCH_SECONDS
+            return (0 until PAGES).map { page ->
+                val queuedAfter = (PAGES - 1 - page) * RECORDS_PER_PAGE
+                val body = ArrayList<Byte>()
+                body += 0x4C.toByte()
+                body += ((queuedAfter ushr 8) and 0xFF).toByte()
+                body += (queuedAfter and 0xFF).toByte()
+                for (r in 0 until RECORDS_PER_PAGE) {
+                    val counter = first + (page * RECORDS_PER_PAGE + r) * EPOCH_SECONDS
+                    body += listOf((counter ushr 24).toByte(), (counter ushr 16).toByte(), (counter ushr 8).toByte(), counter.toByte())
+                    body += RECORD_BODIES[r].chunked(2).map { it.toInt(16).toByte() }
+                }
+                val bytes = body.toByteArray()
+                bytes + Frame.xorTrailer(bytes).toByte()
+            }
+        }
 
         /** Polls answered with the warm-up sentinel after each entry (PROTOCOL.md §5.1). */
         private const val WARM_UP_POLLS = 2

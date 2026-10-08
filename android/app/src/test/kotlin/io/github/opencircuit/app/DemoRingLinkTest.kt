@@ -2,7 +2,16 @@ package io.github.opencircuit.app
 
 import io.github.opencircuit.app.demo.DemoRingLink
 import io.github.opencircuit.app.live.LiveMode
+import io.github.opencircuit.app.ring.RingAction
+import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.session.RingSessionController
+import io.github.opencircuit.app.sync.SessionHistory
+import io.github.opencircuit.app.sync.StoreHistory
+import io.github.opencircuit.store.BlobStore
+import io.github.opencircuit.store.StoreFactory
+import io.github.opencircuit.store.openInMemory
+import kotlinx.coroutines.test.StandardTestDispatcher
+import java.time.ZoneOffset
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
 import io.github.opencircuit.ble.RefusalReason
@@ -42,6 +51,44 @@ class DemoRingLinkTest {
         assertEquals(LinkState.Authenticated, link.state.value)
         assertEquals(72, controller.deviceStatus.state.value.batteryPercent)
         assertEquals(emptyList(), logLines, "the demo descriptor is a well-formed 0x10 frame")
+    }
+
+    /**
+     * Sync now on the demo ring (the emulator's walkthrough): it answers the open like a ring —
+     * `82 00 00 82`, then three pages of six made-up records from the last hour and a half, each
+     * released only once the previous one is acknowledged, then `0x50` — and the app stores all
+     * 18 records and disconnects. The demo has nothing new for a second sync.
+     */
+    @Test
+    fun syncNowOnTheDemoRingStoresItsSmallBacklogAndASecondSyncFindsNothingNew() = runTest {
+        val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
+        try {
+            val wall = { SYNC_TEST_EPOCH.plusMillis(testScheduler.currentTime) }
+            val link = DemoRingLink(backgroundScope, wallClock = { wall().toEpochMilli() })
+            val session = RingSessionController(
+                link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it },
+                history = SessionHistory(StoreHistory({ db }, "AA:BB:CC:DD:EE:00", { ZoneOffset.UTC }), wall, disconnectAfterSync = { true }),
+            )
+            val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, wallClock = wall)
+            runCurrent()
+
+            viewModel.onAction(RingAction.SyncNow)
+            advanceTo(60_000)
+
+            val records = BlobStore(db).loadEpochArchive("AA:BB:CC:DD:EE:00").records
+            assertEquals(18, records.size)
+            assertTrue(records.all { it.date() in SYNC_TEST_EPOCH.minusSeconds(5_400)..SYNC_TEST_EPOCH }, "dated the last hour and a half")
+            assertEquals(LinkState.Idle, link.state.value, "disconnected after the commit")
+            assertEquals("18 records · complete", viewModel.uiState.value.ringData.lastSync)
+
+            viewModel.onAction(RingAction.SyncNow)
+            advanceTo(120_000)
+
+            assertEquals(18, BlobStore(db).loadEpochArchive("AA:BB:CC:DD:EE:00").records.size)
+            assertEquals("0 records · complete", viewModel.uiState.value.ringData.lastSync)
+        } finally {
+            db.close()
+        }
     }
 
     @Test
