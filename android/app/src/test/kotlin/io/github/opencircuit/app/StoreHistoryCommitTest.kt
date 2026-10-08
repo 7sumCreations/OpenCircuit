@@ -4,6 +4,7 @@ import io.github.opencircuit.app.sync.CommitResult
 import io.github.opencircuit.app.sync.StoreHistory
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CommitPlanner
+import io.github.opencircuit.ringkit.HistoryCommitGate
 import io.github.opencircuit.store.BlobStore
 import io.github.opencircuit.store.HistoryJournal
 import io.github.opencircuit.store.StoreFactory
@@ -45,10 +46,12 @@ class StoreHistoryCommitTest {
 
             val result = store.commit(now, CommitPlanner.Drained.Everything)
 
-            assertEquals(CommitResult(pages = 3, records = 6, samplesStored = result.samplesStored, droppedAfterBound = 1, unreadablePages = 0, pagesNotKept = 2, chunks = 1), result)
+            // No channel's evidence was given, so the staging gate skips (HistoryCommitGate, D-43).
+            val skip = HistoryCommitGate.Decision.SKIP
+            assertEquals(CommitResult(pages = 3, records = 6, samplesStored = result.samplesStored, droppedAfterBound = 1, unreadablePages = 0, pagesNotKept = 2, chunks = 1, staging = skip), result)
             assertEquals(HistoryTestPages.counters(0).dropLast(1), BlobStore(db).loadEpochArchive(TEST_RING_ID).records.map { it.counter })
             assertEquals(emptyList(), HistoryJournal(db).read(TEST_RING_ID).entries)
-            assertEquals(CommitResult(), store.commit(now, CommitPlanner.Drained.Everything), "an empty journal commits nothing")
+            assertEquals(CommitResult(staging = skip), store.commit(now, CommitPlanner.Drained.Everything), "an empty journal commits nothing")
         } finally {
             db.close()
         }

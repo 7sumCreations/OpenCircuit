@@ -1,5 +1,8 @@
 package io.github.opencircuit.ringkit
 
+import java.time.Instant
+import java.time.ZoneId
+
 // Which journaled history records one commit may put in the store, and in which transactions.
 // Kotlin-only (PORTING.md D-267): upstream commits every record of a drain in one batch
 // (ios/OpenCircuit/BLE/RingSession.swift:3656-3665 @ b1c2fdd).
@@ -15,7 +18,7 @@ package io.github.opencircuit.ringkit
 // memory (5,000 records: about 32 ms and 55 MB per chunk on a 210k-record backlog, measured on the
 // JVM store; one batch peaked at 261 MB).
 
-/** Pure planning for the history commit: the hold-back bound and the chunks. */
+/** Pure planning for the history commit: the hold-back bound, the chunks, and the nights to stage. */
 object CommitPlanner {
 
     /** The most records one commit transaction takes. */
@@ -58,6 +61,24 @@ object CommitPlanner {
         lastCounter != null -> Drained.Through(lastCounter)
         else -> Drained.Nothing
     }
+
+    /**
+     * The nights a commit stages, oldest first (PORTING.md D-269): every complete night of the
+     * stored [archive] ([BulkSleep.completeNights]; [drainedThrough] is the commit's time when the
+     * sync drained every channel, else null) whose last record is after [stagedThrough] — the end of
+     * the newest night already staged in sequence (null: none yet). The archive holds released
+     * records only, never a held-back journal row (D-267), so a night still partly on the ring is
+     * never complete here.
+     */
+    fun nightsToStage(
+        archive: List<BulkRecord>,
+        zone: ZoneId,
+        drainedThrough: Instant?,
+        stagedThrough: Instant?,
+        temperatures: List<TemperatureSample> = emptyList(),
+    ): List<List<BulkRecord>> =
+        BulkSleep.completeNights(archive, zone, drainedThrough, temperatures)
+            .filter { night -> stagedThrough == null || night.last().date().isAfter(stagedThrough) }
 
     /** The least drained of [channels]: the sync may release only what every planned channel is drained through. */
     fun leastDrained(channels: List<Drained>): Drained {

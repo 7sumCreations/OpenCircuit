@@ -3,6 +3,7 @@ package io.github.opencircuit.app
 import io.github.opencircuit.app.sync.CommitResult
 import io.github.opencircuit.app.sync.HistoryPages
 import io.github.opencircuit.app.sync.HistoryStore
+import io.github.opencircuit.app.sync.SyncEvidence
 import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.CommitPlanner
 import kotlinx.coroutines.async
@@ -32,7 +33,7 @@ class AckLaneIdleTest {
             return 1
         }
 
-        override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean) = CommitResult()
+        override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean, evidence: SyncEvidence) = CommitResult()
     }
 
     @Test

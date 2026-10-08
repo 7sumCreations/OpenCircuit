@@ -1,6 +1,8 @@
 package io.github.opencircuit.app.sync
 
 import io.github.opencircuit.ringkit.CommitPlanner
+import io.github.opencircuit.ringkit.HistoryChannelOutcome
+import io.github.opencircuit.ringkit.HistoryCommitGate
 import java.time.Instant
 
 /**
@@ -23,8 +25,18 @@ interface HistoryStore {
      * each chunk all or nothing. Throws when a chunk fails; the chunks before it are kept. Before
      * each chunk after the first it asks [keepGoing]; on false it stops there and the remaining
      * pages stay stored (a paused sync's commit is bounded in time, PORTING.md D-268).
+     *
+     * Then, unless told to stop, it stages nights (PORTING.md D-269): [evidence] — what the sync's
+     * own channels delivered — goes through `HistoryCommitGate.decide` (D-43); on STAGE or
+     * RESTAGE_FROM_ARCHIVE every complete night of the stored archive not yet staged is staged and
+     * saved, oldest first, until the first one the store defers.
      */
-    suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean = { true }): CommitResult
+    suspend fun commit(
+        now: Instant,
+        drained: CommitPlanner.Drained,
+        keepGoing: () -> Boolean = { true },
+        evidence: SyncEvidence = SyncEvidence.NONE,
+    ): CommitResult
 
     companion object {
         /**
@@ -35,8 +47,27 @@ interface HistoryStore {
             override suspend fun append(page: ByteArray, receivedAt: Instant, drainId: Long?): Long =
                 throw IllegalStateException("this session keeps no history")
 
-            override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean): CommitResult = CommitResult()
+            override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean, evidence: SyncEvidence): CommitResult =
+                CommitResult()
         }
+    }
+}
+
+/**
+ * What a sync's own channels say about the night, for the commit's staging gate
+ * (`HistoryCommitGate.decide`): the sleep channel's verdict (null when it never ran), the new
+ * `0x4c` records it delivered, and the sleep-vitals records another channel delivered (a ring can
+ * hand its night to the all-day channel). Records stored outside any drain are counted by the store
+ * itself, from its journal.
+ */
+data class SyncEvidence(
+    val sleepOutcome: HistoryChannelOutcome? = null,
+    val sleepRecordsAdded: Int = 0,
+    val nightRecordsOnOtherChannels: Int = 0,
+) {
+    companion object {
+        /** Nothing drained: no channel ran. */
+        val NONE = SyncEvidence()
     }
 }
 
@@ -65,4 +96,18 @@ data class CommitResult(
     val chunks: Int = 0,
     /** Transactions it did not start because it was told to stop; their pages stay stored. */
     val chunksLeft: Int = 0,
+    /** The staging gate's decision; null when the commit stopped before staging. */
+    val staging: HistoryCommitGate.Decision? = null,
+    /** Complete nights staged and handed to the store (whatever the store kept). */
+    val nightsStaged: Int = 0,
+    /**
+     * Complete nights left for a later commit: the store holds every save until its one-time move of
+     * stored nights is done, or a save failed. Never dropped — the archive keeps them.
+     */
+    val nightsWaiting: Int = 0,
+    /**
+     * What went wrong while staging, by kind (a failed night save, re-derivation or nap save);
+     * null when nothing did. The records are stored either way; the nights are retried later.
+     */
+    val stagingFault: String? = null,
 )

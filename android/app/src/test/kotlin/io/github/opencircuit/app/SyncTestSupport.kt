@@ -7,6 +7,7 @@ import io.github.opencircuit.app.sync.CommitResult
 import io.github.opencircuit.app.sync.HistoryStore
 import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.app.sync.StoreHistory
+import io.github.opencircuit.app.sync.SyncEvidence
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CommitPlanner
 import io.github.opencircuit.store.BlobStore
@@ -47,9 +48,13 @@ internal class RecordingStore(private val real: HistoryStore, private val note: 
     /** How far each commit was told the sync drained the ring, in order. */
     val drained = CopyOnWriteArrayList<CommitPlanner.Drained>()
 
-    override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean): CommitResult {
+    /** What each commit was told the sync's channels delivered, in order. */
+    val evidence = CopyOnWriteArrayList<SyncEvidence>()
+
+    override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean, evidence: SyncEvidence): CommitResult {
         this.drained += drained
-        val result = real.commit(now, drained, keepGoing)
+        this.evidence += evidence
+        val result = real.commit(now, drained, keepGoing, evidence)
         note("commit returned")
         return result
     }

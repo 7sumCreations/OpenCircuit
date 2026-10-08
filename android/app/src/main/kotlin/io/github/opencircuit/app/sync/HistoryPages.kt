@@ -1,6 +1,7 @@
 package io.github.opencircuit.app.sync
 
 import io.github.opencircuit.ble.SendResult
+import io.github.opencircuit.ringkit.BulkRecord
 import io.github.opencircuit.ringkit.BulkSleep
 import io.github.opencircuit.ringkit.EpochRecord
 import kotlinx.coroutines.CoroutineScope
@@ -22,9 +23,15 @@ sealed interface HistorySignal {
     /**
      * A page is stored and acknowledged; [countdown] is the records the ring says are still queued
      * after it (16 bits, `0x47` / `0x4c` only), and [counters] the counters of the `0x4c` records it
-     * held (empty for any other page), so a drain counts unique records, not pages.
+     * held (empty for any other page), so a drain counts unique records, not pages; [nightCounters]
+     * are those of its sleep-vitals records (the night layout).
      */
-    data class PageStored(val opcode: Int, val countdown: Int?, val counters: List<Long> = emptyList()) : HistorySignal
+    data class PageStored(
+        val opcode: Int,
+        val countdown: Int?,
+        val counters: List<Long> = emptyList(),
+        val nightCounters: List<Long> = emptyList(),
+    ) : HistorySignal
 
     /** The ring's `0x82` answer to the sync open (its bytes are kept for the trace). */
     class SyncAck(frame: ByteArray) : HistorySignal {
@@ -164,8 +171,9 @@ class HistoryPages(
                 countsFlow.update {
                     it.copy(acknowledged = it.acknowledged + 1, outsideDrain = it.outsideDrain + if (arrival.drainId == null) 1 else 0)
                 }
-                val counters = if (opcode == PAGE_4C) BulkSleep.recordsFromPage(page).map { it.counter } else emptyList()
-                signal(arrival, HistorySignal.PageStored(opcode, EpochRecord.remainingRecordCountdown(page), counters))
+                val records = if (opcode == PAGE_4C) BulkSleep.recordsFromPage(page) else emptyList()
+                val night = records.filter { it.layout == BulkRecord.Layout.SLEEP_VITALS }.map { it.counter }
+                signal(arrival, HistorySignal.PageStored(opcode, EpochRecord.remainingRecordCountdown(page), records.map { it.counter }, night))
             }
             else -> {
                 countsFlow.update { it.copy(ackFailures = it.ackFailures + 1) }

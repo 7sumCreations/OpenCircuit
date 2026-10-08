@@ -351,7 +351,9 @@ class HistoryDrainController(
         } finally {
             pages.detach(drainId)
         }
-        return commitAndReport(run.outcome(plan.size), run.reports, plan, teardowns, linkWasUp = true)
+        val sleep = run.reports.firstOrNull { it.channel == Command.SYNC_CHANNEL_SLEEP }
+        val evidence = SyncEvidence(sleep?.verdict, sleep?.records ?: 0, run.nightOnOtherChannels.size)
+        return commitAndReport(run.outcome(plan.size), run.reports, plan, teardowns, linkWasUp = true, evidence = evidence)
     }
 
     /** One channel: rounds until one ends without earning a reopen. */
@@ -463,6 +465,9 @@ class HistoryDrainController(
                         quietFrom = now
                         if (fellBack) channel.fallbackHelped = true
                         val added = signal.counters.count { run.counters.add(it) }
+                        // Upstream counts only those inside the cached night window (RingSession.swift:3757-3765);
+                        // with no window resolved yet every one counts, as its isNightRecord does without one.
+                        if (step.channel != Command.SYNC_CHANNEL_SLEEP) run.nightOnOtherChannels += signal.nightCounters
                         stateFlow.update { it.copy(pagesThisSync = it.pagesThisSync + 1) }
                         if (signal.opcode == PAGE_4C) {
                             signal.counters.maxOrNull()?.let { newest -> channel.lastCounter = maxOf(channel.lastCounter ?: newest, newest) }
@@ -583,17 +588,25 @@ class HistoryDrainController(
         plan: List<HistoryDrainPlan.Step>,
         teardowns: MutableStateFlow<List<LinkTeardown>>,
         linkWasUp: Boolean,
+        evidence: SyncEvidence = SyncEvidence.NONE,
     ): SyncReport {
         // A paused sync's commit starts no transaction 5 s after the pause, inside Android's
         // 10 s cached-app freeze delay; what is left stays stored for the resumed sync.
         val keepGoing = { pausedAt.get()?.let { monotonicMillis() < it + PAUSED_COMMIT_MILLIS } ?: true }
         val commit = try {
-            store.commit(wallClock(), drainedThrough(plan, channels), keepGoing)
+            store.commit(wallClock(), drainedThrough(plan, channels), keepGoing, evidence)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log("The sync's commit failed: ${e::class.java.simpleName}; the pages stay on the phone for the next sync")
             null
+        }
+        commit?.staging?.let { decision ->
+            log(
+                "history-commit staging=${decision.rawValue} nights=${commit.nightsStaged} waiting=${commit.nightsWaiting}" +
+                    (commit.stagingFault?.let { " fault=$it" } ?: ""),
+            )
+            if (commit.nightsWaiting > 0) log("${commit.nightsWaiting} nights waiting for the store's one-time update; they stay on the phone and are staged by a later sync")
         }
         // Only after the commit returned: what the ring dropped is in the store by now.
         if (commit != null && disconnectAfterSync()) {
@@ -646,6 +659,9 @@ class HistoryDrainController(
     /** What one sync has done so far. Touched only by the sync's own coroutine. */
     private class SyncRun(val deadline: Long) {
         val counters = HashSet<Long>()
+
+        /** Sleep-vitals records a channel other than the sleep channel delivered (a ring can hand it the night). */
+        val nightOnOtherChannels = HashSet<Long>()
         val reports = mutableListOf<ChannelReport>()
         var reauthUsed = false
         var saveFailed = false

@@ -164,4 +164,22 @@ class CommitPlannerTest {
     fun aChunkSizeBelowOneIsRefused() {
         assertFailsWith<IllegalArgumentException> { CommitPlanner.plan(emptyList(), Drained.Everything, chunkRecords = 0) }
     }
+
+    @Test
+    fun theNightsToStageAreTheCompleteOnesEndingAfterStagedThrough() {
+        val backlog = BacklogSevenNights.load()
+        val drained = backlog.records.last().date().plusSeconds(7_200)
+        val all = BulkSleep.completeNights(backlog.records, backlog.zone, drained, backlog.temps)
+        fun stage(stagedThrough: java.time.Instant?, drainedThrough: java.time.Instant? = drained) =
+            CommitPlanner.nightsToStage(backlog.records, backlog.zone, drainedThrough, stagedThrough, backlog.temps).map { it.first().counter }
+
+        assertEquals(all.map { it.first().counter }, stage(null))
+        // Staged through night 4's end: nights 5–7 are left, oldest first.
+        val night4End = all[3].last().date()
+        assertEquals(all.drop(4).map { it.first().counter }, stage(night4End))
+        // One second before its end, night 4 is not yet staged.
+        assertEquals(all.drop(3).map { it.first().counter }, stage(night4End.minusSeconds(1)))
+        // Staged through the last night: nothing.
+        assertEquals(emptyList(), stage(all.last().last().date()))
+    }
 }
