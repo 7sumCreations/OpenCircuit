@@ -23,6 +23,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.consumeAsFlow
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 /**
  * A pretend ring for debug builds: the emulator has no Bluetooth ring, so the app's screens and
@@ -45,15 +49,19 @@ import kotlinx.coroutines.flow.consumeAsFlow
  * reading, then made-up values in the high 90s. A poll before any mode was chosen gets nothing.
  *
  * It answers a history sync like a ring: after `02 00 <cursor> <channel> 01 00` and `07 00 00`
- * it sends `82 00 00 82`, then three `0x4c` pages of made-up records ending at [wallClock], each
- * only once the previous one is acknowledged ([acknowledge]), then a `0x50` end report. A page
- * sent and not acknowledged is offered again by the next sync; once drained, the demo has
- * nothing new for later syncs.
+ * it sends `82 00 00 82`, then that channel's `0x4c` pages, each only once the previous one is
+ * acknowledged ([acknowledge]), then a `0x50` end report. At the first sync it makes its history,
+ * ending at [wallClock]: on the sleep channel three synthetic nights ([DemoNight], each at its
+ * local time of day in [zone] on the three mornings before now), on the all-day channel the idle
+ * records between the nights and after the last one, up to now. A page sent and not acknowledged
+ * is offered again by the next sync; once drained, the demo has nothing new for later syncs.
  */
 class DemoRingLink(
     private val scope: CoroutineScope,
     /** The phone's wall clock in milliseconds: the demo's history records end at it. */
     private val wallClock: () -> Long = System::currentTimeMillis,
+    /** The phone's zone: the demo's nights are placed at their local time of day. */
+    private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) : RingLink, AutoCloseable, LinkDiagnostics {
 
     override val ring = RING
@@ -89,10 +97,12 @@ class DemoRingLink(
     // History pages sent on this connection and not acknowledged yet. Guarded by `this`.
     private val pendingPages = ArrayList<ByteArray>()
 
-    // The demo's history: made at the first sync, drained page by page, never refilled (a second
-    // sync finds nothing new). A sync open waiting for its `07 00 00`, and the running sync. Guarded by `this`.
-    private var backlog: ArrayDeque<ByteArray>? = null
-    private var syncOpened = false
+    // The demo's history, per channel: made at the first sync, drained page by page, never refilled
+    // (a second sync finds nothing new). The channel a sync open names, waiting for its `07 00 00`;
+    // the channel being sent; the running sync. Guarded by `this`.
+    private var backlog: Map<Int, ArrayDeque<ByteArray>>? = null
+    private var openedChannel: Int? = null
+    private var sendingChannel: Int? = null
     private var syncJob: Job? = null
 
     override suspend fun send(command: ByteArray): SendResult = when {
@@ -115,7 +125,7 @@ class DemoRingLink(
         if (index < 0) return SendResult.Refused(RefusalReason.PAGE_NOT_PENDING)
         pendingPages.removeAt(index)
         // The ring drops an acknowledged page and sends its next one.
-        val drained = backlog
+        val drained = sendingChannel?.let { backlog?.get(it) }
         if (drained != null && drained.firstOrNull()?.contentEquals(page) == true) {
             drained.removeFirst()
             syncJob = scope.launch { sendNextPage() }
@@ -127,9 +137,10 @@ class DemoRingLink(
     override suspend fun reauthenticate(): SendResult =
         if (stateFlow.value == LinkState.Authenticated) SendResult.Sent else SendResult.Refused(RefusalReason.NOT_AUTHENTICATED)
 
-    /** `07 00 00` after a sync open: answer `82 00 00 82`, then the first page still held. With the lock held. */
-    private fun startSync() {
-        if (backlog == null) backlog = ArrayDeque(demoBacklog(wallClock()))
+    /** `07 00 00` after a sync open of [channel]: answer `82 00 00 82`, then its first page still held. With the lock held. */
+    private fun startSync(channel: Int) {
+        if (backlog == null) backlog = demoBacklog(wallClock(), zone()).mapValues { ArrayDeque(it.value) }
+        sendingChannel = channel
         syncJob?.cancel()
         syncJob = scope.launch {
             delay(SYNC_ANSWER_MILLIS)
@@ -138,12 +149,12 @@ class DemoRingLink(
         }
     }
 
-    /** After a page gap: the next page held (it waits for its acknowledgement), or the end report when none is left. */
+    /** After a page gap: the channel's next page held (it waits for its acknowledgement), or the end report when none is left. */
     private suspend fun sendNextPage() {
         delay(PAGE_GAP_MILLIS)
         synchronized(this) {
             if (stateFlow.value != LinkState.Authenticated) return
-            val next = backlog?.firstOrNull()
+            val next = sendingChannel?.let { backlog?.get(it) }?.firstOrNull()
             if (next == null) {
                 frameChannel.trySend(END_OF_HISTORY)
             } else {
@@ -163,12 +174,12 @@ class DemoRingLink(
             opcode == 0xd0 -> frameChannel.trySend(demoDescriptor())
             opcode == 0x06 && (sub == HEART_RATE_MODE || sub == SPO2_MODE) -> liveMode = sub
             // A sync open `02 00 <cursor> <channel> 01 00`; the ring answers after the `07 00 00`.
-            opcode == 0x02 && command.size == SYNC_OPEN_LENGTH -> syncOpened = true
+            opcode == 0x02 && command.size == SYNC_OPEN_LENGTH -> openedChannel = command[SYNC_OPEN_CHANNEL].toInt() and 0xFF
             opcode == 0x07 -> {
                 pollsSinceEntry = 0
-                if (syncOpened) {
-                    syncOpened = false
-                    startSync()
+                openedChannel?.let { channel ->
+                    openedChannel = null
+                    startSync(channel)
                 }
             }
             opcode == 0x95 -> liveMode?.let { mode ->
@@ -220,7 +231,8 @@ class DemoRingLink(
         // A page sent and not acknowledged stays the backlog's first: the next sync offers it again.
         syncJob?.cancel()
         syncJob = null
-        syncOpened = false
+        openedChannel = null
+        sendingChannel = null
         // A new connection starts with no live mode chosen, as a real ring's does.
         liveMode = null
         pollsSinceEntry = 0
@@ -259,12 +271,16 @@ class DemoRingLink(
         /** The history pages the ring waits on an acknowledgement for. */
         private val PAGE_OPCODES = setOf(0x47, 0x4C, 0x4D)
 
-        /** `02 00 <cursor, 4 bytes> <channel> 01 00`. */
+        /** `02 00 <cursor, 4 bytes> <channel> 01 00`, the channel at byte 6. */
         private const val SYNC_OPEN_LENGTH = 9
+        private const val SYNC_OPEN_CHANNEL = 6
 
-        /** From `07 00 00` to the `0x82` answer, and between pages. */
+        /**
+         * From `07 00 00` to the `0x82` answer, and between pages. A real ring takes 1–3 s per page;
+         * the demo's few hundred pages arrive quicker so the walkthrough takes seconds, not minutes.
+         */
         private const val SYNC_ANSWER_MILLIS = 200L
-        private const val PAGE_GAP_MILLIS = 800L
+        private const val PAGE_GAP_MILLIS = 60L
 
         /** The ring's answer to a sync open that pages follow (PROTOCOL.md §3). */
         private val SYNC_ACK = byteArrayOf(0x82.toByte(), 0x00, 0x00, 0x82.toByte())
@@ -272,43 +288,66 @@ class DemoRingLink(
         /** The end-of-history report's 12-byte form (PROTOCOL.md §5.5.1); its cursors are not read by the app. */
         private val END_OF_HISTORY = byteArrayOf(0x50, 0x00, 0x00, 0x12, 0x0c, 0x22, 0xaa.toByte(), 0xe4.toByte(), 0x0c, 0x22, 0xac.toByte(), 0xb5.toByte())
 
-        private const val PAGES = 3
-        private const val RECORDS_PER_PAGE = 6
+        /** Ten 23-byte records fit a page at the 247-byte MTU the ring grants (PROTOCOL.md §2.1). */
+        private const val RECORDS_PER_PAGE = 10
         private const val EPOCH_SECONDS = 150L
 
-        /**
-         * The body (bytes after the four-byte counter) of the six records of upstream's public
-         * overnight test page (`RingKitVerify/main.swift:305-309` @ b1c2fdd): a well-formed shape
-         * for the demo's made-up history, given new counters.
-         */
-        private val RECORD_BODIES: List<String> = listOf(
-            "55210a7d120a01010101010000040240040000",
-            "55000300120a010101010100003c00000d0120",
-            "540001005f0a010101010100001101b00f0044",
-            "6027077b120a010101010100402501c02235a0",
-            "51260577120b010101010108a0100000040130",
-            "502d0378120a01010101010160200000040ff0",
-        )
+        /** Nights in the demo's history. */
+        private const val NIGHTS = 3
+
+        /** The last night ends at least this long before the first sync, so it is complete. */
+        private val LAST_WAKE_BEFORE_NOW: Duration = Duration.ofHours(1)
 
         /**
-         * Three `0x4c` pages of six records each, one epoch (150 s) apart, the last at [nowMillis]
-         * rounded down to an epoch, oldest first; each with its countdown and XOR trailer.
+         * The demo's history at [nowMillis], per channel, oldest first, as `0x4c` pages with their
+         * countdown and XOR trailer. Sleep channel: [NIGHTS] copies of [DemoNight], each ending at
+         * the template's wake time of day (08:27:41) in [zone] on one of the mornings before now —
+         * the last at least an hour ago — on the 150 s grid. All-day channel: the idle record
+         * every 150 s between the nights, and after the last one up to now.
          */
-        private fun demoBacklog(nowMillis: Long): List<ByteArray> {
-            val last = (nowMillis / 1_000 - Command.SYNC_EPOCH) / EPOCH_SECONDS * EPOCH_SECONDS
-            val first = last - (PAGES * RECORDS_PER_PAGE - 1) * EPOCH_SECONDS
-            return (0 until PAGES).map { page ->
-                val queuedAfter = (PAGES - 1 - page) * RECORDS_PER_PAGE
-                val body = ArrayList<Byte>()
-                body += 0x4C.toByte()
-                body += ((queuedAfter ushr 8) and 0xFF).toByte()
-                body += (queuedAfter and 0xFF).toByte()
-                for (r in 0 until RECORDS_PER_PAGE) {
-                    val counter = first + (page * RECORDS_PER_PAGE + r) * EPOCH_SECONDS
-                    body += listOf((counter ushr 24).toByte(), (counter ushr 16).toByte(), (counter ushr 8).toByte(), counter.toByte())
-                    body += RECORD_BODIES[r].chunked(2).map { it.toInt(16).toByte() }
-                }
-                val bytes = body.toByteArray()
+        internal fun demoBacklog(nowMillis: Long, zone: ZoneId): Map<Int, List<ByteArray>> {
+            val now = Instant.ofEpochMilli(nowMillis)
+            val templateEnd = DemoNight.FIRST_COUNTER + (DemoNight.RECORDS - 1) * EPOCH_SECONDS
+            val wakeTime = Instant.ofEpochSecond(Command.SYNC_EPOCH + templateEnd).atZone(ZoneOffset.UTC).toLocalTime()
+            var lastWake = now.atZone(zone).toLocalDate().atTime(wakeTime).atZone(zone)
+            if (lastWake.toInstant().isAfter(now.minus(LAST_WAKE_BEFORE_NOW))) lastWake = lastWake.minusDays(1)
+            val nowCounter = nowMillis / 1_000 - Command.SYNC_EPOCH
+
+            val sleep = ArrayList<ByteArray>()
+            val allDay = ArrayList<ByteArray>()
+            var previousEnd: Long? = null
+            for (k in 0 until NIGHTS) {
+                val wake = lastWake.minusDays((NIGHTS - 1 - k).toLong()).toEpochSecond() - Command.SYNC_EPOCH
+                val first = DemoNight.FIRST_COUNTER + Math.floorDiv(wake - templateEnd, EPOCH_SECONDS) * EPOCH_SECONDS
+                previousEnd?.let { end -> idle(end + EPOCH_SECONDS, first - 1, allDay) }
+                for (i in 0 until DemoNight.RECORDS) sleep += record(first + i * EPOCH_SECONDS, DemoNight.body(i))
+                previousEnd = first + (DemoNight.RECORDS - 1) * EPOCH_SECONDS
+            }
+            previousEnd?.let { end -> idle(end + EPOCH_SECONDS, nowCounter, allDay) }
+            return mapOf(Command.SYNC_CHANNEL_SLEEP to pages(sleep), Command.SYNC_CHANNEL_ALL_DAY to pages(allDay))
+        }
+
+        /** Idle records every 150 s from [from] through [through] (sync-epoch seconds), into [into]. */
+        private fun idle(from: Long, through: Long, into: MutableList<ByteArray>) {
+            var counter = from
+            while (counter <= through) {
+                into += record(counter, DemoNight.IDLE_BODY)
+                counter += EPOCH_SECONDS
+            }
+        }
+
+        /** One 23-byte record: [counter] big-endian, then [body]. */
+        private fun record(counter: Long, body: ByteArray): ByteArray =
+            byteArrayOf((counter ushr 24).toByte(), (counter ushr 16).toByte(), (counter ushr 8).toByte(), counter.toByte()) + body
+
+        /** [records] as `0x4c` pages of up to [RECORDS_PER_PAGE], each counting down the records still queued after it. */
+        private fun pages(records: List<ByteArray>): List<ByteArray> {
+            val chunks = records.chunked(RECORDS_PER_PAGE)
+            var queued = records.size
+            return chunks.map { chunk ->
+                queued -= chunk.size
+                val header = byteArrayOf(0x4C, ((queued ushr 8) and 0xFF).toByte(), (queued and 0xFF).toByte())
+                val bytes = chunk.fold(header) { acc, r -> acc + r }
                 bytes + Frame.xorTrailer(bytes).toByte()
             }
         }

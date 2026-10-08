@@ -7,8 +7,11 @@ import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.app.sync.StoreHistory
-import io.github.opencircuit.store.BlobStore
+import io.github.opencircuit.app.sync.SyncOutcome
+import io.github.opencircuit.ringkit.Command
+import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.StoreFactory
+import java.time.Instant
 import io.github.opencircuit.store.openInMemory
 import kotlinx.coroutines.test.StandardTestDispatcher
 import java.time.ZoneOffset
@@ -54,38 +57,79 @@ class DemoRingLinkTest {
     }
 
     /**
-     * Sync now on the demo ring (the emulator's walkthrough): it answers the open like a ring —
-     * `82 00 00 82`, then three pages of six made-up records from the last hour and a half, each
-     * released only once the previous one is acknowledged, then `0x50` — and the app stores all
-     * 18 records and disconnects. The demo has nothing new for a second sync.
+     * Sync now on the demo ring (the emulator's walkthrough): it answers each channel's open like a
+     * ring — `82 00 00 82`, then pages released one acknowledgement at a time, then `0x50`. The
+     * sleep channel holds three synthetic nights (the kept seven-night fixture's first night, 254
+     * records from 21:55 to 08:27, each night placed at that local time on the three mornings
+     * before now); the all-day channel holds the idle records between and after them, up to now.
+     * The app stores every record, stages the three nights, and disconnects. The demo has nothing
+     * new for a second sync.
      */
     @Test
-    fun syncNowOnTheDemoRingStoresItsSmallBacklogAndASecondSyncFindsNothingNew() = runTest {
+    fun syncNowOnTheDemoRingStoresThreeNightsAndTheDaysBetweenAndASecondSyncFindsNothingNew() = runTest {
         val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
         try {
             val wall = { SYNC_TEST_EPOCH.plusMillis(testScheduler.currentTime) }
-            val link = DemoRingLink(backgroundScope, wallClock = { wall().toEpochMilli() })
+            val link = DemoRingLink(backgroundScope, wallClock = { wall().toEpochMilli() }, zone = { ZoneOffset.UTC })
             val session = RingSessionController(
                 link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it },
                 history = SessionHistory(StoreHistory({ db }, "AA:BB:CC:DD:EE:00", { ZoneOffset.UTC }), wall, disconnectAfterSync = { true }),
             )
-            val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, wallClock = wall)
+            val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, wallClock = wall, zone = { ZoneOffset.UTC })
             runCurrent()
 
             viewModel.onAction(RingAction.SyncNow)
-            advanceTo(60_000)
+            advanceTo(600_000)
 
-            val records = BlobStore(db).loadEpochArchive("AA:BB:CC:DD:EE:00").records
-            assertEquals(18, records.size)
-            assertTrue(records.all { it.date() in SYNC_TEST_EPOCH.minusSeconds(5_400)..SYNC_TEST_EPOCH }, "dated the last hour and a half")
+            val report = assertNotNull(session.sync.state.value.last)
+            assertEquals(SyncOutcome.COMPLETE, report.outcome)
+            val (sleep, allDay) = report.channels
+            assertEquals(3 * 254, sleep.records, "three nights of 254 records")
+            assertTrue(allDay.records > 0, "the all-day channel has its own records")
+            // Each night 21:55:11 → 08:27:41 UTC, on the mornings of 5, 6 and 7 October (now is 8 Oct 09:00Z).
+            val nights = (5..7).map { d -> Instant.parse("2026-10-%02dT21:55:11Z".format(java.util.Locale.ROOT, d - 1))..Instant.parse("2026-10-%02dT08:27:41Z".format(java.util.Locale.ROOT, d)) }
+            val all = report.counters.map { Instant.ofEpochSecond(Command.SYNC_EPOCH + it) }
+            assertEquals(3 * 254, all.count { t -> nights.any { t in it } }, "every sleep record inside a night, no day record in one")
+            assertTrue(all.all { it <= SYNC_TEST_EPOCH }, "nothing after the sync started")
             assertEquals(LinkState.Idle, link.state.value, "disconnected after the commit")
-            assertEquals("18 records · complete", viewModel.uiState.value.ringData.lastSync)
+
+            val card = viewModel.uiState.value.ringData
+            assertEquals("${String.format(java.util.Locale.ROOT, "%,d", sleep.records + allDay.records)} records · complete", card.lastSync)
+            assertEquals("3", card.nights, "the three nights are staged")
+            assertEquals(3, SleepStore(db).sleepSummaries(Instant.EPOCH, SYNC_TEST_EPOCH).size)
+            assertNotNull(card.lastNight)
 
             viewModel.onAction(RingAction.SyncNow)
-            advanceTo(120_000)
+            advanceTo(1_200_000)
 
-            assertEquals(18, BlobStore(db).loadEpochArchive("AA:BB:CC:DD:EE:00").records.size)
             assertEquals("Up to date", viewModel.uiState.value.ringData.lastSync)
+            assertEquals(3, SleepStore(db).sleepSummaries(Instant.EPOCH, SYNC_TEST_EPOCH).size)
+        } finally {
+            db.close()
+        }
+    }
+
+    /** In a phone zone far from UTC the demo's nights still fall overnight there, so all three are staged. */
+    @Test
+    fun theDemoNightsAreLocalNightsInAnyZone() = runTest {
+        val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
+        try {
+            val zone = java.time.ZoneId.of("America/Los_Angeles")
+            val wall = { SYNC_TEST_EPOCH.plusMillis(testScheduler.currentTime) }
+            val link = DemoRingLink(backgroundScope, wallClock = { wall().toEpochMilli() }, zone = { zone })
+            val session = RingSessionController(
+                link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it },
+                history = SessionHistory(StoreHistory({ db }, "AA:BB:CC:DD:EE:00", { zone }), wall, disconnectAfterSync = { true }),
+            )
+            val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, wallClock = wall, zone = { zone })
+            runCurrent()
+
+            viewModel.onAction(RingAction.SyncNow)
+            advanceTo(600_000)
+
+            assertEquals(SyncOutcome.COMPLETE, session.sync.state.value.last?.outcome)
+            assertEquals(3, SleepStore(db).sleepSummaries(Instant.EPOCH, SYNC_TEST_EPOCH).size)
+            assertEquals("3", viewModel.uiState.value.ringData.nights)
         } finally {
             db.close()
         }

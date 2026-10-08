@@ -20,12 +20,14 @@ import org.junit.runner.RunWith
 /**
  * Syncing on a device, end to end through the real app: activity, container (the on-device
  * database), session, triggers, view model and screen, with the debug build's demo ring — which
- * answers a sync with three pages released one acknowledgement at a time, then its end report.
+ * answers each channel's open with its pages released one acknowledgement at a time, then its end
+ * report: three synthetic nights on the sleep channel, the days between and since on the all-day
+ * channel.
  *
  * With no complete sync recorded for the ring, the link coming up at launch syncs by itself: the
- * card goes to "Last synced just now" with the 18 records stored, and the ring is disconnected
- * afterwards (the switch is on). Sync now then syncs again whatever the throttle says: it
- * reconnects, drains (nothing new) and disconnects.
+ * card goes to "Last synced just now" with the records stored, three nights and last night, and
+ * the ring is disconnected afterwards (the switch is on). Sync now then syncs again whatever the
+ * throttle says: it reconnects, drains (nothing new) and disconnects.
  */
 @RunWith(AndroidJUnit4::class)
 class SyncOnDemoRingTest {
@@ -50,15 +52,19 @@ class SyncOnDemoRingTest {
 
     @Test
     fun theLaunchSyncsTheDemoRingByItselfThenSyncNowSyncsAgain() {
-        compose.waitUntil(timeoutMillis = 15_000) {
+        compose.waitUntil(timeoutMillis = 90_000) {
             compose.onAllNodesWithText("Last synced just now").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithText("18 records · complete").performScrollTo().assertIsDisplayed()
-        compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithText(" records · complete", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Stored on this phone").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Nights").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Last night").performScrollTo().assertIsDisplayed()
+        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isEmpty() }
 
         compose.onNodeWithText("Sync now").performScrollTo().performClick()
         compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isNotEmpty() }
-        compose.waitUntil(timeoutMillis = 15_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isEmpty() }
+        compose.waitUntil(timeoutMillis = 30_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithText("Last synced just now").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Up to date").performScrollTo().assertIsDisplayed()
     }
 }
