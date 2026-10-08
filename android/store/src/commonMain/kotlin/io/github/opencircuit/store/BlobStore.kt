@@ -193,15 +193,18 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
     /**
      * Merges [incoming] into the stored archive and stores the result (`EpochArchive.merge`: dedup
      * by counter, the incoming copy wins, prune to the retention window), keeping the drain facts.
-     * Every record dated after [notAfter] is dropped from the result and from the retention
-     * anchor; pass the current time plus a clock-skew allowance. An unreadable stored archive is
-     * replaced by the merge of [incoming] alone.
+     * The window keeps every night not yet staged: from 30 h before the stored
+     * [EpochArchiveMarks.stagedThrough], at least 30 h, at most 14 days, and the 14 days while
+     * nothing is staged (`EpochArchive.mergeKeepingUnstaged`, PORTING.md D-270; upstream keeps a
+     * flat 30 h). Every record dated after [notAfter] is dropped from the result and from the
+     * retention anchor; pass the current time plus a clock-skew allowance. An unreadable stored
+     * archive is replaced by the merge of [incoming] alone.
      */
     suspend fun mergeEpochArchive(ringId: String, incoming: List<BulkRecord>, notAfter: Instant, now: Instant): ArchiveMerge {
         val key = perRing(EPOCH_ARCHIVE, ringId)
         return db.withWriteTransaction {
             val stored = load(key, EpochArchiveCodec::decode) ?: StoredEpochArchive.EMPTY
-            val merged = EpochArchive.merge(stored.records, incoming, notAfter = notAfter)
+            val merged = EpochArchive.mergeKeepingUnstaged(stored.records, incoming, stored.marks.stagedThrough, notAfter)
             // A record's date is its counter's, so one record per counter decides.
             val dropped = (stored.records + incoming).distinctBy { it.counter }.count { it.date().isAfter(notAfter) }
             put(key, EpochArchiveCodec.encode(StoredEpochArchive(merged, stored.marks)), now)
