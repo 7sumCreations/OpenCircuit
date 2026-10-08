@@ -64,6 +64,9 @@ class SyncOnDemoRingTest {
         compose.onNodeWithText("Sync now").performScrollTo().performClick()
         compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(timeoutMillis = 30_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isEmpty() }
+        // The link goes down inside the sync (after its commit); the card reads "Syncing…" until the
+        // sync's log entry is kept and its report published, a moment later.
+        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Syncing…").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithText("Last synced just now").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Up to date").performScrollTo().assertIsDisplayed()
     }
