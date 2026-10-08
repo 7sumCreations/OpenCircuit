@@ -58,6 +58,9 @@ internal sealed interface GattOp {
             /** `01 00 00`, which starts the auth exchange (a bring-up step). */
             AUTH_START,
 
+            /** `01 00 00` on an authenticated connection, for [RingLink.reauthenticate] (link lane; the state stays). */
+            REAUTH_START,
+
             /** The answer to the ring's `81 00` challenge (link lane). */
             AUTH_REPLY,
 
@@ -72,7 +75,7 @@ internal sealed interface GattOp {
         }
 
         /** True for the link's own urgent writes, which go on the link lane. */
-        val onLinkLane: Boolean get() = purpose == Purpose.ACK || purpose == Purpose.AUTH_REPLY
+        val onLinkLane: Boolean get() = purpose == Purpose.ACK || purpose == Purpose.AUTH_REPLY || purpose == Purpose.REAUTH_START
 
         /** The caller of `send` this write was for was cancelled (the link's own writes have none). */
         val callerGone: Boolean get() = reply?.isCancelled == true

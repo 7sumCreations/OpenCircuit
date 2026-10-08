@@ -52,6 +52,20 @@ interface RingLink {
      */
     suspend fun acknowledge(page: ByteArray): SendResult
 
+    /**
+     * Runs the ring's auth again on the open connection: the link writes `01 00 00` ahead of
+     * waiting [send] writes and answers the ring's `81 00` challenge itself, as at bring-up. The
+     * app may never write `01 00 00` ([send] refuses it): this is its one way to ask for a fresh
+     * auth, for a ring that ignores a history sync open. [state] stays [LinkState.Authenticated]
+     * throughout.
+     *
+     * Returns [SendResult.Sent] once the auth reply is written; [SendResult.Refused] with
+     * [RefusalReason.NOT_AUTHENTICATED] when the link is not authenticated (nothing written);
+     * [SendResult.Failed] with [SendFailure.TIMED_OUT] when the ring sends no challenge within
+     * 5 s (the connection is kept), or with another failure when the connection goes. Never throws.
+     */
+    suspend fun reauthenticate(): SendResult
+
     /** Starts connecting (no scan: by the ring's address). Does nothing while already connecting or connected. */
     fun connect()
 

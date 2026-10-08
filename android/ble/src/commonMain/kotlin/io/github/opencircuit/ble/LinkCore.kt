@@ -70,6 +70,7 @@ internal class LinkCore(
     private val inbox = Channel<LinkEvent>(Channel.UNLIMITED) { undelivered ->
         if (undelivered is LinkEvent.Send) undelivered.reply.complete(SendResult.Failed(SendFailure.LINK_LOST))
         if (undelivered is LinkEvent.Acknowledge) undelivered.reply.complete(SendResult.Failed(SendFailure.LINK_LOST))
+        if (undelivered is LinkEvent.Reauthenticate) undelivered.reply.complete(SendResult.Failed(SendFailure.LINK_LOST))
     }
     private val loopDispatcher = loopDispatcherFor(scope)
     private val stateFlow = MutableStateFlow<LinkState>(LinkState.Idle)
@@ -97,6 +98,13 @@ internal class LinkCore(
 
     /** History pages this connection delivered that nobody acknowledged yet, in arrival order (copies). */
     private val pendingPages = ArrayDeque<ByteArray>()
+
+    /**
+     * The callers of [reauthenticate] waiting for the auth reply to the next challenge, or empty.
+     * Answered when that reply is written, failed when no challenge comes in time or the
+     * connection goes.
+     */
+    private val reauthWaiters = mutableListOf<CompletableDeferred<SendResult>>()
 
     /** The user asked for a connection: `connect()` and no `disconnect()` since. */
     private var wanted = false
@@ -205,6 +213,19 @@ internal class LinkCore(
         }
     }
 
+    override suspend fun reauthenticate(): SendResult {
+        val reply = CompletableDeferred<SendResult>()
+        if (inbox.trySend(LinkEvent.Reauthenticate(reply)).isFailure) {
+            return SendResult.Failed(SendFailure.LINK_LOST)
+        }
+        return try {
+            reply.await()
+        } catch (e: CancellationException) {
+            reply.cancel()
+            throw e
+        }
+    }
+
     override fun connect() {
         inbox.trySend(LinkEvent.Connect)
     }
@@ -229,6 +250,7 @@ internal class LinkCore(
             LinkEvent.Disconnect -> onDisconnectAsked()
             is LinkEvent.Send -> sendFeature(event)
             is LinkEvent.Acknowledge -> acknowledgePage(event)
+            is LinkEvent.Reauthenticate -> startReauth(event.reply)
             is LinkEvent.Gatt -> onGatt(event.event)
             is LinkEvent.TimerFired -> onTimer(event)
             is LinkEvent.AdapterChanged -> onAdapter(event.state)
@@ -348,6 +370,32 @@ internal class LinkCore(
         }
         pendingPages.removeAt(index)
         queue.add(GattOp.Write(checkNotNull(pageAckFor(event.page.u8(0))), Purpose.ACK, event.reply))
+    }
+
+    /**
+     * Asks the ring for a fresh challenge on the open connection (PORTING.md D-264): `01 00 00`
+     * on the link lane, then the challenge is answered by [answerChallenge] as at bring-up, and
+     * [reply] completes when that answer is written. A caller arriving while one waits joins it.
+     * The state stays `Authenticated`: this connection's data path is already open.
+     */
+    private fun startReauth(reply: CompletableDeferred<SendResult>) {
+        if (stateFlow.value != LinkState.Authenticated || session == null) {
+            reply.complete(SendResult.Refused(RefusalReason.NOT_AUTHENTICATED))
+            return
+        }
+        val first = reauthWaiters.isEmpty()
+        reauthWaiters += reply
+        if (!first) return
+        queue.add(GattOp.Write(Command.status0, Purpose.REAUTH_START))
+        startTimer(LinkTimer.REAUTH, REAUTH_CHALLENGE_WITHIN)
+    }
+
+    /** Completes every waiting [reauthenticate] with [result]. */
+    private fun finishReauth(result: SendResult) {
+        cancelTimer(LinkTimer.REAUTH)
+        val waiting = reauthWaiters.toList()
+        reauthWaiters.clear()
+        waiting.forEach { it.complete(result) }
     }
 
     /** Submits waiting operations; the queue hands out the next one only when none is in flight. */
@@ -644,7 +692,14 @@ internal class LinkCore(
             return
         }
         val key = mac ?: return
-        queue.add(GattOp.Write(RingAuth.authCommand(challenge, key), Purpose.AUTH_REPLY))
+        // A re-auth waits on this reply: it is done once the reply is written, not before.
+        val reauthDone = if (reauthWaiters.isEmpty()) {
+            null
+        } else {
+            cancelTimer(LinkTimer.REAUTH)
+            CompletableDeferred<SendResult>().also { done -> done.invokeOnCompletion { finishReauth(done.getCompleted()) } }
+        }
+        queue.add(GattOp.Write(RingAuth.authCommand(challenge, key), Purpose.AUTH_REPLY, reauthDone))
         if (!streamRequested) {
             streamRequested = true
             queue.add(GattOp.Write(Command.statusQuery, Purpose.STREAM_REQUEST))
@@ -707,6 +762,8 @@ internal class LinkCore(
                 pastEarlyWindow = true
                 if (discoveryDone) earlyDrops = 0 // a healthy connection
             }
+            // No challenge: the re-auth failed, the connection stays (it was working before).
+            LinkTimer.REAUTH -> finishReauth(SendResult.Failed(SendFailure.TIMED_OUT))
         }
     }
 
@@ -772,6 +829,7 @@ internal class LinkCore(
         cancelTimer(LinkTimer.EARLY_DROP)
         closePort()
         session = null
+        finishReauth(SendResult.Failed(SendFailure.LINK_LOST))
         // The buffer is per connection: what its collector never took is dropped and counted. So
         // are the pages nobody acknowledged: the ring keeps them and offers them again.
         val undelivered = frameBuffer.clear()
@@ -801,6 +859,7 @@ internal class LinkCore(
             closePort()
             session = null
             queue.clear().forEach { (it as? GattOp.Write)?.reply?.complete(SendResult.Failed(SendFailure.LINK_LOST)) }
+            finishReauth(SendResult.Failed(SendFailure.LINK_LOST))
             val undelivered = frameBuffer.clear()
             val unacknowledged = pendingPages.size
             pendingPages.clear()
@@ -847,6 +906,9 @@ internal class LinkCore(
 
         /** A connection that drops this soon after connecting (or before discovery) dropped early. */
         val EARLY_DROP_WINDOW: Duration = Duration.ofSeconds(2)
+
+        /** How long a re-auth waits for the ring's challenge after `01 00 00` before it fails (the connection is kept). */
+        val REAUTH_CHALLENGE_WITHIN: Duration = Duration.ofSeconds(5)
 
         /** Early drops in a row of a bonded ring that show `BondLostSuspected`. */
         const val BOND_LOST_AFTER = 3
@@ -952,6 +1014,7 @@ private val GattOp.stepName: String
         is GattOp.Read -> "DIS read"
         is GattOp.Write -> when (purpose) {
             Purpose.AUTH_START -> "auth"
+            Purpose.REAUTH_START -> "re-auth"
             Purpose.AUTH_REPLY -> "auth reply"
             Purpose.STREAM_REQUEST -> "data request"
             Purpose.ACK -> "ack"

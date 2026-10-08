@@ -119,6 +119,23 @@ class FakeRingLink(override val ring: RememberedRing) : RingLink, LinkDiagnostic
     private fun isPage(frame: ByteArray): Boolean =
         frame.isNotEmpty() && (frame[0].toInt() and 0xFF) in PAGE_OPCODES
 
+    private val reauthentications = AtomicInteger()
+    private val scriptedReauths = ConcurrentLinkedQueue<SendResult>()
+
+    /** How many times [reauthenticate] was called; never mixed into [sent]. */
+    val reauthenticateCalls: Int get() = reauthentications.get()
+
+    /** The next calls to [reauthenticate] answer with [results], in order; after them, [SendResult.Sent]. */
+    fun answerReauthenticatesWith(vararg results: SendResult) {
+        scriptedReauths.addAll(results)
+    }
+
+    /** Counted in [reauthenticateCalls]; answers the scripted result, else [SendResult.Sent]. Writes nothing to [sent]. */
+    override suspend fun reauthenticate(): SendResult {
+        reauthentications.incrementAndGet()
+        return scriptedReauths.poll() ?: SendResult.Sent
+    }
+
     /** The next calls to [send] answer with [results], in order; after them, [SendResult.Sent]. */
     fun answerSendsWith(vararg results: SendResult) {
         scriptedResults.addAll(results)

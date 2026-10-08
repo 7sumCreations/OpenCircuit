@@ -97,6 +97,13 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
     private var bondRequestsAccepted = true
     private val bondListeners = mutableListOf<(GattPort.BondState) -> Unit>()
 
+    /**
+     * Whether the ring answers `01 00 00` with [Script.challengeFrame]. Set it false to play a
+     * ring that stops sending challenges on an open connection (the write itself still succeeds).
+     */
+    @Volatile
+    var answersAuthStart: Boolean = true
+
     /** Every call the link made, in order, one line each (UUIDs shortened to their first group). */
     val log: List<String> get() = calls.toList()
 
@@ -297,7 +304,7 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
         val statusQuery = byteArrayOf(0xD0.toByte(), 0x00, 0x00)
         val accepted = script.acceptedAuthReply
         when {
-            written.contentEquals(status0) -> script.challengeFrame?.let(::notify)
+            written.contentEquals(status0) -> if (answersAuthStart) script.challengeFrame?.let(::notify)
             accepted != null && written.contentEquals(accepted) -> {
                 authAccepted = true
                 script.firstFrameAfterAuth?.let(::notify)

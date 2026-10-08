@@ -123,6 +123,10 @@ class DemoRingLink(
         SendResult.Sent
     }
 
+    /** As the real link: the demo runs no auth, so a re-auth on a connected demo ring simply succeeds. */
+    override suspend fun reauthenticate(): SendResult =
+        if (stateFlow.value == LinkState.Authenticated) SendResult.Sent else SendResult.Refused(RefusalReason.NOT_AUTHENTICATED)
+
     /** `07 00 00` after a sync open: answer `82 00 00 82`, then the first page still held. With the lock held. */
     private fun startSync() {
         if (backlog == null) backlog = ArrayDeque(demoBacklog(wallClock()))
