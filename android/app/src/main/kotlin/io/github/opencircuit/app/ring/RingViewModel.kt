@@ -135,6 +135,7 @@ class RingViewModel(
                 combine(session.link.info, session.timer.timings, session.dispatcher.counts, session.teardowns, diagnostics) { info, timings, counts, teardowns, lines ->
                     DetailsInput(ring = session.link.ring, info = info, timings = timings, counts = counts, teardowns = teardowns, diagnostics = lines)
                 }.combine(session.liveMeasure.state.map { it.evidence }.distinctUntilChanged()) { input, evidence -> input.copy(lastMeasure = evidence) }
+                    .combine(session.syncRecords.entries) { input, log -> input.copy(syncLog = log) }
             }
         }
         val scanKept = details.scanMatch != null

@@ -9,6 +9,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,10 +21,12 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import io.github.opencircuit.ringkit.SyncMeasurement
 
 /**
- * The Ring screen's "Ring data" card: when the ring's history was last synced, the last sync's
- * result, Sync now, and the "Disconnect after syncing" switch. Drawn from [ui] alone.
+ * The Ring screen's "Ring data" card: when the ring's history was last synced, the overdue-sync
+ * warning, what is stored on this phone (range, nights, last night), the last sync's result and
+ * what it left for later, Sync now, and the "Disconnect after syncing" switch. Drawn from [ui] alone.
  */
 @Composable
 fun RingDataCard(
@@ -42,6 +45,10 @@ fun RingDataCard(
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
             ui.progress.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            ui.overdue?.let { OverdueWarning(it, red = ui.overdueLevel == SyncMeasurement.OverdueLevel.RED) }
+            ui.storedRange?.let { DataRow(label = "Stored on this phone", value = it) }
+            ui.nights?.let { DataRow(label = "Nights", value = it) }
+            ui.lastNight?.let { DataRow(label = "Last night", value = it) }
             ui.lastSync?.let { DataRow(label = "Last sync", value = it) }
             ui.problem?.let {
                 Text(
@@ -51,6 +58,7 @@ fun RingDataCard(
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
+            ui.notices.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
             FilledTonalButton(onClick = onSyncNow, enabled = ui.syncEnabled) { Text(ui.syncLabel) }
             ui.syncBlockedBy?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             Row(
@@ -68,9 +76,23 @@ fun RingDataCard(
     }
 }
 
+/** The overdue-sync warning: amber, or red when the ring may already be losing records. Read out once when it appears. */
+@Composable
+private fun OverdueWarning(text: String, red: Boolean) {
+    Surface(
+        color = if (red) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = if (red) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+    }
+}
+
 @Composable
 private fun DataRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    // Label and value are one stop for TalkBack, not two.
+    Row(modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyMedium)
     }

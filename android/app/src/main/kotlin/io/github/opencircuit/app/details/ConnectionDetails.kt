@@ -12,6 +12,7 @@ import io.github.opencircuit.ble.LinkInfo
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.ScanDiagnostic
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
+import io.github.opencircuit.store.SyncLogEntry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -30,6 +31,8 @@ data class ConnectionDetailsUi(
     val diagnostics: List<String>,
     /** What Copy puts on the clipboard: every row and line, the address and the name masked. */
     val copyText: String,
+    /** The sync log, newest sync first, one line per sync and per channel: shown only when expanded. */
+    val syncLog: List<String> = emptyList(),
 )
 
 /** What the card reads beyond the ring's session: the pairing sheet's outcome and the scanner's last match. */
@@ -55,6 +58,8 @@ data class DetailsInput(
     val scanToSelectedMillis: Long? = null,
     /** What the ring sent during the running or the last live measure; null before the first. */
     val lastMeasure: MeasureEvidence? = null,
+    /** The ring's sync log, oldest first; null when there is no ring session. */
+    val syncLog: List<SyncLogEntry>? = null,
 )
 
 /**
@@ -76,6 +81,7 @@ object ConnectionDetailsPresenter {
         val masked = rows(input, masked = true)
         val diagnostics = diagnosticLines(input)
         val advertisementFull = advertisement(input, masked = false)
+        val syncLog = SyncLogLines.lines(input.syncLog)
         val copy = buildString {
             appendLine("OpenCircuit connection details")
             masked.forEach { appendLine("${it.label}: ${it.value}") }
@@ -85,6 +91,9 @@ object ConnectionDetailsPresenter {
             appendLine()
             appendLine("Link diagnostics")
             diagnostics.forEach { appendLine(it) }
+            appendLine()
+            appendLine("Sync log")
+            syncLog.forEach { appendLine(it) }
         }
         val names = listOfNotNull(input.ring?.name, input.info?.firmware?.modelName, input.scan?.let { AdStructureParser.parse(it.rawScanRecord).localName })
         return ConnectionDetailsUi(
@@ -93,6 +102,7 @@ object ConnectionDetailsPresenter {
             advertisement = advertisementFull,
             diagnostics = diagnostics,
             copyText = Privacy.scrub(copy, listOfNotNull(input.ring?.address, input.info?.mac), names),
+            syncLog = syncLog,
         )
     }
 
@@ -121,6 +131,8 @@ object ConnectionDetailsPresenter {
             DetailRow("Handler failures", input.counts?.let { opcodeCounts(it.handlerFailures) } ?: NOT_AVAILABLE),
             DetailRow("Connections torn down", input.teardowns?.let(::teardowns) ?: NOT_AVAILABLE),
             DetailRow("Last measure", input.lastMeasure?.let(::measure) ?: "none since the app started"),
+            DetailRow("Last sync continuity", input.syncLog?.let(SyncLogLines::continuity) ?: NOT_AVAILABLE),
+            DetailRow("Ring capacity", input.syncLog?.let(SyncLogLines::capacity) ?: NOT_AVAILABLE),
         )
     }
 

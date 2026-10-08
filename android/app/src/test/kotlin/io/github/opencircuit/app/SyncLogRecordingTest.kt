@@ -14,6 +14,7 @@ import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Each finished sync is written to the store's sync log, through the real session, the
@@ -86,6 +87,14 @@ class SyncLogRecordingTest {
             // 24 records over a span of 611 epochs: far sparser than a worn ring records.
             assertEquals(SyncMeasurement.CapacityKind.INCONCLUSIVE, entry.capacity?.kind)
             assertEquals(SyncMeasurement.InconclusiveReason.SPARSE, entry.capacity?.reason)
+
+            // Connection details on the Ring screen shows it.
+            val details = w.viewModel.uiState.value.details
+            val rows = details.rows.associate { it.label to it.value }
+            assertEquals("First sync", rows["Last sync continuity"])
+            assertEquals("inconclusive — the ring was off or not worn", rows["Ring capacity"])
+            assertTrue(details.syncLog.first().startsWith("${entry.finishedAt} · COMPLETE · 24 stored · 0 held back · "), details.syncLog.first())
+            assertTrue(details.syncLog[1].startsWith("  sleep · 0x82 82000082 · "), details.syncLog[1])
         } finally {
             w.db.close()
         }
