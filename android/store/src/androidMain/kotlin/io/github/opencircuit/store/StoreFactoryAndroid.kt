@@ -15,3 +15,11 @@ suspend fun StoreFactory.open(context: Context, name: String = STORE_DATABASE_NA
     val path = context.getDatabasePath(name).absolutePath
     return openWith(Room.databaseBuilder<StoreDatabase>(context.applicationContext, path))
 }
+
+/**
+ * Opens a fresh database that lives in memory until it is closed, through the same [openWith] as
+ * the on-device file (bundled SQLite driver, no destructive fallback). Needs no `Context`, so the
+ * app's JVM tests, which link this Android variant, run their code against the real store.
+ */
+suspend fun StoreFactory.openInMemory(): StoreDatabase =
+    openWith(Room.inMemoryDatabaseBuilder<StoreDatabase>())

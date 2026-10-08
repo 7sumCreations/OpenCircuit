@@ -7,6 +7,7 @@
 //
 // AGP 9 compiles Kotlin itself ("built-in Kotlin"), so the Kotlin Android plugin is NOT applied;
 // the Compose compiler plugin's version must equal the Kotlin version (2.3.0, root build file).
+import java.util.Locale
 import java.util.Properties
 
 plugins {
@@ -172,6 +173,9 @@ if (skipReleaseVariant) {
 
 dependencies {
     implementation(project(":ble"))
+    // The on-device database: one per app, opened by AppContainer. The JVM tests open the same
+    // store in memory (StoreFactory.openInMemory, bundled SQLite with its host natives).
+    implementation(project(":store"))
 
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
@@ -201,7 +205,36 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }
 
+// The JVM tests run against the REAL store: :store's Android variant (Room, the bundled SQLite
+// driver), opened in memory. That variant's SQLite artifact carries only the phone's library, so
+// the test JVM loads the host library of the same SQLite build (sqlite-bundled-jvm, the version
+// :store pins) through the driver's own override properties. Nothing here reaches the APK.
+val hostSqliteNatives: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+dependencies { hostSqliteNatives("androidx.sqlite:sqlite-bundled-jvm:2.7.1") }
+val extractHostSqliteNatives = tasks.register<Sync>("extractHostSqliteNatives") {
+    from(hostSqliteNatives.elements.map { jars -> jars.map { zipTree(it) } }) { include("natives/**") }
+    into(layout.buildDirectory.dir("hostSqliteNatives"))
+}
+val hostSqlitePlatform: Pair<String, String> = run {
+    val os = System.getProperty("os.name").lowercase(Locale.ROOT)
+    val arch = if (System.getProperty("os.arch").lowercase(Locale.ROOT) in setOf("aarch64", "arm64")) "arm64" else "x64"
+    when {
+        "mac" in os -> "osx_$arch" to "libsqliteJni.dylib"
+        "windows" in os -> "windows_$arch" to "sqliteJni.dll"
+        else -> "linux_$arch" to "libsqliteJni.so"
+    }
+}
+
 tasks.withType<Test>().configureEach {
+    dependsOn(extractHostSqliteNatives)
+    systemProperty(
+        "androidx.sqlite.driver.bundled.path",
+        layout.buildDirectory.dir("hostSqliteNatives/natives/${hostSqlitePlatform.first}").get().asFile.absolutePath,
+    )
+    systemProperty("androidx.sqlite.driver.bundled.name", hostSqlitePlatform.second)
     // `--rerun` reaches only the tasks named on the command line: `./gradlew test --rerun` re-runs
     // the lifecycle `test` task but would replay an up-to-date `testDebugUnitTest` and run nothing.
     outputs.upToDateWhen { false }

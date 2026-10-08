@@ -26,7 +26,9 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":ringkit"))
-            implementation("androidx.room3:room3-runtime:3.0.3")
+            // api: the public StoreDatabase extends Room's RoomDatabase, so a module that holds the
+            // database (the app opens and keeps it) needs Room's types to compile against it.
+            api("androidx.room3:room3-runtime:3.0.3")
             implementation("androidx.sqlite:sqlite-bundled:2.7.1")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
