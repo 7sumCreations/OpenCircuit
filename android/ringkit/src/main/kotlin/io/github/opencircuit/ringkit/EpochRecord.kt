@@ -7,6 +7,11 @@ package io.github.opencircuit.ringkit
 // splitting, cursor-space timestamp reconstruction, subtype tags, and raw payload bytes for
 // later metric decoding.
 //
+// A record's bytes [0:4] are its own big-endian counter (../docs/PROTOCOL.md §5.3), the same
+// reading as `BulkRecord.counter`. Upstream treats byte 0 as a fixed `0x0c` delimiter and takes the
+// high byte from the caller; that byte becomes `0x0d` at 2026-11-28 20:23:28 UTC. Here a record is
+// dated by its own counter and kept when that counter is a plausible date (PORTING.md D-260).
+//
 // Value-type notes (Swift structs copy on assignment and `UInt8`/`UInt32` cannot leave their
 // range): every record keeps a private copy of its payload and hands out a fresh copy on each
 // read; byte fields are checked 0..255 and cursor fields 0..0xFFFFFFFF at construction.
@@ -16,7 +21,6 @@ import java.time.Instant
 object EpochRecord {
     /** Seconds since 2019-12-31 12:00:00 UTC; one home, in [Command]. */
     const val SYNC_EPOCH = Command.SYNC_EPOCH
-    const val MARKER = 0x0C
     const val PPG_OPCODE = 0x47
     const val ACTIVITY_OPCODE = 0x4C
     const val END_OF_HISTORY_OPCODE = 0x50
@@ -24,6 +28,15 @@ object EpochRecord {
     const val ACTIVITY_RECORD_SIZE = 23
 
     private const val UINT32_MAX = 0xFFFF_FFFFL
+
+    /**
+     * Record counters that are a plausible date: 2022-01-01T00:00:00Z up to, not including,
+     * 2100-01-01T00:00:00Z. Outside it are zero / all-ones filler and a clock that was never set,
+     * which upstream's `0x0c` byte check also refused (D-260).
+     */
+    val PLAUSIBLE_COUNTERS: LongRange =
+        (Instant.parse("2022-01-01T00:00:00Z").epochSecond - SYNC_EPOCH) until
+            (Instant.parse("2100-01-01T00:00:00Z").epochSecond - SYNC_EPOCH)
 
     /** `0x4C` activity/sleep record — 23 bytes. [rawPayload] is bytes `[15:22]`. */
     class ActivityRecord(val timestamp: Instant, val subtype: Int, rawPayload: ByteArray) {
@@ -74,35 +87,28 @@ object EpochRecord {
     }
 
     /**
-     * Parse all activity records out of a `0x4C` page frame. [streamHighByte] is the high byte of
-     * the 4-byte cursor, reconstructed from the `0x50` end-of-sync frame or the sync-open cursor.
+     * Parse all activity records out of a `0x4C` page frame, each dated by its own counter.
      * A page that fails the XOR check, has the wrong opcode, or does not split into whole records
-     * yields no records; a record without the marker byte is skipped.
+     * yields no records; a record whose counter is outside [PLAUSIBLE_COUNTERS] is skipped.
      */
-    fun parseActivityPage(data: ByteArray, streamHighByte: Int = 0): List<ActivityRecord> {
-        requireByte(streamHighByte)
+    fun parseActivityPage(data: ByteArray): List<ActivityRecord> {
         val payload = pagePayload(data, ACTIVITY_OPCODE) ?: return emptyList()
         if (payload.size % ACTIVITY_RECORD_SIZE != 0) return emptyList()
         return (0 until payload.size step ACTIVITY_RECORD_SIZE).mapNotNull { offset ->
             val record = payload.copyOfRange(offset, offset + ACTIVITY_RECORD_SIZE)
-            if (record.u8(0) != MARKER) return@mapNotNull null
-            ActivityRecord(
-                timestamp = timestamp(record, streamHighByte),
-                subtype = record.u8(8),
-                rawPayload = record.copyOfRange(15, 22),
-            )
+            val timestamp = plausibleTimestamp(record) ?: return@mapNotNull null
+            ActivityRecord(timestamp = timestamp, subtype = record.u8(8), rawPayload = record.copyOfRange(15, 22))
         }
     }
 
     /** Parse all PPG records out of a `0x47` page frame; same rejection rules as [parseActivityPage]. */
-    fun parsePPGPage(data: ByteArray, streamHighByte: Int = 0): List<PPGRecord> {
-        requireByte(streamHighByte)
+    fun parsePPGPage(data: ByteArray): List<PPGRecord> {
         val payload = pagePayload(data, PPG_OPCODE) ?: return emptyList()
         if (payload.size % PPG_RECORD_SIZE != 0) return emptyList()
         return (0 until payload.size step PPG_RECORD_SIZE).mapNotNull { offset ->
             val record = payload.copyOfRange(offset, offset + PPG_RECORD_SIZE)
-            if (record.u8(0) != MARKER) return@mapNotNull null
-            PPGRecord(timestamp = timestamp(record, streamHighByte), rawPayload = record.copyOfRange(9, 47))
+            val timestamp = plausibleTimestamp(record) ?: return@mapNotNull null
+            PPGRecord(timestamp = timestamp, rawPayload = record.copyOfRange(9, 47))
         }
     }
 
@@ -154,17 +160,16 @@ object EpochRecord {
         return body.copyOfRange(2, body.size)
     }
 
-    private fun timestamp(record: ByteArray, streamHighByte: Int): Instant {
-        val full = (streamHighByte.toLong() shl 24) or
-            (record.u8(1).toLong() shl 16) or (record.u8(2).toLong() shl 8) or record.u8(3).toLong()
-        return Instant.ofEpochSecond(full + SYNC_EPOCH)
+    /** The record's own `[0:4]` counter as a date, or null when it is not a plausible one. */
+    private fun plausibleTimestamp(record: ByteArray): Instant? {
+        val counter = uint32BE(record, 0)
+        if (counter !in PLAUSIBLE_COUNTERS) return null
+        return Instant.ofEpochSecond(counter + SYNC_EPOCH)
     }
 
     private fun uint32BE(bytes: ByteArray, offset: Int): Long =
         (bytes.u8(offset).toLong() shl 24) or (bytes.u8(offset + 1).toLong() shl 16) or
             (bytes.u8(offset + 2).toLong() shl 8) or bytes.u8(offset + 3).toLong()
-
-    private fun requireByte(v: Int) = require(v in 0..0xFF) { "streamHighByte must be a byte 0..255: $v" }
 
     private fun ByteArray.hexString(): String = joinToString(" ") { "%02x".format(it.toInt() and 0xFF) }
 }

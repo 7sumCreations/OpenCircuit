@@ -94,7 +94,7 @@ class ScriptedDrainTest {
         assertEquals(HistoryChannelOutcome.COMPLETE, sleep.trace.outcome)
         assertEquals(Duration.ofSeconds(6), sleep.trace.duration)
 
-        // The 0x50's high byte re-dates every buffered epoch record onto the ring's real counter.
+        // Every epoch record is dated by its own four-byte counter.
         assertEquals(6, sleep.session.activityRecords.size)
         assertEquals(at(0x0c22a16b), sleep.session.activityRecords.first().timestamp)
         assertEquals(at(0x0c22a459), sleep.session.activityRecords.last().timestamp)
@@ -127,8 +127,8 @@ class ScriptedDrainTest {
                 HistoryCommitGate.decide(sleep.trace.outcome, recordsAdded = sleep.trace.recordsAdded, adoptedRecordCount = 0),
                 "a drain with no 0x50 must never stage its own slice ($cutOff)",
             )
-            // Without the report the stream high byte is unknown, so the epoch dates are not yet real.
-            assertNotEquals(at(0x0c22a16b), sleep.session.activityRecords.first().timestamp)
+            // Each record carries its own full counter, so its date is real without the report (D-260).
+            assertEquals(at(0x0c22a16b), sleep.session.activityRecords.first().timestamp)
         }
     }
 

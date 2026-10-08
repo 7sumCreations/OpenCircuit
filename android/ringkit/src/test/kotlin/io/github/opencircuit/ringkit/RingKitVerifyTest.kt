@@ -174,7 +174,7 @@ class RingKitVerifyTest {
         for (i in 9 until 47) ppgA[i] = 0xAA.toByte()
         val ppgB = makeEpochRecord(size = EpochRecord.PPG_RECORD_SIZE, counter = 0x000484)
         val ppgFrame = makeFrame(EpochRecord.PPG_OPCODE, bytes(0x00, 0x03) + ppgA + ppgB)
-        val ppgRecords = EpochRecord.parsePPGPage(ppgFrame, streamHighByte = 0x0c)
+        val ppgRecords = EpochRecord.parsePPGPage(ppgFrame)
         assertEquals(2, ppgRecords.size, "0x47 page splits 47-byte records")
         assertEquals(
             Instant.ofEpochSecond(Command.SYNC_EPOCH + 0x0c000100),
@@ -189,7 +189,7 @@ class RingKitVerifyTest {
         activity[8] = 0x12
         for (i in 0 until 7) activity[15 + i] = (i + 1).toByte()
         val activityFrame = makeFrame(EpochRecord.ACTIVITY_OPCODE, bytes(0x00, 0x00) + activity)
-        val activityRecords = EpochRecord.parseActivityPage(activityFrame, streamHighByte = 0x0c)
+        val activityRecords = EpochRecord.parseActivityPage(activityFrame)
         assertEquals(1, activityRecords.size, "0x4c routes to final activity page")
         assertEquals(0x12, activityRecords.firstOrNull()?.subtype, "0x4c exposes subtype byte[8]")
         assertContentEquals(

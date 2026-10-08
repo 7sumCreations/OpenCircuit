@@ -150,9 +150,12 @@ name masked by the app) and the owner's observations.
   frames by appending an XOR trailer produces invalid bytes the ring ignores.
 - The ring ATT-acks any write but only *acts* on commands whose contents are valid.
 
-Bulk frames (`0x47`/`0x4c`) pack fixed-size records, each prefixed by delimiter
-`0x0c` + a **3-byte BE counter** in the sync-cursor space (`0x47` steps `+0x0384`,
-`0x4c` steps `+0x96`; see §5.2/§5.3). Continue a page by ACKing: `0x47` → `c7 00 00`,
+Bulk frames (`0x47`/`0x4c`) pack fixed-size records, each starting with a **4-byte BE
+counter** in the sync-cursor space (`0x47` steps `+0x0384`, `0x4c` steps `+0x96`; see
+§5.2/§5.3). Its first byte reads `0x0c` in every capture so far only because the counter
+was in `0x0c000000`–`0x0cffffff` (2026-05-18 → 2026-11-28 20:23:28 UTC); it is **not** a
+delimiter — from 2026-11-28 20:23:28 UTC records start `0x0d` (🟡 computed from the counter
+epoch, not yet observed on the wire). Continue a page by ACKing: `0x47` → `c7 00 00`,
 `0x4c` → `cc 00 00`; the page header **bytes[1:3] (16-bit BE)** count the remaining records,
 `00 00` on the last. Byte[1] is `00` only while fewer than 256 records are queued — a
 third-party hardware capture after ~30 h offline read `4c 02 cd` = 717 queued (Gadgetbridge
@@ -304,9 +307,11 @@ Structure below is from parallel structural RE of `captures/btsnoop_hr.log`
 3 sync-opens. **Structure is 🟢/🟡; semantic VALUES are mostly 🔴 pending
 ground-truth captures (§6).**
 
-> **Refines §3's bulk-record prefix.** The delimiter is a single byte `0x0c`; the
-> bytes after it are a **3-byte big-endian counter** (the `09`/`0a`/`22` is its high
-> byte — it rolls cleanly `0c 09 ff 9a → 0c 0a 00 30`). This counter shares the
+> **Refines §3's bulk-record prefix.** *(Corrected 2026-10-08, Android port: the first
+> byte is not a delimiter.)* Bytes `[0:4]` are one **4-byte big-endian counter** — the
+> `0x0c` every capture shows is its top byte, and `09`/`0a`/`22` the next one (it rolls
+> cleanly `0c 09 ff 9a → 0c 0a 00 30`; the top byte will roll `0c ff ff ff → 0d 00 00 00`
+> at 2026-11-28 20:23:28 UTC, 🟡 computed, not yet observed). This counter shares the
 > **same value space as the `0x02` sync cursor** (§5.6): late records sit at
 > `0c 22 xx xx`, matching cursor `0c 22 98 c3`. The `+0x0384`/record step is the
 > `0x47` rate; `0x4c` steps `+0x96`.
@@ -335,7 +340,8 @@ Page: `[0]`=`0x47` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE** (−5/fu
 0 on last; e.g. byte[2] `1c 17 12 0d 08 03 00` with byte[1] `00` — byte[1] is the high byte,
 non-zero above 255 queued: 🟡 third-party capture `4c 02 cd` = 717, see §3) · body = N×**47-byte records** · `[last]`=XOR
 (valid 11/11). 🟢
-Record (47 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x0384/rec = 900 s** (cursor space) 🟢 ·
+Record (47 B): `[0:4]`=BE counter (top byte `0x0c` until 2026-11-28, then `0x0d` — not a
+delimiter, see §3) **+0x0384/rec = 900 s** (cursor space) 🟢 ·
 `[4:6]`=16-bit BE **optical baseline/DC** (`[4]`∈{`02`,`03`}, **not const**; `[5]` drifts) 🟡 ·
 `[6:9]`=usually `00 00 00`, else per-record flag/quality (`[8]`∈{0,5,10,15,20}) 🟡 ·
 `[9:47]`=**38 B = 30 × 10-bit big-endian samples** (300 bits + 4 zero pad-bits) 🟢.
@@ -389,7 +395,8 @@ sample spacing 🟡; (3) absolute physical units. Evidence/decoders: `desktop/an
 Page: `[0]`=`0x4c` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE** (−6/page; byte[1]
 `00` only below 256 queued — 🟡 third-party capture `4c 02 cd` = 717, see §3) ·
 body = 6×**23-byte records** · `[last]`=XOR. 🟢
-Record (23 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x96/rec** (cursor space) 🟢 ·
+Record (23 B): `[0:4]`=BE counter (top byte `0x0c` until 2026-11-28, then `0x0d` — not a
+delimiter, see §3) **+0x96/rec** (cursor space) 🟢 ·
 `[4]`=HR · `[5]`=HRV · `[6]`=confidence · `[7]`=RR×8 · `[8]`=SpO2-or-wake-flag ·
 `[9]`=item2p5 · **`[10:20]`=`acti_counts`** (activity blob) · `[20]`=info · `[21:22]`=trailer
 (all per the APK reconciliation below). Idle/unworn template:
@@ -398,8 +405,8 @@ Record (23 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x96/rec** (cursor space) �
 > **This is the `历史测量响应` ("history MEASUREMENT response") record — NOT the
 > activity record (issue #93 reconciliation, 2026-06-17).** The decompiled app
 > (`pp.txt`, blutter) ships an explicit per-2.5-min offset map whose `utc` field
-> sits at loc `0x3`; our wire counter is at byte `[0:4]` (top byte = the `0x0c`
-> delimiter), so **`wire_index = APK_loc − 3`**. Under that convention the
+> sits at loc `0x3`; our wire counter is at byte `[0:4]` (its top byte is the `0x0c`
+> once read as a delimiter), so **`wire_index = APK_loc − 3`**. Under that convention the
 > MEASUREMENT map (`utc·pr·hrv·conf·resprate·spo2·item2p5·acti_counts·info`)
 > reproduces **byte-for-byte** the §5.3 fields already ground-truthed to the app's
 > 2026-06-13 night — **five independent fields agree**, which is a second,
@@ -407,7 +414,7 @@ Record (23 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x96/rec** (cursor space) �
 >
 > | APK field (`历史测量响应`) | APK loc·len | wire idx | meaning | conf |
 > |---|---|---|---|---|
-> | `utc` | 0x3·4 | `[0:4]` | BE counter / cursor (top byte `0x0c`) | 🟢 |
+> | `utc` | 0x3·4 | `[0:4]` | BE counter / cursor (top byte `0x0c` until 2026-11-28 20:23:28 UTC) | 🟢 |
 > | `pr` | 0x7·1 | `[4]` | **HR (bpm)**; <30 = unmeasured sentinel | 🟢 |
 > | `hrv` | 0x8·1 | `[5]` | **HRV / RMSSD (ms)** | 🟢 |
 > | `conf` | 0x9·1 | `[6]` | **confidence / signal quality** 0..~12 (was "[6] quality? 🟡") | 🟢 |

@@ -41,7 +41,7 @@ class EpochSyncTest {
         bytes(1, 2, 3, 4, 5, 6, 7).copyInto(rec, destinationOffset = 15)
         val page = frame(0x4C, bytes(0x00, 0x00) + rec)
 
-        val records = EpochRecord.parseActivityPage(page, streamHighByte = 0x0C)
+        val records = EpochRecord.parseActivityPage(page)
 
         assertEquals(1, records.size)
         assertEquals(0x13, records[0].subtype)
@@ -55,11 +55,13 @@ class EpochSyncTest {
         ByteArray(38) { it.toByte() }.copyInto(rec, destinationOffset = 9)
         val page = frame(0x47, bytes(0x00, 0x03) + rec)
 
-        val records = EpochRecord.parsePPGPage(page, streamHighByte = 0x02)
+        val records = EpochRecord.parsePPGPage(page)
 
         assertEquals(1, records.size)
         assertContentEquals(ByteArray(38) { it.toByte() }, records[0].rawPayload)
-        assertEquals(at(0x02000100L), records[0].timestamp)
+        // Upstream passes a high byte of 0x02 and expects 0x02000100; the record's own first byte
+        // is 0x0c, and a record is dated by its own four-byte counter (PORTING.md D-260).
+        assertEquals(at(0x0c000100L), records[0].timestamp)
         assertEquals(0x03, EpochRecord.remainingRecordCountdown(page))
     }
 
@@ -86,15 +88,18 @@ class EpochSyncTest {
     }
 
     @Test
-    fun sessionReparsesBufferedPagesWhenEndFrameProvidesHighByte() { // :71-97
+    fun sessionDatesBufferedPagesByTheirOwnCounterBeforeAndAfterTheEndFrame() { // :71-97
         val rec = record(size = 23, counter = 0x223344, fill = 0x00)
         bytes(1, 0, 0, 0, 0, 0, 0).copyInto(rec, destinationOffset = 15)
         val page = frame(0x4C, bytes(0x00, 0x00) + rec)
         val end = hex("500000120c2233440c223344")
 
         val session = EpochSyncSession()
-        assertEquals(at(0x00223344L), session.appendActivityPage(page).first().timestamp)
+        // Upstream expects 0x00223344 (2020) until the end frame supplies the high byte; the record
+        // already carries it (PORTING.md D-260).
+        assertEquals(at(0x0c223344L), session.appendActivityPage(page).first().timestamp)
         assertNotNull(session.complete(end))
+        assertEquals(0x0c, session.streamHighByte)
 
         assertTrue(session.isComplete)
         assertEquals(at(0x0c223344L), session.activityRecords.first().timestamp)
