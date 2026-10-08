@@ -8,7 +8,7 @@ package io.github.opencircuit.ringkit
 // `onsetIsUnobserved` (`:1278-1291`), night selection (`:1212-1234`, `:1293-1629`) and the staged
 // segments (`:1631-1640`, a thin wrapper over `SleepStaging.classify`).
 //
-// A 0x4c page is `[0x4c][0x00][countdown][N × 23-byte record][xor]` (../docs/PROTOCOL.md §5.3).
+// A 0x4c page is `[0x4c][countdown, 2 bytes BE][N × 23-byte record][xor]` (../docs/PROTOCOL.md §5.3).
 // Records align to page boundaries — each page body is a whole number of records.
 
 import java.time.Duration
@@ -27,7 +27,7 @@ object BulkSleep {
     fun recordsFromPage(frame: ByteArray): List<BulkRecord> {
         val p = Frame.parse(frame) ?: return emptyList()
         if (p.opcode != Frame.responseId(Opcode.PAGE_4C)) return emptyList()
-        // body = [00][countdown][records…]; records begin at body index 2.
+        // body = [countdown hi][countdown lo][records…]; records begin at body index 2.
         val body = p.body
         if (body.size <= 2) return emptyList()
         return recordsFromStream(body.copyOfRange(2, body.size))

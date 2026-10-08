@@ -153,7 +153,10 @@ name masked by the app) and the owner's observations.
 Bulk frames (`0x47`/`0x4c`) pack fixed-size records, each prefixed by delimiter
 `0x0c` + a **3-byte BE counter** in the sync-cursor space (`0x47` steps `+0x0384`,
 `0x4c` steps `+0x96`; see §5.2/§5.3). Continue a page by ACKing: `0x47` → `c7 00 00`,
-`0x4c` → `cc 00 00`; the page header byte[2] counts remaining records, `0x00` on the last.
+`0x4c` → `cc 00 00`; the page header **bytes[1:3] (16-bit BE)** count the remaining records,
+`00 00` on the last. Byte[1] is `00` only while fewer than 256 records are queued — a
+third-party hardware capture after ~30 h offline read `4c 02 cd` = 717 queued (Gadgetbridge
+f6f32560; a fact, not their code). 🟡 (third-party capture) until a drain of our own ring confirms it.
 
 ## 4. Commands (request → response) 🟢
 
@@ -328,8 +331,9 @@ frames. **`06 01 00` = HR mode** (short `15 00 <hr>` frames); **`06 02 00` = SpO
 = 96/97 in the live capture; byte[2] is `00`, so don't read HR from these).
 
 ### 5.2 `0x47` — bulk PPG / waveform page (ACK each with `c7 00 00`)
-Page: `[0]`=`0x47` · `[1]`=`00` · **`[2]`=remaining-RECORD countdown** (−5/full page,
-0 on last; e.g. `1c 17 12 0d 08 03 00`) · body = N×**47-byte records** · `[last]`=XOR
+Page: `[0]`=`0x47` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE** (−5/full page,
+0 on last; e.g. byte[2] `1c 17 12 0d 08 03 00` with byte[1] `00` — byte[1] is the high byte,
+non-zero above 255 queued: 🟡 third-party capture `4c 02 cd` = 717, see §3) · body = N×**47-byte records** · `[last]`=XOR
 (valid 11/11). 🟢
 Record (47 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x0384/rec = 900 s** (cursor space) 🟢 ·
 `[4:6]`=16-bit BE **optical baseline/DC** (`[4]`∈{`02`,`03`}, **not const**; `[5]` drifts) 🟡 ·
@@ -382,7 +386,8 @@ sample spacing 🟡; (3) absolute physical units. Evidence/decoders: `desktop/an
 (stats) and `desktop/decode_0x47.py` (both widths → CSV).
 
 ### 5.3 `0x4c` — bulk activity/sleep page (ACK each with `cc 00 00`)
-Page: `[0]`=`0x4c` · `[1]`=`00` · **`[2]`=remaining-RECORD countdown** (−6/page) ·
+Page: `[0]`=`0x4c` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE** (−6/page; byte[1]
+`00` only below 256 queued — 🟡 third-party capture `4c 02 cd` = 717, see §3) ·
 body = 6×**23-byte records** · `[last]`=XOR. 🟢
 Record (23 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x96/rec** (cursor space) 🟢 ·
 `[4]`=HR · `[5]`=HRV · `[6]`=confidence · `[7]`=RR×8 · `[8]`=SpO2-or-wake-flag ·

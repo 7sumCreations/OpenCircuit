@@ -106,12 +106,16 @@ object EpochRecord {
         }
     }
 
-    /** Byte 2 of a `0x47`/`0x4C` page: the ring's remaining-record countdown, or null for any other frame. */
+    /**
+     * Bytes 1–2 (big endian) of a `0x47`/`0x4C` page: the ring's remaining-record countdown,
+     * 0..65535, or null for any other frame. Upstream reads byte 2 alone, which wraps above 255
+     * records queued (PORTING.md D-259).
+     */
     fun remainingRecordCountdown(data: ByteArray): Int? {
         if (data.size < 3) return null
         val op = data.u8(0)
         if (op != PPG_OPCODE && op != ACTIVITY_OPCODE) return null
-        return data.u8(2)
+        return (data.u8(1) shl 8) or data.u8(2)
     }
 
     /**
@@ -141,11 +145,12 @@ object EpochRecord {
         }
     }
 
+    /** The records of a page: the body after its two countdown bytes, whatever their value (D-259). */
     private fun pagePayload(bytes: ByteArray, opcode: Int): ByteArray? {
         if (bytes.isEmpty() || bytes.u8(0) != opcode) return null
         val parsed = Frame.parse(bytes) ?: return null
         val body = parsed.body
-        if (parsed.opcode != opcode || body.size < 2 || body.u8(0) != 0x00) return null
+        if (parsed.opcode != opcode || body.size < 2) return null
         return body.copyOfRange(2, body.size)
     }
 
