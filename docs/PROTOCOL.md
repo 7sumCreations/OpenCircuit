@@ -826,6 +826,25 @@ within the day and `active_seconds` ≤ 150/epoch.
 > `[6:8]`/`[8:10]` as 0.1 °C, streamed live while connected — not in the bulk sync. So it
 > needs neither the session-open auth nor active flag-probing; just read the descriptor.
 
+### 5.3a `0x40` — history page on older Gen 2 firmware (ACK `c0`) 🟡 Android-verified (opcodes only)
+> **Android-verified 2026-10-14, Gen 2 on `FR02.013`.** A ring left unused for about a year, worn one night, then
+> synced: OpenCircuit Android got **zero `0x4c` pages** on both channels (sleep channel: a few `0x47`, exit
+> quiet-after-pages; all-day: nothing). Its diagnostics showed unhandled `0x40` frames (×3) on every connection. The
+> official app, connecting right afterwards over the same firmware, drained the night. An Android HCI snoop of that
+> session (opcode byte only per ATT value, so the payloads were not recoverable) reads:
+> `01→81` ×2 (auth) · `02→82` (open) · **`03→83`** · `07→87` · `47→c7` · then **~400 × `0x40` pages, each answered
+> with `c0`** · `07→87` · `50` · `d0` · then `09→89` and a firmware update (handles `0x0902`/`0x0904`).
+> - 🟡 **On `FR02.013` the night's records travel as `0x40` pages, acknowledged with `c0` (presumably `c0 00 00`,
+>   by analogy with `c7`/`cc`).** A client that doesn't ACK them stalls the drain after the first page or so,
+>   and the night stays on the ring.
+> - 🔴 The `0x40` record layout is unknown (payload not captured). Whether the `03 → 83` exchange is required
+>   is also unknown; OpenCircuit never sends `03`.
+> - 🟡 After the official app updated the same ring to **`FR02.022`**, its next connection streamed **`0x4c`
+>   pages ACKed with `cc`** and no `0x40`. So the `0x40` format looks firmware-dependent (seen on `FR02.013`;
+>   upstream's `0x4c` captures are `FR02.018`).
+> - **Capture needed:** a full-payload snoop of an `FR02.013` (or older) ring draining, to decode `0x40` and the
+>   `03` command's arguments.
+
 ### 5.4 `0x10` / `0x87` — fixed 19-byte descriptor
 `0x10` ← `d0 00 00` (also spontaneous ~30–60 s); `0x87` ← `07 00 00`. **Identical
 layout** (only `[0]` respid differs; `0x87` body == `0x10` body) → shared descriptor,
