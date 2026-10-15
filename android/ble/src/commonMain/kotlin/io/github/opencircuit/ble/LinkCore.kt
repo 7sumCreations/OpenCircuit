@@ -42,8 +42,8 @@ import kotlin.time.TimeSource
  * (PORTING.md D-185).
  *
  * Once data flows: every `0x11` heartbeat is acknowledged once, in arrival order, on the link
- * lane, ahead of any waiting feature write (PORTING.md D-190); a `0x47` / `0x4c` / `0x4d` history
- * page is acknowledged on the same lane only when the app asks, through [acknowledge], once it has
+ * lane, ahead of any waiting feature write (PORTING.md D-190); a `0x40` / `0x47` / `0x4c` / `0x4d`
+ * history page is acknowledged on the same lane only when the app asks, through [acknowledge], once it has
  * stored the page (PORTING.md D-261);
  * every `81 00` challenge is answered, held until the MAC is settled (PORTING.md D-188); every
  * frame but that challenge waits for the one collector of [frames] in a per-connection buffer
@@ -1073,6 +1073,9 @@ private const val HEARTBEAT = 0x11
  * [opcode] is not a page. Written only through [RingLink.acknowledge].
  */
 private fun pageAckFor(opcode: Int): ByteArray? = when (opcode) {
+    // Older Gen 2 firmware (FR02.013) sends the night as 0x40 pages the official app answers with
+    // c0; the payload was never captured, so `c0 00 00` follows c7 / cc / cd (PORTING.md D-274).
+    0x40 -> byteArrayOf(0xC0.toByte(), 0x00, 0x00)
     0x47 -> Command.pageAck47
     0x4C -> Command.pageAck4C
     0x4D -> Command.pageAck4D

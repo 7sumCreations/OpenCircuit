@@ -66,7 +66,7 @@ class FakeRingLink(override val ring: RememberedRing) : RingLink, LinkDiagnostic
 
     /**
      * The ring sends [frame]: it is queued for the collector of [frames] (a copy). A history page
-     * (`0x47` / `0x4c` / `0x4d`) waits for [acknowledge], as on the real link.
+     * (`0x40` / `0x47` / `0x4c` / `0x4d`) waits for [acknowledge], as on the real link.
      */
     fun emitFrame(frame: ByteArray) {
         if (isPage(frame)) synchronized(pendingPages) { pendingPages += frame.copyOf() }
@@ -155,7 +155,10 @@ class FakeRingLink(override val ring: RememberedRing) : RingLink, LinkDiagnostic
     }
 
     private companion object {
-        /** The history pages the ring waits on an acknowledgement for. */
-        val PAGE_OPCODES = setOf(0x47, 0x4C, 0x4D)
+        /**
+         * The history pages the ring waits on an acknowledgement for: `0x40` (older Gen 2 firmware,
+         * FR02.013, ACK `c0`), `0x47`, `0x4c`, `0x4d`.
+         */
+        val PAGE_OPCODES = setOf(0x40, 0x47, 0x4C, 0x4D)
     }
 }

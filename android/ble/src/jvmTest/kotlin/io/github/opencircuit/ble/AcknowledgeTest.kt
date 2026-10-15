@@ -48,6 +48,26 @@ class AcknowledgeTest {
     }
 
     @Test
+    fun anOlderFirmware40PageIsAcknowledgedWithC0OnlyWhenAsked() = runTest {
+        val (ring, link) = authenticatedLink()
+        recordFrames(link)
+
+        ring.notify(Fixtures.olderFirmwarePage40)
+        runCurrent()
+        val before = ring.log.size
+        runCurrent()
+        assertEquals(emptyList(), ring.log.drop(before), "a 0x40 page is never acknowledged by the link itself")
+
+        val result = backgroundScope.async { link.acknowledge(Fixtures.olderFirmwarePage40) }
+        runCurrent()
+
+        assertEquals(SendResult.Sent, result.await())
+        assertEquals(listOf(write("c0 00 00")), ring.log.drop(before))
+        // The content-match rule holds for 0x40 too: a second acknowledgement is refused.
+        assertEquals(SendResult.Refused(RefusalReason.PAGE_NOT_PENDING), link.acknowledge(Fixtures.olderFirmwarePage40))
+    }
+
+    @Test
     fun aFrameThatIsNotAPageIsRefusedAndNothingIsWritten() = runTest {
         val (ring, link) = authenticatedLink()
         recordFrames(link)

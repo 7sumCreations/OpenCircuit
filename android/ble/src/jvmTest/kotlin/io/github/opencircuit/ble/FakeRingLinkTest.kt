@@ -178,4 +178,14 @@ class FakeRingLinkTest {
         assertContentEquals(Fixtures.sleepPage4c, link.acknowledged.single())
         assertEquals(emptyList(), link.sent, "an acknowledgement is not a send")
     }
+
+    @Test
+    fun anOlderFirmware40PageWaitsForAcknowledgeAsOnTheRealLink() = runTest {
+        val link = FakeRingLink(Fixtures.ring)
+        link.emitFrame(Fixtures.olderFirmwarePage40)
+
+        assertEquals(SendResult.Sent, link.acknowledge(Fixtures.olderFirmwarePage40))
+        assertEquals(SendResult.Refused(RefusalReason.PAGE_NOT_PENDING), link.acknowledge(Fixtures.olderFirmwarePage40))
+        assertContentEquals(Fixtures.olderFirmwarePage40, link.acknowledged.single())
+    }
 }

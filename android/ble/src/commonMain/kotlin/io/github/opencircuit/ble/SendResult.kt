@@ -32,7 +32,7 @@ enum class RefusalReason {
     /** A history sync open while [LinkInfo.historySafe] is false (pages would be cut short and lost). */
     HISTORY_UNSAFE,
 
-    /** [RingLink.acknowledge] of a frame that is not a history page (`0x47`, `0x4c`, `0x4d`). */
+    /** [RingLink.acknowledge] of a frame that is not a history page (`0x40`, `0x47`, `0x4c`, `0x4d`). */
     NOT_A_PAGE,
 
     /**

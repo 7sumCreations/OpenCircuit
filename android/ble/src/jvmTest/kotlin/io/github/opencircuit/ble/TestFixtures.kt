@@ -51,6 +51,13 @@ internal object Fixtures {
     /** A raw `0x4d` sport-history frame too short to decode, `4d 00 4d` (`WorkoutHazardTest`). */
     val sportPage4dShort: ByteArray get() = hex("4d004d")
 
+    /**
+     * A `0x40` history page as older Gen 2 firmware (FR02.013) sends it, ACKed `c0` (repo-root
+     * docs/PROTOCOL.md §5.3a). SYNTHETIC: only the opcode byte was ever captured, so the body is
+     * arbitrary bytes, never a claim about the layout.
+     */
+    val olderFirmwarePage40: ByteArray get() = hex("4000150102030405060708")
+
     /** The ring's `0x11` heartbeat as `docs/PROTOCOL.md` records it on the wire, `11 00 0N 55`, for N = [n] (1..9). */
     fun heartbeat(n: Int): ByteArray {
         require(n in 1..9)
