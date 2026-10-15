@@ -331,7 +331,8 @@ class SyncTriggers(
     /**
      * Starts the [trigger]'s sync; returns whether a sync now serves it: this one started, or the
      * controller refused because another sync started since the check (it drains the same ring).
-     * False when a measure refused it: the trigger is not served.
+     * False when no sync runs after the refusal (a measure refused it, even one that has ended
+     * since): the trigger is not served.
      */
     private fun start(trigger: AutoSyncTrigger, reason: String): Boolean {
         if (sync.syncNow()) {
@@ -339,10 +340,12 @@ class SyncTriggers(
             log("sync-trigger: $reason")
             return true
         }
-        // The controller refused: a sync or a measure started since the check.
-        val why = busyReason() ?: AutoSyncSkipReason.ALREADY_SYNCING
+        // The controller refused: a sync or a measure started since the check. Served only by a sync
+        // that is running now; the controller marks it running before it publishes isSyncing.
+        val served = sync.state.value.syncing || sync.isSyncing.value
+        val why = if (served) AutoSyncSkipReason.ALREADY_SYNCING else AutoSyncSkipReason.MEASURING
         skipped(wallClock(), trigger, why)
-        return why == AutoSyncSkipReason.ALREADY_SYNCING
+        return served
     }
 
     /**

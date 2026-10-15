@@ -143,6 +143,42 @@ class NightQuietDisconnectTest {
     }
 
     @Test
+    fun aCatchUpRefusedByAMeasureThatEndsBeforeTheRefusalIsReadStaysOwed() = runTest {
+        val w = night()
+        try {
+            advanceTo(60_000)
+            sessionsOf(w.session).connect(w.session.link.ring)
+            // The measure starts after the catch-up's busy check and ends between the controller's
+            // refusal and the trigger reading why: no sync runs, so nothing serves the catch-up.
+            var started = false
+            w.duringNightsRead = {
+                if (!started && testScheduler.currentTime >= local(10)) {
+                    started = true
+                    w.session.liveMeasure.start(LiveMode.HEART_RATE)
+                }
+            }
+            var stopped = false
+            w.onLog = { line ->
+                if (!stopped && line.startsWith("Sync now not started: a live measure")) {
+                    stopped = true
+                    w.session.liveMeasure.stop()
+                }
+            }
+            advanceTo(local(10) + 3_000)
+            assertTrue(stopped, "the controller refused the catch-up for the measure")
+            assertEquals(false, w.session.liveMeasure.isMeasuring.value)
+            assertEquals(false, w.session.sync.isSyncing.value, "no sync serves the catch-up")
+
+            advanceTo(local(10) + SyncTriggers.TICK_MILLIS + 3_000)
+            assertEquals(1, w.sleepOpens().size, "the owed catch-up runs a tick on")
+            advanceTo(local(11))
+            assertEquals(1, w.sleepOpens().size, "exactly once")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
     fun aCatchUpRefusedBecauseTheUsersSyncStartedIsServedByItAndNeverRunsAgain() = runTest {
         val w = night()
         try {
