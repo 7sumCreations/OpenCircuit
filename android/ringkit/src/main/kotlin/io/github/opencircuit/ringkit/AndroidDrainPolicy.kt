@@ -72,15 +72,18 @@ object HistoryChannelVerdict {
 
 /**
  * How far one channel's drain has come, from the 16-bit countdown each `0x4c` page carries
- * (bytes 1–2, PORTING.md D-259): [records] received so far, [expected] = those plus the latest
- * page's countdown (on the first page: its own records plus its countdown), and [etaSeconds] at
- * the record rate measured since the first page (null until a second page gives a rate).
+ * (bytes 1–2, PORTING.md D-259). The ring's countdown is the records still queued AFTER the page,
+ * plus one: a real FR02.022 drain of 652 records sent a 4-record first page counting 649 and a
+ * last page counting 1 (../docs/PROTOCOL.md §5.3). So [records] received so far, [expected] =
+ * those plus the latest countdown less one, and [etaSeconds] at the record rate measured since the
+ * first page (null until a second page gives a rate). A countdown of 1 (or 0, never seen) means
+ * every record is in. `0x47` countdowns are not used for progress.
  */
 data class DrainProgress(val records: Int, val expected: Int?, val etaSeconds: Long?) {
     companion object {
         /**
          * @param records records received on the channel so far.
-         * @param lastCountdown the latest page's countdown, or null when no page carried one.
+         * @param lastCountdown the latest `0x4c` page's raw countdown (queued after + 1), or null when no page carried one.
          * @param firstPageRecords the records the channel's first page held.
          * @param firstPageAtMillis when that page arrived (monotonic).
          * @param lastPageAtMillis when the latest page arrived (monotonic).
@@ -89,16 +92,17 @@ data class DrainProgress(val records: Int, val expected: Int?, val etaSeconds: L
             require(records >= 0 && firstPageRecords >= 0) { "record counts cannot be negative" }
             require(lastCountdown == null || lastCountdown in 0..0xFFFF) { "a countdown is 16 bits: $lastCountdown" }
             if (lastCountdown == null) return DrainProgress(records, expected = null, etaSeconds = null)
-            if (lastCountdown == 0) return DrainProgress(records, expected = records, etaSeconds = 0)
+            if (lastCountdown <= 1) return DrainProgress(records, expected = records, etaSeconds = 0)
+            val remaining = lastCountdown - 1
             val since = records - firstPageRecords
             val elapsed = lastPageAtMillis - firstPageAtMillis
             val eta = if (since > 0 && elapsed > 0) {
                 // ceil(remaining / (since / elapsed s)), in whole seconds, in integers.
-                (lastCountdown.toLong() * elapsed + since.toLong() * 1_000 - 1) / (since.toLong() * 1_000)
+                (remaining.toLong() * elapsed + since.toLong() * 1_000 - 1) / (since.toLong() * 1_000)
             } else {
                 null
             }
-            return DrainProgress(records, expected = records + lastCountdown, etaSeconds = eta)
+            return DrainProgress(records, expected = records + remaining, etaSeconds = eta)
         }
     }
 }

@@ -39,7 +39,10 @@ import kotlinx.coroutines.launch
  * - [pagesPerOpen]: after that many pages in one open the ring goes quiet with no end report,
  *   though it holds more (the "half-night" ring); only a new open sends the next ones.
  * - After the last page is acknowledged it sends the channel's end report ([endOfHistory], or
- *   [endOfHistoryBy] for that channel; null = none: the ring goes quiet after its countdown-0 page).
+ *   [endOfHistoryBy] for that channel; null = none: the ring goes quiet after its last page). The fake
+ *   sends the pages it was given byte for byte; the builders (`HistoryTestPages`, `BacklogPages`)
+ *   write each `0x4c` countdown as the real ring does: records still queued after the page + 1,
+ *   so a channel's last page reads 1 (a real FR02.022 drain of 652 records: 649 → 1).
  * - A `07 00 00` with no open before it (a fetch nudge) gets nothing.
  * - [ignoreOpensUntilReauth]: every open is ignored (no `0x82`, no page) until [reauthenticate];
  *   [ignoreAllOpens]: every open is ignored, re-auth or not.

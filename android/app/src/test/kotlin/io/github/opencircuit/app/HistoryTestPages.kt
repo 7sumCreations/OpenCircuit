@@ -9,7 +9,7 @@ package io.github.opencircuit.app
  */
 internal object HistoryTestPages {
 
-    /** The real page as captured: header `4c 00 26` (38 records still queued after it). */
+    /** The real page as captured: header `4c 00 26` (countdown 38: 37 records still queued after it, plus one). */
     val REAL_PAGE: ByteArray = hex(
         "4c00260c22a16b55210a7d120a010101010100000402400400000c22a20155000300" +
             "120a010101010100003c00000d01200c22a297540001005f0a010101010100001101b00f" +
@@ -26,7 +26,7 @@ internal object HistoryTestPages {
 
     /**
      * Page [index] (0-based) of a [count]-page backlog: the real page's records moved
-     * `index × 6` epochs later, header countdown = the records still queued after this page.
+     * `index × 6` epochs later, header countdown = the records still queued after this page + 1.
      */
     fun sleepPage(index: Int, count: Int): ByteArray = page(index, queuedAfter = (count - 1 - index) * RECORDS_PER_PAGE, firstEpoch = 0)
 
@@ -50,25 +50,54 @@ internal object HistoryTestPages {
     fun allDayBacklog(count: Int): List<ByteArray> = (0 until count).map { allDayPage(it, count) }
 
     /**
-     * Page [index] with its header countdown set to [queuedAfter] (16 bits, bytes 1–2) and its
-     * records moved `firstEpoch + index × 6` epochs later than the real page's.
+     * Page [index] with [queuedAfter] records still queued after it and its records moved
+     * `firstEpoch + index × 6` epochs later than the real page's. The header countdown (16 bits,
+     * bytes 1–2) is written as the ring writes it: [queuedAfter] + 1, so a channel's last page
+     * reads 1 (a real FR02.022 drain of 652 records counted 649 on its 4-record first page and 1
+     * on its last; ../docs/PROTOCOL.md §5.3).
      */
     fun page(index: Int, queuedAfter: Int, firstEpoch: Int): ByteArray {
-        require(queuedAfter in 0..0xFFFF)
+        require(queuedAfter in 0 until 0xFFFF)
         val shift = (firstEpoch + index * RECORDS_PER_PAGE) * EPOCH_SECONDS
+        val records = (0 until RECORDS_PER_PAGE).map { r -> recordAt(r, REAL_COUNTERS[r] + shift) }
+        return assemble(records, countdown = queuedAfter + 1)
+    }
+
+    /**
+     * A sleep channel of [total] records as the real ring pages it: a first page of
+     * [firstPageRecords], then pages of six (the last may be shorter), each header countdown =
+     * the records queued after it + 1. Record `i` is the real page's record `i mod 6`, its counter
+     * moved to `0c22a16b + i × 150 s` (unique, epoch-spaced, oldest first).
+     */
+    fun ringShapedBacklog(total: Int, firstPageRecords: Int): List<ByteArray> {
+        require(total > 0 && firstPageRecords in 1..RECORDS_PER_PAGE)
+        val records = (0 until total).map { i -> recordAt(i % RECORDS_PER_PAGE, REAL_COUNTERS[0] + i * EPOCH_SECONDS) }
+        val chunks = listOf(records.take(firstPageRecords)) + records.drop(firstPageRecords).chunked(RECORDS_PER_PAGE)
+        var queued = total
+        return chunks.map { chunk ->
+            queued -= chunk.size
+            assemble(chunk, countdown = queued + 1)
+        }
+    }
+
+    /** The real page's record [r] (0..5) with its counter set to [counter]. */
+    private fun recordAt(r: Int, counter: Long): ByteArray {
+        val record = REAL_PAGE.copyOfRange(3 + r * RECORD, 3 + (r + 1) * RECORD)
+        record[0] = (counter ushr 24).toByte()
+        record[1] = (counter ushr 16).toByte()
+        record[2] = (counter ushr 8).toByte()
+        record[3] = counter.toByte()
+        return record
+    }
+
+    /** `4c <countdown hi> <countdown lo> <records…> <xor>`. */
+    private fun assemble(records: List<ByteArray>, countdown: Int): ByteArray {
+        require(countdown in 0..0xFFFF)
         val body = ArrayList<Byte>()
         body += 0x4C.toByte()
-        body += ((queuedAfter ushr 8) and 0xFF).toByte()
-        body += (queuedAfter and 0xFF).toByte()
-        for (r in 0 until RECORDS_PER_PAGE) {
-            val record = REAL_PAGE.copyOfRange(3 + r * RECORD, 3 + (r + 1) * RECORD)
-            val counter = REAL_COUNTERS[r] + shift
-            record[0] = (counter ushr 24).toByte()
-            record[1] = (counter ushr 16).toByte()
-            record[2] = (counter ushr 8).toByte()
-            record[3] = counter.toByte()
-            body += record.toList()
-        }
+        body += ((countdown ushr 8) and 0xFF).toByte()
+        body += (countdown and 0xFF).toByte()
+        records.forEach { body += it.toList() }
         val xor = body.fold(0) { acc, b -> acc xor (b.toInt() and 0xFF) }
         return (body + xor.toByte()).toByteArray()
     }

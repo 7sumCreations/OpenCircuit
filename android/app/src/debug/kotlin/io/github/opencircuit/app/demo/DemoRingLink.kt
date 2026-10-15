@@ -340,13 +340,17 @@ class DemoRingLink(
         private fun record(counter: Long, body: ByteArray): ByteArray =
             byteArrayOf((counter ushr 24).toByte(), (counter ushr 16).toByte(), (counter ushr 8).toByte(), counter.toByte()) + body
 
-        /** [records] as `0x4c` pages of up to [RECORDS_PER_PAGE], each counting down the records still queued after it. */
+        /**
+         * [records] as `0x4c` pages of up to [RECORDS_PER_PAGE], each counting down as the real
+         * ring does: the records still queued after it, plus one (the last page reads 1).
+         */
         private fun pages(records: List<ByteArray>): List<ByteArray> {
             val chunks = records.chunked(RECORDS_PER_PAGE)
             var queued = records.size
             return chunks.map { chunk ->
                 queued -= chunk.size
-                val header = byteArrayOf(0x4C, ((queued ushr 8) and 0xFF).toByte(), (queued and 0xFF).toByte())
+                val countdown = queued + 1
+                val header = byteArrayOf(0x4C, ((countdown ushr 8) and 0xFF).toByte(), (countdown and 0xFF).toByte())
                 val bytes = chunk.fold(header) { acc, r -> acc + r }
                 bytes + Frame.xorTrailer(bytes).toByte()
             }

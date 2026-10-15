@@ -17,7 +17,7 @@ class ChannelTraceFlagsTest {
 
     @Test
     fun theSyncAnswerIsKeptByteForByteWithItsFlagAndEmptySignalAndTheCountdownsAreTraced() = runTest {
-        val pages = HistoryTestPages.backlog(3) // countdowns 12, 6, 0
+        val pages = HistoryTestPages.backlog(3) // countdowns 13, 7, 1 (queued after + 1, as the ring writes it)
         val w = syncWorld { scope, now ->
             RingFake(
                 scope, now, mapOf(Command.SYNC_CHANNEL_SLEEP to pages),
@@ -35,8 +35,8 @@ class ChannelTraceFlagsTest {
             assertEquals(false, sleep.rounds.single().sawEmptyHistorySignal)
             assertEquals(0x82, sleep.rounds.single().firstOpcode)
             assertEquals(0x50, sleep.rounds.single().lastOpcode)
-            assertEquals(12, sleep.firstCountdown)
-            assertEquals(0, sleep.lastCountdown)
+            assertEquals(13, sleep.firstCountdown)
+            assertEquals(1, sleep.lastCountdown)
 
             assertEquals(listOf("82ff007d"), allDay.syncAcks)
             assertEquals(0, allDay.rounds.single().syncAckFlag)
@@ -56,18 +56,18 @@ class ChannelTraceFlagsTest {
 
     @Test
     fun aFirstPageWithMoreThan255QueuedIsTracedWithItsSixteenBitCountdown() = runTest {
-        // 717 records still queued after the first page: bytes 1–2 = 02 cd.
+        // 717 records still queued after the first page: countdown 718, bytes 1–2 = 02 ce.
         val pages = listOf(HistoryTestPages.page(0, queuedAfter = 717, firstEpoch = 0), HistoryTestPages.page(1, queuedAfter = 711, firstEpoch = 0))
         val w = syncWorld { scope, now -> RingFake(scope, now, mapOf(Command.SYNC_CHANNEL_SLEEP to pages)) }
         try {
-            assertEquals("4c02cd", pages[0].toPlainHex().take(6))
+            assertEquals("4c02ce", pages[0].toPlainHex().take(6))
             advanceTo(1_000)
             w.viewModel.onAction(RingAction.SyncNow)
             advanceTo(60_000)
 
             val sleep = w.session.sync.state.value.last!!.channels.first()
-            assertEquals(717, sleep.firstCountdown)
-            assertEquals(711, sleep.lastCountdown)
+            assertEquals(718, sleep.firstCountdown)
+            assertEquals(712, sleep.lastCountdown)
         } finally {
             w.db.close()
         }

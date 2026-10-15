@@ -9,7 +9,7 @@ import java.time.ZoneOffset
  * The kept seven-night backlog (`ringkit/src/test/resources/backlog-7-nights/backlog.txt`: seven
  * synthetic nights stitched into one counter-continuous run, guarded in `:ringkit` by
  * `BacklogSevenNightsFixtureTest`) as the ring would send it: `0x4c` pages of six records each,
- * assembled on the raw byte path — header countdown = the records still queued after the page,
+ * assembled on the raw byte path — header countdown = the records still queued after the page + 1 (as the ring writes it),
  * XOR trailer computed here. Nothing goes through the app's or `:ringkit`'s own builders.
  */
 internal object BacklogPages {
@@ -37,15 +37,15 @@ internal object BacklogPages {
     /** The wall-clock date of a raw record, through the one decoder the app itself uses. */
     fun date(record: ByteArray): Instant = BulkRecord.of(record)!!.date()
 
-    /** [of] as `0x4c` pages of [perPage] records, oldest first, each counting down what is still queued after it. */
+    /** [of] as `0x4c` pages of [perPage] records, oldest first, each counting down what is still queued after it, plus one. */
     fun pages(of: List<ByteArray> = records, perPage: Int = 6): List<ByteArray> {
         val chunks = of.chunked(perPage)
         return chunks.mapIndexed { i, chunk ->
-            val queuedAfter = chunks.drop(i + 1).sumOf { it.size }
+            val countdown = chunks.drop(i + 1).sumOf { it.size } + 1 // the ring's: queued after + 1
             val body = ArrayList<Byte>()
             body += 0x4C.toByte()
-            body += ((queuedAfter ushr 8) and 0xFF).toByte()
-            body += (queuedAfter and 0xFF).toByte()
+            body += ((countdown ushr 8) and 0xFF).toByte()
+            body += (countdown and 0xFF).toByte()
             chunk.forEach { body += it.toList() }
             val xor = body.fold(0) { acc, b -> acc xor (b.toInt() and 0xFF) }
             (body + xor.toByte()).toByteArray()

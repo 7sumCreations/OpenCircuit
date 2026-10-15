@@ -22,8 +22,9 @@ import kotlin.coroutines.cancellation.CancellationException
 /** What a running drain hears from the history routes, in the order the ring sent it. */
 sealed interface HistorySignal {
     /**
-     * A page is stored and acknowledged; [countdown] is the records the ring says are still queued
-     * after it (16 bits, `0x47` / `0x4c` only), and [counters] the counters of the `0x4c` records it
+     * A page is stored and acknowledged; [countdown] is the page's raw header countdown — the
+     * records the ring says are still queued after it, plus one (16 bits, `0x47` / `0x4c` only;
+     * ../docs/PROTOCOL.md §5.3), and [counters] the counters of the `0x4c` records it
      * held (empty for any other page), so a drain counts unique records, not pages; [nightCounters]
      * are those of its sleep-vitals records (the night layout).
      */

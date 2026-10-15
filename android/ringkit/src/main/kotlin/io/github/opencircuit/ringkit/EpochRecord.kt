@@ -114,8 +114,9 @@ object EpochRecord {
 
     /**
      * Bytes 1–2 (big endian) of a `0x47`/`0x4C` page: the ring's remaining-record countdown,
-     * 0..65535, or null for any other frame. Upstream reads byte 2 alone, which wraps above 255
-     * records queued (PORTING.md D-259).
+     * 0..65535, as sent, or null for any other frame. On a `0x4c` page it is the records still
+     * queued after the page, plus one: a channel's last page reads 1 (../docs/PROTOCOL.md §5.3).
+     * Upstream reads byte 2 alone, which wraps above 255 records queued (PORTING.md D-259).
      */
     fun remainingRecordCountdown(data: ByteArray): Int? {
         if (data.size < 3) return null

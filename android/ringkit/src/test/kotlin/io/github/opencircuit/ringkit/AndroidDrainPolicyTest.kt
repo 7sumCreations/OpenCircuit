@@ -81,26 +81,40 @@ class AndroidDrainPolicyTest {
 
     // MARK: progress from the 16-bit countdown
 
+    // The ring's countdown is the records still queued AFTER the page, plus one (a real FR02.022
+    // drain of 652 records: first page 4 records → 649, every later page 6, last page → 1).
+
     @Test
-    fun theFirstPageGivesTheChannelsTotalAsItsRecordsPlusItsCountdown() {
-        // 717 queued after a 6-record page (bytes 1–2 = 02 cd).
-        val p = DrainProgress.of(records = 6, lastCountdown = 717, firstPageRecords = 6, firstPageAtMillis = 1_000, lastPageAtMillis = 1_000)
-        assertEquals(6, p.records)
-        assertEquals(723, p.expected)
+    fun theFirstPageGivesTheChannelsTotalAsItsRecordsPlusItsCountdownLessOne() {
+        // The real ring's first page: 4 records, countdown 649 (648 queued after it, plus one).
+        val p = DrainProgress.of(records = 4, lastCountdown = 649, firstPageRecords = 4, firstPageAtMillis = 1_000, lastPageAtMillis = 1_000)
+        assertEquals(4, p.records)
+        assertEquals(652, p.expected)
         assertNull(p.etaSeconds, "one page gives no rate")
     }
 
     @Test
+    fun theLastPageOfTheRealDrainCountsDownToOneAndTheTotalIsWhatArrived() {
+        val p = DrainProgress.of(records = 652, lastCountdown = 1, firstPageRecords = 4, firstPageAtMillis = 1_000, lastPageAtMillis = 200_000)
+        assertEquals(652, p.expected)
+        assertEquals(0L, p.etaSeconds)
+    }
+
+    @Test
     fun theEtaComesFromTheMeasuredPageRate() {
-        // 6 more records in 1.3 s after the first page: 120 left at 4.615… records/s → 26 s (rounded up).
-        val p = DrainProgress.of(records = 12, lastCountdown = 120, firstPageRecords = 6, firstPageAtMillis = 1_000, lastPageAtMillis = 2_300)
+        // 6 more records in 1.3 s after the first page; countdown 121 = 120 left, at 4.615… records/s → 26 s (rounded up).
+        val p = DrainProgress.of(records = 12, lastCountdown = 121, firstPageRecords = 6, firstPageAtMillis = 1_000, lastPageAtMillis = 2_300)
         assertEquals(132, p.expected)
         assertEquals(26L, p.etaSeconds)
     }
 
     @Test
     fun aDrainedChannelHasNoTimeLeftAndNoCountdownGivesNoTotal() {
-        assertEquals(0L, DrainProgress.of(records = 18, lastCountdown = 0, firstPageRecords = 6, firstPageAtMillis = 0, lastPageAtMillis = 4_000).etaSeconds)
+        assertEquals(0L, DrainProgress.of(records = 18, lastCountdown = 1, firstPageRecords = 6, firstPageAtMillis = 0, lastPageAtMillis = 4_000).etaSeconds)
+        // A countdown of 0 never comes from the ring; it reads as drained too, never as a total below what arrived.
+        val zero = DrainProgress.of(records = 18, lastCountdown = 0, firstPageRecords = 6, firstPageAtMillis = 0, lastPageAtMillis = 4_000)
+        assertEquals(18, zero.expected)
+        assertEquals(0L, zero.etaSeconds)
         val none = DrainProgress.of(records = 5, lastCountdown = null, firstPageRecords = 5, firstPageAtMillis = 0, lastPageAtMillis = 0)
         assertNull(none.expected)
         assertNull(none.etaSeconds)

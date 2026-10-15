@@ -156,10 +156,14 @@ counter** in the sync-cursor space (`0x47` steps `+0x0384`, `0x4c` steps `+0x96`
 was in `0x0c000000`–`0x0cffffff` (2026-05-18 → 2026-11-28 20:23:28 UTC); it is **not** a
 delimiter — from 2026-11-28 20:23:28 UTC records start `0x0d` (🟡 computed from the counter
 epoch, not yet observed on the wire). Continue a page by ACKing: `0x47` → `c7 00 00`,
-`0x4c` → `cc 00 00`; the page header **bytes[1:3] (16-bit BE)** count the remaining records,
-`00 00` on the last. Byte[1] is `00` only while fewer than 256 records are queued — a
-third-party hardware capture after ~30 h offline read `4c 02 cd` = 717 queued (Gadgetbridge
-f6f32560; a fact, not their code). 🟢 Android-verified 2026-10-15 on our own ring (FR02.022): a 652-record drain counted 649 → 1, so byte[1] was non-zero on the first pages (§5.6.2).
+`0x4c` → `cc 00 00`; the page header **bytes[1:3] (16-bit BE)** of a `0x4c` page are a
+countdown = **the records still queued AFTER this page, plus one** — `00 01` on a channel's
+last page, not `00 00`. 🟢 Android-verified 2026-10-15 (FR02.022): a 652-record drain, first
+page 4 records → 649 (652 − 4 + 1), then 108 pages of six, last page → 1. Records still to
+come after a page = countdown − 1. Byte[1] is `00` only while fewer than 256 records are
+queued — a third-party hardware capture after ~30 h offline read `4c 02 cd` = countdown 717
+(Gadgetbridge f6f32560; a fact, not their code), and byte[1] was non-zero on our own first
+pages too (§5.6.2).
 
 ## 4. Commands (request → response) 🟢
 
@@ -338,7 +342,7 @@ frames. **`06 01 00` = HR mode** (short `15 00 <hr>` frames); **`06 02 00` = SpO
 ### 5.2 `0x47` — bulk PPG / waveform page (ACK each with `c7 00 00`)
 Page: `[0]`=`0x47` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE** (−5/full page,
 0 on last; e.g. byte[2] `1c 17 12 0d 08 03 00` with byte[1] `00` — byte[1] is the high byte,
-non-zero above 255 queued: 🟢 Android-verified 2026-10-15 (649 queued on FR02.022) + third-party capture `4c 02 cd` = 717, see §3) · body = N×**47-byte records** · `[last]`=XOR
+non-zero above 255 queued: 🟢 Android-verified 2026-10-15 (a `0x4c` countdown of 649 on FR02.022) + third-party capture `4c 02 cd` = 717, see §3. The "+1" meaning of the `0x4c` countdown (§3, §5.3) is not yet checked on `0x47` pages; the app does not use `0x47` countdowns for progress) · body = N×**47-byte records** · `[last]`=XOR
 (valid 11/11). 🟢
 Record (47 B): `[0:4]`=BE counter (top byte `0x0c` until 2026-11-28, then `0x0d` — not a
 delimiter, see §3) **+0x0384/rec = 900 s** (cursor space) 🟢 ·
@@ -392,8 +396,10 @@ sample spacing 🟡; (3) absolute physical units. Evidence/decoders: `desktop/an
 (stats) and `desktop/decode_0x47.py` (both widths → CSV).
 
 ### 5.3 `0x4c` — bulk activity/sleep page (ACK each with `cc 00 00`)
-Page: `[0]`=`0x4c` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE** (−6/page; byte[1]
-`00` only below 256 queued — 🟢 Android-verified 2026-10-15 (649 queued on FR02.022) + third-party capture `4c 02 cd` = 717, see §3) ·
+Page: `[0]`=`0x4c` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE = records still queued
+AFTER this page + 1** (−6/page; **1 on a channel's last page**, not 0 — 🟢 Android-verified
+2026-10-15 (FR02.022): a 652-record drain, first page 4 records → 649, last page → 1; byte[1]
+`00` only below 256 queued, third-party capture `4c 02 cd` = 717 too, see §3) ·
 body = 6×**23-byte records** · `[last]`=XOR. 🟢
 Record (23 B): `[0:4]`=BE counter (top byte `0x0c` until 2026-11-28, then `0x0d` — not a
 delimiter, see §3) **+0x96/rec** (cursor space) 🟢 ·
@@ -1112,7 +1118,7 @@ the row.
 | No answer | Neither `0x82` nor a page within 5 s of the open: the link runs the ring's auth again once per sync (`:ble` writes `01 00 00` and answers the challenge) and the open is sent again; nothing 20 s after the open ends the channel "the ring didn't answer" (NO_ACK), link kept | 🟡 Android, unverified on ring (D-264) |
 | `0x82` | `82 <b1> <b2> <xor>`: `[2]` is the ACK flag, `[1] = ff` means nothing to send (`82 ff 00 7d`) | 🟢 layout (iOS `RingSession.swift:4610-4635`) |
 | Pages | Each `0x4c` / `0x47` / `0x4d` page is written to the phone's history journal FIRST and only then acknowledged (`cc 00 00` / `c7 00 00` / `cd 00 00`); the ring sends the next page only after the acknowledgement. A page that could not be stored is never acknowledged. An acknowledgement is written only for a page the same connection delivered — the ACK bytes carry no page identity | 🟢 Android-verified 2026-10-15 (FR02.022): 109 `0x4c` + 25 `0x47` pages, every one journaled then acknowledged; acknowledgement latency p50 58 ms / p95 77 ms; 0 pages unacknowledged at disconnect (D-261) |
-| Countdown | Bytes 1–2 of a page header are a 16-bit big-endian count of records still queued (§3) — the progress shown while syncing | 🟢 Android-verified 2026-10-15 (FR02.022): a 652-record drain counted 649 → 1 (the first page's countdown is the total minus 3) (D-259) |
+| Countdown | Bytes 1–2 of a `0x4c` page header are a 16-bit big-endian countdown = records still queued after the page + 1 (§3). Progress while syncing reads "N of M records", M = records so far + countdown − 1; a countdown of 1 means the channel's records are all in. `0x47` countdowns are not used for progress | 🟢 Android-verified 2026-10-15 (FR02.022): a 652-record drain, first page 4 records → 649, last page → 1 (D-259) |
 | `0x50` | The end of the channel only after this channel's `0x82`; a `0x50` before it is the answer to a status query (§4) | 🟢 Android-verified 2026-10-15 (FR02.022): `0x50` ended BOTH channels (D-266) |
 | End of a round | `0x50` after `0x82`; 6 s after `82 ff`; 20 s after an answered open with no page; 6 s of quiet after a page (one `07 00 00` nudge first); a round still receiving pages runs 45 s, extended 45 s at a time up to 3,600 s; a round that added records and went quiet is reopened, up to 12 times; the whole sync stops at 90 min | 🟢 exits Android-verified (`0x50` on both channels, 1 round each, sleep 12.0 s / all-day 5.3 s, page gap p50 0.0 s / max 0.0 s); 🟡 the timing values were not stressed by this short backlog — unchanged (D-265, D-34) |
 | Pages outside a sync | A page that arrives with no sync running is stored and acknowledged the same way; the next commit takes it | 🟡 Android, unverified on ring (D-261) |

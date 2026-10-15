@@ -158,7 +158,7 @@ enum class SyncFault {
 
 /**
  * How far one channel of the running sync has come ([io.github.opencircuit.ringkit.DrainProgress]):
- * [records] new `0x4c` records so far, [expected] that plus the latest page's countdown (null
+ * [records] new `0x4c` records so far, [expected] that plus the latest page's countdown less one (null
  * before a page), [etaSeconds] at the record rate since the channel's first page (null until a
  * second page), [done] once the channel has ended.
  */
