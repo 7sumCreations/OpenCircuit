@@ -253,12 +253,16 @@ class RingSessionController(
     /** A connection attempt the user asked for: the state the link was in when asked, and whether it has moved on since. */
     private data class UserLinkUp(val requestedIn: LinkState, val underway: Boolean = false)
 
-    /** The link is opening a connection, not yet authenticated. */
+    /**
+     * The link is opening a connection, or holds one the ring's first data frame can still move on
+     * to [LinkState.Authenticated]. Every state is listed, so a new one must be placed here.
+     */
     private val LinkState.comingUp: Boolean
         get() = when (this) {
             LinkState.Connecting, LinkState.Discovering, LinkState.PairingNeeded,
             LinkState.Preparing, LinkState.Authenticating, LinkState.NotStreaming -> true
-            else -> false
+            LinkState.Idle, is LinkState.PairingFailed, is LinkState.Reconnecting, LinkState.WaitingForRing,
+            LinkState.BondLostSuspected, LinkState.BluetoothOff, LinkState.Authenticated -> false
         }
 
     private fun connectLink() {
