@@ -60,6 +60,12 @@ internal object Fixtures {
     /** A real `0x10` status descriptor (`FrameTest.realFrames`): a frame the link delivers and does not acknowledge. */
     val descriptor10: ByteArray get() = hex("104e0100000000fd00fd00000000100c0bffb7")
 
+    /**
+     * The same descriptor as the ring's `0x87` answer to `07 00 00`: the body is identical, only
+     * byte 0 differs (`docs/PROTOCOL.md` §5.4).
+     */
+    val descriptor87: ByteArray get() = descriptor10.also { it[0] = 0x87.toByte() }
+
     /** The Device Information values of a Gen 2 ring on its pinned firmware. */
     val deviceInformation: Map<GattPort.Characteristic, ByteArray>
         get() = mapOf(

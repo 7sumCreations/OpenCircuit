@@ -1,6 +1,7 @@
 package io.github.opencircuit.ble
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -19,7 +20,11 @@ import kotlinx.coroutines.launch
  * The ring itself answers `01 00 00` with [Script.challengeFrame], and answers a write equal to
  * [Script.acceptedAuthReply] with [Script.firstFrameAfterAuth]; any other reply gets nothing,
  * as a real ring drops a wrong one without a word. Once it has accepted the reply on the current
- * connection it answers `d0 00 00` with [Script.statusQueryReply].
+ * connection it answers `d0 00 00` with [Script.statusQueryReply] and `07 00 00` with
+ * [Script.fetchReply], and sends [Script.ownTimerFrame] on its own timer
+ * ([Script.ownTimerAfterMillis] after the first accepted reply). Latency to the first frame and so
+ * to `Authenticated` is therefore whatever the script says: instant ([Script.firstFrameAfterAuth]),
+ * on a query's answer, or on the ring's own timer.
  *
  * Callbacks are tasks on [scope]. Under `runTest` with `backgroundScope`, drive them with
  * `runCurrent()` or `advanceTimeBy(…)`: `advanceUntilIdle()` stops once no foreground task is
@@ -43,6 +48,21 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
          * descriptor or a `0x50` frame (`docs/PROTOCOL.md` §4).
          */
         val statusQueryReply: ByteArray? = null,
+        /**
+         * The notification the ring sends for each `07 00 00` written after it accepted the auth
+         * reply on the current connection, or none. A real ring answers it with a `0x87`
+         * descriptor (`docs/PROTOCOL.md` §4, §5.4).
+         */
+        val fetchReply: ByteArray? = null,
+        /**
+         * The frame the ring sends on its own telemetry timer, [ownTimerAfterMillis] after it
+         * accepted the auth reply on the current connection (whatever was written meanwhile), or
+         * none. A real Gen 2 on FR02.022 does not answer `d0 00 00` after the auth reply; its
+         * first frame is its own `0x10`, about 40 s or 110 s later (`docs/PROTOCOL.md` §5.8).
+         */
+        val ownTimerFrame: ByteArray? = null,
+        /** When [ownTimerFrame] comes, in milliseconds after the auth reply was accepted. */
+        val ownTimerAfterMillis: Long = 40_000,
         /** The ATT MTU the exchange settles on. */
         val mtuGrant: Int = 247,
         /** The phone's bond state with the ring. */
@@ -302,14 +322,28 @@ class FakeGatt(private val scope: CoroutineScope, private val script: Script) : 
     private fun ringAnswers(written: ByteArray) {
         val status0 = byteArrayOf(0x01, 0x00, 0x00)
         val statusQuery = byteArrayOf(0xD0.toByte(), 0x00, 0x00)
+        val fetch = byteArrayOf(0x07, 0x00, 0x00)
         val accepted = script.acceptedAuthReply
         when {
             written.contentEquals(status0) -> if (answersAuthStart) script.challengeFrame?.let(::notify)
             accepted != null && written.contentEquals(accepted) -> {
+                val firstAccept = !authAccepted
                 authAccepted = true
                 script.firstFrameAfterAuth?.let(::notify)
+                if (firstAccept) script.ownTimerFrame?.let(::notifyOnOwnTimer)
             }
             written.contentEquals(statusQuery) && authAccepted -> script.statusQueryReply?.let(::notify)
+            written.contentEquals(fetch) && authAccepted -> script.fetchReply?.let(::notify)
+        }
+    }
+
+    /** Sends [frame] [Script.ownTimerAfterMillis] from now, if the same connection is still up then. */
+    private fun notifyOnOwnTimer(frame: ByteArray) {
+        val forGeneration = generation
+        val session = current
+        scope.launch {
+            delay(script.ownTimerAfterMillis)
+            if (forGeneration == generation && session === current) notify(frame)
         }
     }
 

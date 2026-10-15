@@ -58,4 +58,7 @@ internal enum class LinkTimer {
 
     /** The wait, after a re-auth's `01 00 00`, for the ring's challenge. */
     REAUTH,
+
+    /** The wait, after the bring-up's `d0 00 00` is written, for a data frame before `07 00 00` asks again. */
+    FETCH,
 }

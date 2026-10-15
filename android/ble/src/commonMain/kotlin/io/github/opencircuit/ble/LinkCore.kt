@@ -35,7 +35,8 @@ import kotlin.time.TimeSource
  * Cold bring-up: connect → discover → the bond (PORTING.md D-193) → MTU exchange → notifications
  * enabled (the CCCD write CONFIRMED) → Device Information reads → `01 00 00` → answer
  * `81 00 <challenge>` with `RingAuth.authCommand` → `d0 00 00`, once, to ask for a data frame
- * (PORTING.md D-257) → the first frame other than `0x81` means the ring's data path is open.
+ * (PORTING.md D-257) → `07 00 00`, once, if no data frame came 2 s after that `d0` (D-257) →
+ * the first frame other than `0x81` means the ring's data path is open.
  * Auth starts only after the descriptor write is confirmed (PORTING.md D-183); every GATT
  * operation waits for the previous one's answer (PORTING.md D-184), for at most its own timeout
  * (PORTING.md D-185).
@@ -139,6 +140,9 @@ internal class LinkCore(
 
     /** `d0 00 00` has been queued after an auth reply on this connection (PORTING.md D-257). */
     private var streamRequested = false
+
+    /** `07 00 00` has been queued on this connection because nothing answered the `d0 00 00` (PORTING.md D-257). */
+    private var fetchRequested = false
 
     /** This connection's service discovery was answered. */
     private var discoveryDone = false
@@ -334,6 +338,7 @@ internal class LinkCore(
         awaitingBond = false
         authStarted = false
         streamRequested = false
+        fetchRequested = false
         discoveryDone = false
         pastEarlyWindow = false
         discovered = emptySet()
@@ -543,7 +548,13 @@ internal class LinkCore(
                 queue.add(GattOp.Write(Command.status0, Purpose.AUTH_START))
             }
             is GattOp.Read -> applyDeviceInformation(op.characteristic, (event as GattEvent.CharacteristicRead).value)
-            is GattOp.Write -> op.reply?.complete(SendResult.Sent)
+            is GattOp.Write -> {
+                // The status query is out: a ring that answers it does so at once; give it a moment.
+                if (op.purpose == Purpose.STREAM_REQUEST && stateFlow.value != LinkState.Authenticated) {
+                    startTimer(LinkTimer.FETCH, FETCH_AFTER_SILENT_QUERY)
+                }
+                op.reply?.complete(SendResult.Sent)
+            }
         }
     }
 
@@ -665,6 +676,7 @@ internal class LinkCore(
      */
     private fun onDataFrame() {
         cancelTimer(LinkTimer.NOT_STREAMING)
+        cancelTimer(LinkTimer.FETCH)
         val next = when (stateFlow.value) {
             LinkState.Authenticating -> LinkState.Authenticated
             LinkState.NotStreaming -> if (authStarted) LinkState.Authenticated else LinkState.Preparing
@@ -685,6 +697,10 @@ internal class LinkCore(
      * ~72 s of "not streaming". Upstream writes a keepalive tick 250 ms after `01 00 00` instead
      * (RingSession.swift:1220-1256); the app may not write before the link is authenticated, so
      * the link asks itself (PORTING.md D-257).
+     *
+     * A Gen 2 on FR02.022 does not answer that `d0 00 00`: when no data frame has come
+     * [FETCH_AFTER_SILENT_QUERY] after it was written, the link writes `07 00 00` once (upstream's
+     * daytime keepalive tick), which the ring answers with a `0x87` descriptor ([onTimer]).
      */
     private fun answerChallenge(challenge: Int) {
         if (!macSettled) {
@@ -764,6 +780,12 @@ internal class LinkCore(
             }
             // No challenge: the re-auth failed, the connection stays (it was working before).
             LinkTimer.REAUTH -> finishReauth(SendResult.Failed(SendFailure.TIMED_OUT))
+            // Nothing answered the d0: ask once with 07 00 00, before the app may write anything,
+            // so no drain or measure can be running (PORTING.md D-257, D-266).
+            LinkTimer.FETCH -> if (session != null && stateFlow.value != LinkState.Authenticated && !fetchRequested) {
+                fetchRequested = true
+                queue.add(GattOp.Write(Command.fetch, Purpose.FETCH_REQUEST))
+            }
         }
     }
 
@@ -827,6 +849,7 @@ internal class LinkCore(
         cancelTimer(LinkTimer.BOND)
         cancelTimer(LinkTimer.NOT_STREAMING)
         cancelTimer(LinkTimer.EARLY_DROP)
+        cancelTimer(LinkTimer.FETCH)
         closePort()
         session = null
         finishReauth(SendResult.Failed(SendFailure.LINK_LOST))
@@ -903,6 +926,14 @@ internal class LinkCore(
          * `NotStreaming` (upstream `firstFrameTimeout`, RingSession.swift:264).
          */
         val NOT_STREAMING_AFTER: Duration = Duration.ofSeconds(10)
+
+        /**
+         * How long after the bring-up's `d0 00 00` is written the link waits for a data frame
+         * before it writes `07 00 00` once (PORTING.md D-257). A ring that answers `d0` does so
+         * within a few hundred milliseconds; FR02.022 never answered it, and its own first frame
+         * came 38.8 s after connecting.
+         */
+        val FETCH_AFTER_SILENT_QUERY: Duration = Duration.ofSeconds(2)
 
         /** A connection that drops this soon after connecting (or before discovery) dropped early. */
         val EARLY_DROP_WINDOW: Duration = Duration.ofSeconds(2)
@@ -1017,6 +1048,7 @@ private val GattOp.stepName: String
             Purpose.REAUTH_START -> "re-auth"
             Purpose.AUTH_REPLY -> "auth reply"
             Purpose.STREAM_REQUEST -> "data request"
+            Purpose.FETCH_REQUEST -> "fetch request"
             Purpose.ACK -> "ack"
             Purpose.FEATURE -> "write"
         }

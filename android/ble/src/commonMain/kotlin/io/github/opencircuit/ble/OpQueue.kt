@@ -67,6 +67,13 @@ internal sealed interface GattOp {
             /** `d0 00 00` after the first auth reply, asking for the data frame that authenticates the link (a bring-up step). */
             STREAM_REQUEST,
 
+            /**
+             * `07 00 00`, once, when no data frame answered the [STREAM_REQUEST] within
+             * `LinkCore.FETCH_AFTER_SILENT_QUERY`: the ring answers it with a `0x87` descriptor,
+             * which authenticates the link (a bring-up step; PORTING.md D-257).
+             */
+            FETCH_REQUEST,
+
             /** The acknowledgement of a page or heartbeat (link lane). */
             ACK,
 
