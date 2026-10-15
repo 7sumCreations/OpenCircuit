@@ -28,6 +28,8 @@ import kotlinx.coroutines.launch
  *   one is coming up changes nothing; [disconnect] while it comes up ends it (it never
  *   authenticates).
  *   [disconnect] tears the connection down (one user-disconnected teardown) and goes idle.
+ *   [reconnectOnItsOwn] is the real link's own reconnect after a drop: it comes up with no
+ *   `connect()` from the app (an automatic link-up nobody tapped for).
  * - Every `d0 00 00` the app writes is answered with [statusReply] after [statusReplyMillis]
  *   (a descriptor by default; a `0x50` frame models the ring's other answer, PROTOCOL.md §4).
  * - A sync open `02 00 <cursor> <channel> 01 00` followed by `07 00 00` makes the ring answer
@@ -209,6 +211,29 @@ internal class RingFake(
         record("disconnect")
         fake.disconnect()
         tearDown(TeardownReason.USER_DISCONNECTED)
+    }
+
+    /**
+     * The link comes back on its own, with no `connect()` from the app — as the real link does
+     * after a drop (it keeps the remembered ring and reconnects when it is in range again):
+     * connecting, then authenticated [connectMillis] later. Nothing happens unless the link is idle.
+     */
+    fun reconnectOnItsOwn() {
+        if (fake.state.value != LinkState.Idle) return
+        record("reconnecting on its own")
+        fake.setState(LinkState.Connecting)
+        val attempt = synchronized(this) { ++connectAttempt }
+        scope.launch {
+            delay(connectMillis)
+            if (fake.state.value == LinkState.Connecting && attempt == connectAttempt) {
+                fake.setState(LinkState.Authenticated)
+                record("authenticated")
+                postAuthReply?.let { reply ->
+                    delay(postAuthReplyMillis)
+                    if (fake.state.value == LinkState.Authenticated) emit(reply, "status reply")
+                }
+            }
+        }
     }
 
     /** The connection drops (out of range, Bluetooth off): any page waiting stays on the ring. */

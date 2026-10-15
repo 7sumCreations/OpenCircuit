@@ -68,9 +68,11 @@ data class AutoSyncSkip(
  *   left unfinished by a pause, or one that ended NOT_CONNECTED while this link was still coming
  *   up, is never throttled — or the night is quiet. Until the first complete
  *   sync ever, the night's quiet does not hold it back. A link-up held back by the night is owed:
- *   it runs once the quiet ends while the link is still up (the catch-up). A link-up the throttle
- *   holds back with "Disconnect after syncing" ON closes the link ([disconnect]): that mode never
- *   holds an idle link.
+ *   it runs once the quiet ends while the link is still up (the catch-up). An AUTOMATIC link-up
+ *   (the remembered ring's reconnect at launch, the link's own reconnect after a drop) the
+ *   throttle holds back with "Disconnect after syncing" ON closes the link ([disconnect]): that
+ *   mode holds no idle link it did not need. A link-up the user asked for ([takeUserLinkUp]:
+ *   Scan & connect, Try again, Sync now) is never closed here, nor is one a measure is running on.
  * - **Every skip says why.** Each automatic sync that does not run — throttled, night quiet, a
  *   sync already running, a measure running — is kept in [skips] with the trigger it held back,
  *   for Connection details (logcat is out of reach on the phone). A skip that repeats on every
@@ -96,8 +98,13 @@ class SyncTriggers(
     private val disconnectAfterSync: () -> Boolean,
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
-    /** Closes the link (`RingLink.disconnect`): a throttled link-up in the sync-and-disconnect mode. */
+    /** Closes the link (`RingLink.disconnect`): a throttled automatic link-up in the sync-and-disconnect mode. */
     private val disconnect: () -> Unit,
+    /**
+     * Whether the link-up happening now is one the user asked for (Scan & connect, Try again,
+     * Sync now), taking the mark (`RingSessionController.takeUserLinkUp`). Read once per link-up.
+     */
+    private val takeUserLinkUp: () -> Boolean,
 ) {
     /** A link-up sync held back by the night, owed once the quiet ends. Touched only by the loop. */
     private var catchUpOwed = false
@@ -174,6 +181,8 @@ class SyncTriggers(
     }
 
     private suspend fun onLinkUp() {
+        // Taken first, on every path: the mark belongs to this link-up and no later one.
+        val byUser = takeUserLinkUp()
         val now = wallClock()
         busyReason()?.let { reason ->
             skipped(now, AutoSyncTrigger.LINK_UP, reason)
@@ -187,9 +196,16 @@ class SyncTriggers(
         // Unfinished: paused, or ended NOT_CONNECTED on a link that was left to come up — this link-up is its sync.
         val unfinished = sync.state.value.last?.let { it.paused || it.outcome == SyncOutcome.NOT_CONNECTED } == true
         if (!unfinished && Duration.between(lastComplete, now) < THROTTLE) {
-            // The sync-and-disconnect mode never holds an idle link.
-            val close = disconnectAfterSync()
-            log("sync-trigger: link-up within ${THROTTLE.seconds} s of the last complete sync; not syncing" + if (close) ", disconnecting" else "")
+            // The sync-and-disconnect mode holds no idle link it brought up itself; a link the user
+            // asked for is theirs (a measure may be about to start on it), and a running measure
+            // was already a skip above.
+            val close = disconnectAfterSync() && !byUser && !isMeasuring.value
+            val why = when {
+                close -> ", disconnecting"
+                byUser && disconnectAfterSync() -> ", the user asked for this link: kept"
+                else -> ""
+            }
+            log("sync-trigger: link-up within ${THROTTLE.seconds} s of the last complete sync; not syncing$why")
             skipped(now, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = close)
             if (close) disconnect()
             return

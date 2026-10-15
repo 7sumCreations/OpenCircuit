@@ -115,6 +115,7 @@ class RingSessionController(
             scope = scope,
             log = log,
             disconnect = link::disconnect,
+            takeUserLinkUp = ::takeUserLinkUp,
         )
     }
 
@@ -144,6 +145,9 @@ class RingSessionController(
     val teardowns: StateFlow<SessionTeardowns> = teardownsFlow.asStateFlow()
 
     private val started = AtomicBoolean(false)
+
+    /** The next link-up is one the user asked for ([connect]); taken at that link-up ([takeUserLinkUp]). */
+    private val userLinkUp = AtomicBoolean(false)
 
     init {
         // Descriptors and 0x50 frames also answer a status query (PROTOCOL.md §4).
@@ -191,8 +195,34 @@ class RingSessionController(
         }
     }
 
-    /** Starts collecting if not yet started, then asks the link to connect. */
+    /**
+     * The user asked for the link (Scan & connect, Try again, Sync now): starts collecting if not
+     * yet started, then asks the link to connect. The link-up this brings is marked as the user's
+     * ([takeUserLinkUp]), so the automatic syncs never close it on the throttle.
+     */
     fun connect() {
+        // An authenticated link brings no new link-up: nothing to mark.
+        if (link.state.value != LinkState.Authenticated) userLinkUp.set(true)
+        connectLink()
+    }
+
+    /**
+     * The remembered ring's automatic reconnect (the screen opening at launch): as [connect], but
+     * the link-up is nobody's request, so it drops any earlier user mark.
+     */
+    fun reconnect() {
+        userLinkUp.set(false)
+        connectLink()
+    }
+
+    /**
+     * Whether the link-up happening now is one the user asked for; the mark is taken, so a later
+     * link-up the link makes on its own (after a drop) is automatic again. Read by the automatic
+     * syncs at each link-up.
+     */
+    fun takeUserLinkUp(): Boolean = userLinkUp.getAndSet(false)
+
+    private fun connectLink() {
         start()
         timer.onConnect()
         link.connect()

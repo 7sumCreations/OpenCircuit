@@ -81,7 +81,8 @@ class AutoSyncThrottleTest {
             assertEquals(first.finishedAt, PrefsSyncMarks(kv, TEST_RING_ID).lastCompleteSync, "the complete sync's finish is kept")
             assertEquals(LinkState.Idle, w.session.state.value, "the switch is on: disconnected after the sync")
 
-            w.session.connect()
+            // An automatic link-up (the remembered ring's reconnect, as at launch); a user's connect is kept (UserLinkUpKeptTest).
+            w.session.reconnect()
             advanceTo(120_000)
             assertEquals(2, w.ring.events.count { it.what == "authenticated" }, "the link came up again")
             assertEquals(LinkState.Idle, w.session.state.value, "the switch is on: the throttled link-up closes the link")
