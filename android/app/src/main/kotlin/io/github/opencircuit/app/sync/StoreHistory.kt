@@ -87,7 +87,7 @@ class StoreHistory(
         for ((index, chunk) in plan.chunks.withIndex()) {
             if (index > 0 && !keepGoing()) {
                 // Stopped between transactions: what is left stays in the journal for the next commit.
-                return result.copy(chunksLeft = plan.chunks.size - index)
+                return result.copy(chunksLeft = plan.chunks.size - index, stoppedShort = true)
             }
             val stored = db.withWriteTransaction {
                 val merge = blobs.mergeEpochArchive(ringId, chunk.records, notAfter = now.plus(NOT_AFTER_ALLOWANCE), now = now)
@@ -109,7 +109,7 @@ class StoreHistory(
                 chunks = result.chunks + 1,
             )
         }
-        if (!keepGoing()) return result
+        if (!keepGoing()) return result.copy(stoppedShort = true)
 
         // Records of pages stored with no drain running, released now: the gate's adopted records
         // (the journal replaces upstream's unattributed-page buffer).

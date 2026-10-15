@@ -60,11 +60,15 @@ internal class RecordingStore(private val real: HistoryStore, private val note: 
     /** What each commit was told the sync's channels delivered, in order. */
     val evidence = CopyOnWriteArrayList<SyncEvidence>()
 
+    /** Runs in the sync, right after each commit returned (the user leaves while the link closes). */
+    var afterCommit: suspend () -> Unit = {}
+
     override suspend fun commit(now: Instant, drained: CommitPlanner.Drained, keepGoing: () -> Boolean, evidence: SyncEvidence): CommitResult {
         this.drained += drained
         this.evidence += evidence
         val result = real.commit(now, drained, keepGoing, evidence)
         note("commit returned")
+        afterCommit()
         return result
     }
 

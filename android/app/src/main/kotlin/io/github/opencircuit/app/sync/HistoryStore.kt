@@ -110,6 +110,11 @@ data class CommitResult(
     val chunks: Int = 0,
     /** Transactions it did not start because it was told to stop; their pages stay stored. */
     val chunksLeft: Int = 0,
+    /**
+     * It was told to stop and left work undone: a transaction ([chunksLeft]) or the staging. False
+     * when it ran in full, however long it took.
+     */
+    val stoppedShort: Boolean = false,
     /** The staging gate's decision; null when the commit stopped before staging. */
     val staging: HistoryCommitGate.Decision? = null,
     /** Complete nights staged and handed to the store (whatever the store kept). */

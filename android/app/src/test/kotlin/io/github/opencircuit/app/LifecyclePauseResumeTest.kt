@@ -1,5 +1,6 @@
 package io.github.opencircuit.app
 
+import io.github.opencircuit.app.data.PrefsSyncMarks
 import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.ble.LinkState
@@ -243,6 +244,125 @@ class LifecyclePauseResumeTest {
             advanceTo(120_000)
             assertEquals(24, heartRateCount(w))
             assertEquals(emptyList(), w.journal.read(TEST_RING_ID).entries)
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun leavingAfterACompleteSyncCommittedWhileTheLinkClosesLeavesItCompleteAndStartsNoSecondSync() = runTest {
+        val kv = InMemoryKeyValues()
+        // The automatic syncs as the app builds them: the link comes up at 500 ms and syncs by itself.
+        val w = syncWorld(triggers = true, keyValues = kv, wallStart = Instant.parse("2026-10-08T14:00:00Z"), makeRing = ringWith(pages))
+        try {
+            var left = false
+            // Home pressed once the commit has returned: during the ACK-idle wait and the teardown wait.
+            w.store.afterCommit = { if (!left) { left = true; w.session.sync.onAppStopped(changingConfigurations = false) } }
+            advanceTo(60_000)
+
+            val report = w.session.sync.state.value.last!!
+            assertTrue(left, "the user left after the commit")
+            assertEquals(SyncOutcome.COMPLETE, report.outcome)
+            assertFalse(report.paused, "nothing was cut short: the sync is finished")
+            assertEquals(report.finishedAt, PrefsSyncMarks(kv, TEST_RING_ID).lastCompleteSync, "the complete sync's finish is kept")
+            assertTrue(w.viewModel.uiState.value.ringData.headline.startsWith("Last synced"))
+            val opens = w.sleepOpens()
+            assertEquals(1, opens.size)
+
+            w.session.sync.onAppStarted() // the user comes back
+            runCurrent()
+            assertFalse(w.session.sync.state.value.syncing, "nothing unfinished: no second sync")
+            advanceTo(120_000)
+            assertEquals(opens, w.sleepOpens(), "no second sync")
+            assertEquals(1, w.ring.events.count { it.what == "commit returned" })
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aPauseDuringACommitThatStillFinishesInFullLeavesTheSyncComplete() = runTest {
+        lateinit var w: SyncWorld
+        w = world(insideChunk = { index ->
+            if (index == 0) w.session.sync.pause() // the user leaves while the one transaction runs
+            delay(500)
+        })
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            advanceTo(60_000)
+
+            val report = w.session.sync.state.value.last!!
+            assertEquals(SyncOutcome.COMPLETE, report.outcome)
+            assertEquals(0, report.commit!!.chunksLeft)
+            assertTrue(report.commit!!.staging != null, "the commit got to the staging")
+            assertFalse(report.paused, "the pause cut nothing short")
+            assertEquals(24, heartRateCount(w))
+
+            w.session.sync.resume()
+            runCurrent()
+            assertFalse(w.session.sync.state.value.syncing, "nothing to resume")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aPauseThatStopsTheCommitBeforeItsStagingIsPausedAndResumeFinishesIt() = runTest {
+        lateinit var w: SyncWorld
+        w = world(insideChunk = { index ->
+            if (index == 0) {
+                w.session.sync.pause()
+                delay(6_000) // the one transaction outlasts the 5 s: the staging is not started
+            }
+        })
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            advanceTo(60_000)
+
+            val report = w.session.sync.state.value.last!!
+            assertEquals(0, report.commit!!.chunksLeft, "every transaction ran")
+            assertEquals(null, report.commit!!.staging, "the staging did not")
+            assertTrue(report.paused, "the pause cut the commit short")
+            assertEquals("Sync paused — open OpenCircuit to finish", w.viewModel.uiState.value.ringData.headline)
+
+            w.session.sync.resume()
+            runCurrent()
+            assertTrue(w.session.sync.state.value.syncing, "coming back resumes")
+            advanceTo(120_000)
+            val done = w.session.sync.state.value.last!!
+            assertFalse(done.paused)
+            assertTrue(done.commit!!.staging != null)
+            assertEquals(24, heartRateCount(w))
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aPauseWhileTheRingIsStillConnectingIsPausedAndAsksNothingOfIt() = runTest {
+        val w = syncWorld { scope, now ->
+            RingFake(scope, now, mapOf(Command.SYNC_CHANNEL_SLEEP to pages, Command.SYNC_CHANNEL_ALL_DAY to emptyList()), connectMillis = 10_000)
+        }
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            advanceTo(3_000) // still connecting
+            w.session.sync.onAppStopped(changingConfigurations = false)
+            advanceTo(8_000)
+
+            val report = w.session.sync.state.value.last!!
+            assertFalse(w.session.sync.state.value.syncing)
+            assertTrue(report.paused, "the pause ended the connect wait")
+            assertEquals(emptyList(), opensAndFetches(w), "nothing was asked of the ring")
+
+            w.session.sync.onAppStarted()
+            runCurrent()
+            assertTrue(w.session.sync.state.value.syncing, "coming back resumes")
+            advanceTo(120_000)
+            assertEquals(SyncOutcome.COMPLETE, w.session.sync.state.value.last!!.outcome)
+            assertEquals(24, heartRateCount(w))
         } finally {
             w.db.close()
         }

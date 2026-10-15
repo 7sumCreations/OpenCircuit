@@ -137,7 +137,10 @@ data class SyncReport(
     val undeliveredFrames: Int = 0,
     /** What went wrong beside the outcome; empty when nothing did. */
     val faults: Set<SyncFault> = emptySet(),
-    /** The app was left during the sync and paused it ([HistoryDrainController.pause]): it is unfinished, and coming back resumes it. */
+    /**
+     * Leaving the app paused the sync and cut it short ([HistoryDrainController.pause]) — the connect
+     * wait, the drain or the commit: it is unfinished, and coming back resumes it.
+     */
     val paused: Boolean = false,
     /** When the sync started. */
     val startedAt: Instant = finishedAt,
@@ -315,8 +318,9 @@ class HistoryDrainController(
      * The user left the app during the sync (PORTING.md D-268; [SyncLifecycle] decides): the
      * running sync opens, nudges and reopens nothing more, commits what is stored — starting no
      * commit transaction 5 s after now — and, with the switch on, disconnects once the ACK lane is
-     * idle. Its report is [SyncReport.paused], and [resume] finishes it. Does nothing when no sync
-     * runs.
+     * idle. When that cut the sync short its report is [SyncReport.paused], and [resume] finishes it;
+     * a pause after the drain and the commit are done (while the link closes) leaves the report as
+     * it was. Does nothing when no sync runs.
      */
     fun pause() {
         if (!syncingFlow.value || pauseRequested.value) return
@@ -366,7 +370,10 @@ class HistoryDrainController(
                 combine(link.state, pauseRequested) { state, paused -> state == LinkState.Authenticated || paused }.first { it }
             }
             if (up == null) return commitAndReport(SyncOutcome.NOT_CONNECTED, emptyList(), plan, teardowns, linkWasUp = false, startedAt = startedAt)
-            if (link.state.value != LinkState.Authenticated) return commitAndReport(SyncOutcome.PARTIAL, emptyList(), plan, teardowns, linkWasUp = false, startedAt = startedAt)
+            // Not authenticated, so the pause ended the wait: it cut the sync short.
+            if (link.state.value != LinkState.Authenticated) {
+                return commitAndReport(SyncOutcome.PARTIAL, emptyList(), plan, teardowns, linkWasUp = false, startedAt = startedAt, pauseStoppedDrain = true)
+            }
         }
         awaitStatusQuiet()
         val run = SyncRun(deadline = monotonicMillis() + AndroidDrainTiming.WHOLE_SYNC.toMillis(), window = nightWindow())
@@ -405,7 +412,7 @@ class HistoryDrainController(
         val evidence = SyncEvidence(sleep?.verdict, sleep?.records ?: 0, run.nightOnOtherChannels.size)
         return commitAndReport(
             run.outcome(plan.size), run.reports, plan, teardowns, linkWasUp = true, evidence = evidence,
-            startedAt = startedAt, counters = run.counters.toSet(),
+            startedAt = startedAt, counters = run.counters.toSet(), pauseStoppedDrain = run.paused,
         )
     }
 
@@ -647,6 +654,11 @@ class HistoryDrainController(
      * offered again). The report carries the teardowns of the sync's connection: the one its own
      * disconnect causes, or the drop the drain saw, each waited for at most 2 s ([linkWasUp]: the
      * link was authenticated during the sync, so a teardown is due when it is not any more).
+     *
+     * The report is [SyncReport.paused] only when the pause cut the sync short: it ended the connect
+     * wait or stopped the drain ([pauseStoppedDrain]), or stopped the commit
+     * ([CommitResult.stoppedShort]). A pause that comes once all of that is done — while the ACK lane
+     * drains or the link closes — leaves a finished sync finished.
      */
     private suspend fun commitAndReport(
         outcome: SyncOutcome,
@@ -657,6 +669,7 @@ class HistoryDrainController(
         evidence: SyncEvidence = SyncEvidence.NONE,
         startedAt: Instant,
         counters: Set<Long> = emptySet(),
+        pauseStoppedDrain: Boolean = false,
     ): SyncReport {
         // A paused sync's commit starts no transaction 5 s after the pause, inside Android's
         // 10 s cached-app freeze delay; what is left stays stored for the resumed sync.
@@ -669,6 +682,8 @@ class HistoryDrainController(
             log("The sync's commit failed: ${e::class.java.simpleName}; the pages stay on the phone for the next sync")
             null
         }
+        // Decided here, before the tail below: a pause during the ACK-idle or teardown wait cuts nothing short.
+        val paused = pauseStoppedDrain || commit?.stoppedShort == true
         commit?.staging?.let { decision ->
             log(
                 "history-commit staging=${decision.rawValue} nights=${commit.nightsStaged} waiting=${commit.nightsWaiting}" +
@@ -698,7 +713,7 @@ class HistoryDrainController(
             pagesUnacknowledged = unacknowledged,
             undeliveredFrames = undelivered,
             faults = if (undelivered > 0) setOf(SyncFault.UNDELIVERED_FRAMES) else emptySet(),
-            paused = pauseRequested.value,
+            paused = paused,
             startedAt = startedAt,
             planned = plan.map { it.label },
             counters = counters,
