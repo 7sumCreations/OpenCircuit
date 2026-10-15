@@ -59,6 +59,9 @@ class QuietWindowTest {
     fun linkUpAtTwoWithACompleteSyncAndALearnedWindowDoesNotDrainUntilTheWearerWalksPastTheLearnedWake() = runTest {
         val w = night(completeSyncBefore = true, learned = true)
         try {
+            // Only a held link hears the walk: with the switch on the night closes an automatic
+            // link-up (PORTING.md D-275, NightQuietDisconnectTest), so this runs with it off.
+            w.prefs.setDisconnectAfterSync(false)
             advanceTo(local(6, 30))
             assertEquals(LinkState.Authenticated, w.session.state.value, "the link is held all night")
             assertEquals(emptyList(), w.sleepOpens(), "no drain inside the window")
@@ -72,8 +75,9 @@ class QuietWindowTest {
             advanceTo(local(7, 30) + 3_000)
             assertEquals(1, w.sleepOpens().size, "the walk at 07:30 ends the quiet: one catch-up drain")
             assertTrue(w.sleepOpens().single() >= local(7, 30), "${w.sleepOpens()}")
-            advanceTo(local(9))
-            assertEquals(1, w.sleepOpens().size, "exactly one")
+            // With the switch off the hourly cadence follows an hour after the catch-up: one until then.
+            advanceTo(local(8, 30))
+            assertEquals(1, w.sleepOpens().size, "exactly one catch-up")
         } finally {
             w.db.close()
         }
@@ -102,7 +106,9 @@ class QuietWindowTest {
             assertEquals(emptyList(), w.sleepOpens())
             w.viewModel.onAction(RingAction.SyncNow)
             advanceTo(2_000)
-            assertEquals(listOf(1_000L), w.sleepOpens())
+            // The switch is on, so the night closed the automatic link-up at 500 (PORTING.md D-275):
+            // Sync now connects first (the fake authenticates 500 ms later) and opens at once.
+            assertEquals(listOf(1_500L), w.sleepOpens())
         } finally {
             w.db.close()
         }

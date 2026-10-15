@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -71,8 +72,12 @@ data class AutoSyncSkip(
  *   it runs once the quiet ends while the link is still up (the catch-up). An AUTOMATIC link-up
  *   (the remembered ring's reconnect at launch, the link's own reconnect after a drop) the
  *   throttle holds back with "Disconnect after syncing" ON closes the link ([disconnect]): that
- *   mode holds no idle link it did not need. A link-up the user asked for ([takeUserLinkUp]:
- *   Scan & connect, Try again, Sync now) is never closed here, nor is one a measure is running on.
+ *   mode holds no idle link it did not need. The same for an automatic link-up the night holds
+ *   back with the switch ON (PORTING.md D-275): the link closes at once and the catch-up stays
+ *   owed — when the quiet ends it starts a sync that connects the ring itself, while the app's
+ *   process is alive (no foreground service yet). With the switch OFF the link is held and the
+ *   catch-up runs on it. A link-up the user asked for ([takeUserLinkUp]: Scan & connect, Try
+ *   again, Sync now) is never closed here, nor is one a measure is running on.
  * - **Every skip says why.** Each automatic sync that does not run — throttled, night quiet, a
  *   sync already running, a measure running — is kept in [skips] with the trigger it held back,
  *   for Connection details (logcat is out of reach on the phone). A skip that repeats on every
@@ -106,7 +111,8 @@ class SyncTriggers(
      */
     private val takeUserLinkUp: () -> Boolean,
 ) {
-    /** A link-up sync held back by the night, owed once the quiet ends. Touched only by the loop. */
+    /** A link-up sync held back by the night, owed once the quiet ends. Touched only by the link's one collection (one block at a time). */
+    @Volatile
     private var catchUpOwed = false
 
     /** When a descriptor last confirmed the wearer was up. */
@@ -141,9 +147,14 @@ class SyncTriggers(
             }
         }
         scope.launch {
+            // collectLatest joins the cancelled block before the next starts: the blocks never overlap.
             linkState.collectLatest { state ->
-                if (state != LinkState.Authenticated) return@collectLatest
-                onLinkUp()
+                if (state != LinkState.Authenticated) {
+                    catchUpOffLink()
+                    return@collectLatest
+                }
+                // The link-up closed the link: nothing to evaluate on it.
+                if (!onLinkUp()) return@collectLatest
                 while (true) {
                     val wait = evaluateHeld()
                     // A descriptor confirming the wake cuts the wait short.
@@ -180,18 +191,20 @@ class SyncTriggers(
         return NightWindow.resolve(nights, wallClock(), sources.zone()).also { lastWindow.set(it) }
     }
 
-    private suspend fun onLinkUp() {
+    /** One link-up; returns false when it closed the link (the sync-and-disconnect mode holds no idle link). */
+    private suspend fun onLinkUp(): Boolean {
         // Taken first, on every path: the mark belongs to this link-up and no later one.
         val byUser = takeUserLinkUp()
         val now = wallClock()
         busyReason()?.let { reason ->
-            skipped(now, AutoSyncTrigger.LINK_UP, reason)
-            return
+            // The catch-up's own connect brings this link-up: the sync running is the one wanted.
+            if (!(reason == AutoSyncSkipReason.ALREADY_SYNCING && ownSync.get())) skipped(now, AutoSyncTrigger.LINK_UP, reason)
+            return true
         }
         val lastComplete = sources.marks.lastCompleteSync.notAfter(now)
         if (lastComplete == null) {
             start(AutoSyncTrigger.LINK_UP, "link-up, no complete sync yet")
-            return
+            return true
         }
         // Unfinished: paused, or ended NOT_CONNECTED on a link that was left to come up — this link-up is its sync.
         val unfinished = sync.state.value.last?.let { it.paused || it.outcome == SyncOutcome.NOT_CONNECTED } == true
@@ -208,16 +221,53 @@ class SyncTriggers(
             log("sync-trigger: link-up within ${THROTTLE.seconds} s of the last complete sync; not syncing$why")
             skipped(now, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = close)
             if (close) disconnect()
-            return
+            return !close
         }
         val window = nightWindow()
         if (window != null && window.isQuiet(now, wakeConfirmedAt.get())) {
+            // Owed before any close: the catch-up then connects on its own once the quiet ends (catchUpOffLink).
             catchUpOwed = true
-            log("sync-trigger: link-up inside the night; the sync waits for the night's end")
-            skipped(now, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.NIGHT_QUIET)
-            return
+            // The same rule as the throttle's (PORTING.md D-275): never the user's link, never a measure's.
+            val close = disconnectAfterSync() && !byUser && !isMeasuring.value
+            val why = if (close) "; disconnecting until then" else ""
+            log("sync-trigger: link-up inside the night; the sync waits for the night's end$why")
+            skipped(now, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.NIGHT_QUIET, disconnected = close)
+            if (close) disconnect()
+            return !close
         }
         start(AutoSyncTrigger.LINK_UP, if (unfinished) "link-up, unfinished sync" else "link-up")
+        return true
+    }
+
+    /**
+     * The link is not up and a catch-up is owed in the sync-and-disconnect mode (the night closed
+     * the link at its link-up): waits for the quiet to end — the learned ceiling or the window's
+     * end, as no descriptor can confirm the wake without a link — then starts the catch-up, whose
+     * sync connects the ring itself ([HistoryDrainController.syncNow]). Runs only while the app's
+     * process is alive: nothing wakes a stopped process for it (no foreground service yet), so a
+     * catch-up the process did not live to run is the next link-up's sync. Switch OFF: nothing here;
+     * the held link's own evaluation runs the catch-up.
+     */
+    private suspend fun catchUpOffLink() {
+        while (catchUpOwed && disconnectAfterSync()) {
+            val now = wallClock()
+            val busy = busyReason()
+            if (busy != null) {
+                if (!(busy == AutoSyncSkipReason.ALREADY_SYNCING && ownSync.get())) skipped(now, AutoSyncTrigger.CATCH_UP, busy)
+                delay(TICK_MILLIS)
+                continue
+            }
+            val window = nightWindow()
+            if (window != null && window.isQuiet(now, wakeConfirmedAt.get())) {
+                val wait = untilOrTick(now, if (window.learned) window.quietCeiling else window.window.end)
+                // Still quiet at its end (a clock stepped back): look again a tick on, never spin.
+                delay(if (wait == 0L) TICK_MILLIS else wait)
+                continue
+            }
+            catchUpOwed = false
+            start(AutoSyncTrigger.CATCH_UP, "catch-up after the night; connecting")
+            return
+        }
     }
 
     /**

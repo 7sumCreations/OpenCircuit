@@ -76,8 +76,9 @@ class AutoSyncSkipReasonTest {
         try {
             advanceTo(60_000)
             assertEquals(emptyList(), w.sleepOpens())
-            assertEquals(listOf(AutoSyncSkip(twoAm.plusMillis(500), AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.NIGHT_QUIET)), w.skips())
-            assertEquals("02:00:00 link-up: night quiet", w.skipRow(), "in the phone's zone")
+            // The switch is on: the automatic link-up held back by the night closes the link (PORTING.md D-275).
+            assertEquals(listOf(AutoSyncSkip(twoAm.plusMillis(500), AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.NIGHT_QUIET, disconnected = true)), w.skips())
+            assertEquals("02:00:00 link-up: night quiet, link closed", w.skipRow(), "in the phone's zone")
         } finally {
             w.db.close()
         }
