@@ -6,14 +6,57 @@ import io.github.opencircuit.ringkit.HistoryDrainCadence
 import io.github.opencircuit.ringkit.NightWindow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
+
+/** Which automatic sync a skip held back. */
+enum class AutoSyncTrigger {
+    /** The link became authenticated. */
+    LINK_UP,
+
+    /** The link-up held back by the night, owed once the quiet ends. */
+    CATCH_UP,
+
+    /** The 1 h cadence while the link is held. */
+    CADENCE,
+}
+
+/** Why an automatic sync did not run. */
+enum class AutoSyncSkipReason {
+    /** The last complete sync finished less than [SyncTriggers.THROTTLE] ago. */
+    THROTTLED,
+
+    /** The night is quiet ([NightWindow.isQuiet]). */
+    NIGHT_QUIET,
+
+    /** A sync was already running. */
+    ALREADY_SYNCING,
+
+    /** A live measure was running. */
+    MEASURING,
+}
+
+/**
+ * One automatic sync that did not run, kept so the phone can show why ([SyncTriggers.skips]):
+ * logcat is out of reach on the phone. [disconnected]: the skip closed the link, as the
+ * sync-and-disconnect mode holds no idle link.
+ */
+data class AutoSyncSkip(
+    val at: Instant,
+    val trigger: AutoSyncTrigger,
+    val reason: AutoSyncSkipReason,
+    val disconnected: Boolean = false,
+)
 
 /**
  * The syncs nobody taps for (PORTING.md D-272): upstream's link-ready auto-sync
@@ -25,7 +68,13 @@ import kotlin.coroutines.cancellation.CancellationException
  *   left unfinished by a pause, or one that ended NOT_CONNECTED while this link was still coming
  *   up, is never throttled — or the night is quiet. Until the first complete
  *   sync ever, the night's quiet does not hold it back. A link-up held back by the night is owed:
- *   it runs once the quiet ends while the link is still up (the catch-up).
+ *   it runs once the quiet ends while the link is still up (the catch-up). A link-up the throttle
+ *   holds back with "Disconnect after syncing" ON closes the link ([disconnect]): that mode never
+ *   holds an idle link.
+ * - **Every skip says why.** Each automatic sync that does not run — throttled, night quiet, a
+ *   sync already running, a measure running — is kept in [skips] with the trigger it held back,
+ *   for Connection details (logcat is out of reach on the phone). A skip that repeats on every
+ *   evaluation is kept once, at its latest time.
  * - **While the link is held.** With "Disconnect after syncing" OFF, a sync whenever
  *   [HistoryDrainCadence] is due (1 h after the last sync finished, by day) and the night is not
  *   quiet. After a night that is hours, so the first evaluation past the quiet drains once.
@@ -47,6 +96,8 @@ class SyncTriggers(
     private val disconnectAfterSync: () -> Boolean,
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
+    /** Closes the link (`RingLink.disconnect`): a throttled link-up in the sync-and-disconnect mode. */
+    private val disconnect: () -> Unit,
 ) {
     /** A link-up sync held back by the night, owed once the quiet ends. Touched only by the loop. */
     private var catchUpOwed = false
@@ -62,8 +113,17 @@ class SyncTriggers(
 
     private val pokes = Channel<Unit>(Channel.CONFLATED)
 
+    private val skipsFlow = MutableStateFlow<List<AutoSyncSkip>>(emptyList())
+
+    /** The running sync is one this class started; released whenever no sync runs, however it ended. */
+    private val ownSync = AtomicBoolean(false)
+
+    /** The automatic syncs that did not run this session, oldest first (the last [SKIPS_KEPT]). */
+    val skips: StateFlow<List<AutoSyncSkip>> = skipsFlow.asStateFlow()
+
     /** Starts following the link and the syncs. Called once, by the session's start. */
     fun start() {
+        scope.launch { sync.isSyncing.collect { syncing -> if (!syncing) ownSync.set(false) } }
         scope.launch {
             sync.state.collect { state ->
                 val report = state.last ?: return@collect
@@ -114,26 +174,34 @@ class SyncTriggers(
     }
 
     private suspend fun onLinkUp() {
-        if (sync.isSyncing.value || isMeasuring.value) return
         val now = wallClock()
+        busyReason()?.let { reason ->
+            skipped(now, AutoSyncTrigger.LINK_UP, reason)
+            return
+        }
         val lastComplete = sources.marks.lastCompleteSync.notAfter(now)
         if (lastComplete == null) {
-            start("link-up, no complete sync yet")
+            start(AutoSyncTrigger.LINK_UP, "link-up, no complete sync yet")
             return
         }
         // Unfinished: paused, or ended NOT_CONNECTED on a link that was left to come up — this link-up is its sync.
         val unfinished = sync.state.value.last?.let { it.paused || it.outcome == SyncOutcome.NOT_CONNECTED } == true
         if (!unfinished && Duration.between(lastComplete, now) < THROTTLE) {
-            log("sync-trigger: link-up within ${THROTTLE.seconds} s of the last complete sync; not syncing")
+            // The sync-and-disconnect mode never holds an idle link.
+            val close = disconnectAfterSync()
+            log("sync-trigger: link-up within ${THROTTLE.seconds} s of the last complete sync; not syncing" + if (close) ", disconnecting" else "")
+            skipped(now, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = close)
+            if (close) disconnect()
             return
         }
         val window = nightWindow()
         if (window != null && window.isQuiet(now, wakeConfirmedAt.get())) {
             catchUpOwed = true
             log("sync-trigger: link-up inside the night; the sync waits for the night's end")
+            skipped(now, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.NIGHT_QUIET)
             return
         }
-        start(if (unfinished) "link-up, unfinished sync" else "link-up")
+        start(AutoSyncTrigger.LINK_UP, if (unfinished) "link-up, unfinished sync" else "link-up")
     }
 
     /**
@@ -141,32 +209,78 @@ class SyncTriggers(
      * [TICK_MILLIS], exactly to the quiet's or the cadence's end when that comes sooner).
      */
     private suspend fun evaluateHeld(): Long {
-        if (sync.isSyncing.value || isMeasuring.value) return TICK_MILLIS
         val now = wallClock()
+        val busy = busyReason()
+        if (busy != null) {
+            val cadence = cadence(now)
+            // A sync this class started is the one the trigger wanted: no skip for it.
+            val heldBack = if (catchUpOwed) AutoSyncTrigger.CATCH_UP else AutoSyncTrigger.CADENCE.takeIf { cadence.due }
+            if (heldBack != null && !(busy == AutoSyncSkipReason.ALREADY_SYNCING && ownSync.get())) skipped(now, heldBack, busy)
+            // Evaluated again when the cadence falls due, so a skip is kept at the time it happened.
+            val next = cadence.last?.takeUnless { cadence.due }?.plus(HistoryDrainCadence.interval(isNight = false, batterySaver = false))
+            return next?.let { untilOrTick(now, it) } ?: TICK_MILLIS
+        }
         val window = nightWindow()
         if (window != null && window.isQuiet(now, wakeConfirmedAt.get())) {
+            // An owed catch-up was already reported at its link-up.
+            if (!catchUpOwed && cadence(now).due) skipped(now, AutoSyncTrigger.CADENCE, AutoSyncSkipReason.NIGHT_QUIET)
             val ends = if (window.learned) window.quietCeiling else window.window.end
             return untilOrTick(now, ends)
         }
         if (catchUpOwed) {
             catchUpOwed = false
-            start("catch-up after the night")
+            start(AutoSyncTrigger.CATCH_UP, "catch-up after the night")
             return TICK_MILLIS
         }
-        if (disconnectAfterSync()) return TICK_MILLIS
-        val last = listOfNotNull(lastSyncFinished.get().notAfter(now), sources.marks.lastCompleteSync.notAfter(now)).maxOrNull()
-        val due = HistoryDrainCadence.isDue(last, now, isNight = false, batterySaver = false)
-        if (HistoryDrainCadence.shouldDrain(manual = false, inSleepWindow = false, isDue = due)) {
-            start("periodic")
+        val cadence = cadence(now)
+        if (cadence.due) {
+            start(AutoSyncTrigger.CADENCE, "periodic")
             return TICK_MILLIS
         }
-        // Not due means a last sync exists (isDue is true without one).
-        val next = last?.plus(HistoryDrainCadence.interval(isNight = false, batterySaver = false)) ?: return TICK_MILLIS
+        // Not due means a last sync exists (isDue is true without one), or the switch is on.
+        val next = cadence.last?.plus(HistoryDrainCadence.interval(isNight = false, batterySaver = false)) ?: return TICK_MILLIS
         return untilOrTick(now, next)
     }
 
-    private fun start(reason: String) {
-        if (sync.syncNow()) log("sync-trigger: $reason")
+    /** Whether the held link's cadence sync is due at [now] (never with "Disconnect after syncing" on), and the last sync it counts from. */
+    private fun cadence(now: Instant): Cadence {
+        if (disconnectAfterSync()) return Cadence(due = false, last = null)
+        val last = listOfNotNull(lastSyncFinished.get().notAfter(now), sources.marks.lastCompleteSync.notAfter(now)).maxOrNull()
+        val due = HistoryDrainCadence.isDue(last, now, isNight = false, batterySaver = false)
+        return Cadence(HistoryDrainCadence.shouldDrain(manual = false, inSleepWindow = false, isDue = due), last)
+    }
+
+    private data class Cadence(val due: Boolean, val last: Instant?)
+
+    /** Why no automatic sync can start now, or null when one can. */
+    private fun busyReason(): AutoSyncSkipReason? = when {
+        sync.isSyncing.value -> AutoSyncSkipReason.ALREADY_SYNCING
+        isMeasuring.value -> AutoSyncSkipReason.MEASURING
+        else -> null
+    }
+
+    private fun start(trigger: AutoSyncTrigger, reason: String) {
+        if (sync.syncNow()) {
+            ownSync.set(true)
+            log("sync-trigger: $reason")
+        } else {
+            // The controller refused: a sync or a measure started since the check.
+            skipped(wallClock(), trigger, busyReason() ?: AutoSyncSkipReason.ALREADY_SYNCING)
+        }
+    }
+
+    /**
+     * Keeps one skip in [skips] (the last [SKIPS_KEPT]). The same trigger skipped for the same
+     * reason as the newest kept one replaces it, at the new time: a skip repeated on every
+     * evaluation cannot push the others out.
+     */
+    private fun skipped(at: Instant, trigger: AutoSyncTrigger, reason: AutoSyncSkipReason, disconnected: Boolean = false) {
+        val skip = AutoSyncSkip(at, trigger, reason, disconnected)
+        skipsFlow.update { kept ->
+            val newest = kept.lastOrNull()
+            val base = if (newest != null && newest.trigger == trigger && newest.reason == reason) kept.dropLast(1) else kept
+            (base + skip).takeLast(SKIPS_KEPT)
+        }
     }
 
     /**
@@ -184,5 +298,8 @@ class SyncTriggers(
 
         /** The longest wait between two evaluations while the link is held. */
         const val TICK_MILLIS: Long = 60_000L
+
+        /** How many skips [skips] keeps. */
+        const val SKIPS_KEPT: Int = 10
     }
 }

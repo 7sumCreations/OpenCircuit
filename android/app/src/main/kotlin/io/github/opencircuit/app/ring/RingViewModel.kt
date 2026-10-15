@@ -116,7 +116,7 @@ class RingViewModel(
                 } else {
                     null
                 },
-                details = ConnectionDetailsPresenter.present(detailsInput.copy(scanToSelectedMillis = flow.scanToSelectedMillis)),
+                details = ConnectionDetailsPresenter.present(detailsInput.copy(scanToSelectedMillis = flow.scanToSelectedMillis, zone = zone())),
                 ringData = RingDataPresenter.present(
                     RingDataInput(
                         sync = parts.sync,
@@ -143,6 +143,7 @@ class RingViewModel(
                     DetailsInput(ring = session.link.ring, info = info, timings = timings, counts = counts, teardowns = teardowns, diagnostics = lines)
                 }.combine(session.liveMeasure.state.map { it.evidence }.distinctUntilChanged()) { input, evidence -> input.copy(lastMeasure = evidence) }
                     .combine(session.syncRecords.entries) { input, log -> input.copy(syncLog = log) }
+                    .combine(session.triggers?.skips ?: flowOf(null)) { input, skips -> input.copy(autoSyncSkips = skips) }
             }
         }
         val scanKept = details.scanMatch != null

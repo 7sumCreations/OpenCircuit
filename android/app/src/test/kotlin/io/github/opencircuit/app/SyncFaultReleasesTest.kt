@@ -29,6 +29,8 @@ class SyncFaultReleasesTest {
         val zone: () -> ZoneId = { if (boom) throw IllegalStateException("zone") else ZoneOffset.UTC }
         val w = syncWorld(triggers = true, keyValues = kv, wallStart = wallStart, triggerZone = zone, makeRing = ringWith(HistoryTestPages.backlog(3)))
         try {
+            // Off: a throttled link-up with the switch on closes the link, and this test needs it held.
+            w.prefs.setDisconnectAfterSync(false)
             advanceTo(2_000)
             assertEquals(LinkState.Authenticated, w.session.state.value)
             assertEquals(emptyList(), w.sleepOpens())

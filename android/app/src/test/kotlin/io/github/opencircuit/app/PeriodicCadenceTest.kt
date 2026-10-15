@@ -1,6 +1,7 @@
 package io.github.opencircuit.app
 
 import io.github.opencircuit.app.data.PrefsSyncMarks
+import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.test.runTest
 import java.time.Duration
@@ -51,13 +52,14 @@ class PeriodicCadenceTest {
     fun switchOnAHeldLinkIsNeverDrainedOnTheCadence() = runTest {
         val w = syncWorld(triggers = true, wallStart = afternoon, makeRing = ringWith(HistoryTestPages.backlog(3)))
         try {
+            // Held after the link-up's sync with the switch off; then the user turns it on. (A link-up
+            // the throttle holds back with the switch on closes the link: AutoSyncSkipReasonTest.)
+            w.prefs.setDisconnectAfterSync(false)
             advanceTo(60_000)
             assertEquals(1, w.sleepOpens().size)
-            assertEquals(LinkState.Idle, w.session.state.value, "disconnected after the sync")
-            // The link comes back within the throttle and stays up (the user opened the app again).
-            w.session.connect()
+            assertEquals(LinkState.Authenticated, w.session.state.value, "held after the sync")
+            w.viewModel.onAction(RingAction.SetDisconnectAfterSync(true))
             advanceTo(3 * 3_600_000L)
-            assertEquals(LinkState.Authenticated, w.session.state.value)
             assertEquals(1, w.sleepOpens().size, "no periodic drain with the switch on")
         } finally {
             w.db.close()

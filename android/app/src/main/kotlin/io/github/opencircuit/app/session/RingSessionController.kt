@@ -114,6 +114,7 @@ class RingSessionController(
             disconnectAfterSync = history.disconnectAfterSync,
             scope = scope,
             log = log,
+            disconnect = link::disconnect,
         )
     }
 

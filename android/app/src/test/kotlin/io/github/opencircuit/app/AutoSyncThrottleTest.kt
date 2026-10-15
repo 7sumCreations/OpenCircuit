@@ -17,7 +17,8 @@ import kotlin.test.assertTrue
  * (upstream `maybeAutoSyncOnReady`, `ios/OpenCircuit/ContentView.swift:924-941` @ b1c2fdd). The
  * mark survives a relaunch; a partial sync does not set it; a paused (unfinished) sync is not
  * throttled. Daytime, so the night's quiet plays no part: the ring links up at virtual 500 ms,
- * 14:00:00.500 UTC.
+ * 14:00:00.500 UTC. "Disconnect after syncing" is on (the default), so a link-up the throttle holds
+ * back closes the link: that mode never holds an idle link.
  */
 class AutoSyncThrottleTest {
 
@@ -31,7 +32,8 @@ class AutoSyncThrottleTest {
         val w = syncWorld(triggers = true, keyValues = kv, wallStart = wallStart, makeRing = ringWith(HistoryTestPages.backlog(3)))
         try {
             advanceTo(120_000)
-            assertEquals(LinkState.Authenticated, w.session.state.value, "the link came up and stays")
+            assertTrue(w.ring.events.any { it.what == "authenticated" }, "the link came up")
+            assertEquals(LinkState.Idle, w.session.state.value, "the switch is on: the link-up the throttle held back closes the link")
             assertEquals(emptyList(), w.sleepOpens(), "no sync 299.999 s after the last complete one")
         } finally {
             w.db.close()
@@ -81,7 +83,8 @@ class AutoSyncThrottleTest {
 
             w.session.connect()
             advanceTo(120_000)
-            assertEquals(LinkState.Authenticated, w.session.state.value)
+            assertEquals(2, w.ring.events.count { it.what == "authenticated" }, "the link came up again")
+            assertEquals(LinkState.Idle, w.session.state.value, "the switch is on: the throttled link-up closes the link")
             assertEquals(1, w.sleepOpens().size, "the second link-up, about a minute later, does not sync")
         } finally {
             w.db.close()
@@ -127,7 +130,8 @@ class AutoSyncThrottleTest {
         try {
             val from = testScheduler.currentTime
             advanceTo(from + 60_000)
-            assertEquals(LinkState.Authenticated, relaunched.session.state.value)
+            assertTrue(relaunched.ring.events.any { it.what == "authenticated" }, "the relaunch's link came up")
+            assertEquals(LinkState.Idle, relaunched.session.state.value, "the switch is on: the throttled link-up closes the link")
             assertEquals(emptyList(), relaunched.sleepOpens(), "200 s after a complete sync: no sync on the relaunch")
         } finally {
             relaunched.db.close()
