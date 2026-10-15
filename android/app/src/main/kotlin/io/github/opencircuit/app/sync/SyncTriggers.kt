@@ -22,7 +22,8 @@ import kotlin.coroutines.cancellation.CancellationException
  *
  * - **Link-up.** Each time the link becomes authenticated: a sync, unless the last COMPLETE sync
  *   ([SyncTriggerSources.marks], kept across launches) finished less than [THROTTLE] ago — a sync
- *   left unfinished by a pause is never throttled — or the night is quiet. Until the first complete
+ *   left unfinished by a pause, or one that ended NOT_CONNECTED while this link was still coming
+ *   up, is never throttled — or the night is quiet. Until the first complete
  *   sync ever, the night's quiet does not hold it back. A link-up held back by the night is owed:
  *   it runs once the quiet ends while the link is still up (the catch-up).
  * - **While the link is held.** With "Disconnect after syncing" OFF, a sync whenever
@@ -120,7 +121,8 @@ class SyncTriggers(
             start("link-up, no complete sync yet")
             return
         }
-        val unfinished = sync.state.value.last?.paused == true
+        // Unfinished: paused, or ended NOT_CONNECTED on a link that was left to come up — this link-up is its sync.
+        val unfinished = sync.state.value.last?.let { it.paused || it.outcome == SyncOutcome.NOT_CONNECTED } == true
         if (!unfinished && Duration.between(lastComplete, now) < THROTTLE) {
             log("sync-trigger: link-up within ${THROTTLE.seconds} s of the last complete sync; not syncing")
             return

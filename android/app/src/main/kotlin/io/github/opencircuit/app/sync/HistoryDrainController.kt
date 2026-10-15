@@ -208,7 +208,9 @@ data class SyncState(
  *    not go out, a refused open or a lost link stops it at once. Whatever was stored is committed
  *    ([HistoryStore.commit]), whatever the outcome; each channel's verdict follows D-43
  *    ([HistoryChannelVerdict]) and each round is logged as a `history-drain` row (counts only).
- * 5. With [disconnectAfterSync] on, closes the link — only after the commit has returned.
+ * 5. With [disconnectAfterSync] on, closes the link — only after the commit has returned, and
+ *    never after a NOT_CONNECTED sync while the link is still coming up ([isComingUp]): that link
+ *    may authenticate yet, and its link-up syncs.
  *
  * One sync at a time, and none while a live measure runs ([isMeasuring]): [syncNow] then does
  * nothing. [isSyncing] is true from [syncNow] until the sync's report is published. Runs in
@@ -691,8 +693,12 @@ class HistoryDrainController(
             )
             if (commit.nightsWaiting > 0) log("${commit.nightsWaiting} nights waiting for the store's one-time update; they stay on the phone and are staged by a later sync")
         }
+        // A sync that never reached the ring leaves a link still coming up alone: it may authenticate
+        // yet, and the link-up then syncs (SyncTriggers). Disconnect after syncing is for a sync that ran.
+        val leaveComingUp = outcome == SyncOutcome.NOT_CONNECTED && isComingUp(link.state.value)
+        if (leaveComingUp && disconnectAfterSync()) log("history-drain: the ring is still coming up; the link is left to finish, and the link-up syncs")
         // Only after the commit returned: what the ring dropped is in the store by now.
-        if (commit != null && disconnectAfterSync()) {
+        if (commit != null && disconnectAfterSync() && !leaveComingUp) {
             val up = link.state.value == LinkState.Authenticated
             if (up && !pages.awaitIdle(ACK_IDLE_MILLIS)) log("history-drain: a page was still in flight after 2 s; disconnecting, the ring offers it again")
             val before = teardowns.value.size
@@ -831,8 +837,15 @@ class HistoryDrainController(
     }
 
     companion object {
-        /** How long a sync waits for the ring to connect before giving up. */
-        const val CONNECT_TIMEOUT_MILLIS = 30_000L
+        /**
+         * How long a sync waits for the link to be authenticated before giving up (NOT_CONNECTED).
+         * Longer than the ring's own telemetry timer (~40 s or ~110 s, `docs/PROTOCOL.md` §5.8): a
+         * link is authenticated only by the ring's first data frame, and a ring that answers no
+         * status query sends that frame on its own timer. On a real Gen 2 (FR02.022) that took
+         * 38.8 s from connecting, and the 30 s this used to be gave up four times in a row on a
+         * link about to authenticate.
+         */
+        const val CONNECT_TIMEOUT_MILLIS = 120_000L
 
         /** How long a disconnect waits for the ACK lane to go idle. */
         const val ACK_IDLE_MILLIS = 2_000L
@@ -857,6 +870,18 @@ class HistoryDrainController(
         private const val END_OF_HISTORY = 0x50
 
         private fun ByteArray.u8(index: Int): Int = this[index].toInt() and 0xFF
+
+        /**
+         * The link is on its way to `Authenticated` on a connection of its own: connecting, setting
+         * up, waiting for the bond or for the ring's first frame. Not a link waiting to reconnect
+         * after a drop, and not one that is idle, off or failed.
+         */
+        internal fun isComingUp(state: LinkState): Boolean = when (state) {
+            LinkState.Connecting, LinkState.WaitingForRing, LinkState.Discovering, LinkState.PairingNeeded,
+            LinkState.Preparing, LinkState.Authenticating, LinkState.NotStreaming,
+            -> true
+            else -> false
+        }
 
         private fun ByteArray.toPlainHex(): String = joinToString("") { b -> "%02x".format(Locale.ROOT, b.toInt() and 0xFF) }
 

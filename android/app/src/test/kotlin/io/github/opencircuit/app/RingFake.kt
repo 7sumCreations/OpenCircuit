@@ -21,6 +21,12 @@ import kotlinx.coroutines.launch
  * - [connect] authenticates after [connectMillis] of virtual time and, [postAuthReplyMillis]
  *   later, sends [postAuthReply] — the ring's answer to the `d0 00 00` the link writes after its
  *   auth reply (a `0x10` descriptor by default; null for a ring that does not answer it).
+ *   [connectMillis] can be changed between connects: a Gen 2 on FR02.022 whose link
+ *   authenticates only on the ring's own first frame took 38.8 s on a real phone, and up to
+ *   ~110 s is possible on its timer (`docs/PROTOCOL.md` §5.8). With [notStreamingAfterMillis] a
+ *   connection still waiting shows `NotStreaming` first, as the real link does. A connect while
+ *   one is coming up changes nothing; [disconnect] while it comes up ends it (it never
+ *   authenticates).
  *   [disconnect] tears the connection down (one user-disconnected teardown) and goes idle.
  * - Every `d0 00 00` the app writes is answered with [statusReply] after [statusReplyMillis]
  *   (a descriptor by default; a `0x50` frame models the ring's other answer, PROTOCOL.md §4).
@@ -58,7 +64,10 @@ internal class RingFake(
     private val emptyAck: ByteArray? = null,
     private val endOfHistory: ByteArray? = END_OF_HISTORY,
     private val endOfHistoryBy: Map<Int, ByteArray?> = emptyMap(),
-    private val connectMillis: Long = 500,
+    /** Settable between connects: a ring that authenticates fast once and late the next time. */
+    var connectMillis: Long = 500,
+    /** When set, a connection not yet authenticated this long after [connect] shows `NotStreaming` (the real link's 10 s after the CCCD). */
+    private val notStreamingAfterMillis: Long? = null,
     private val ackDelayMillis: Long = 200,
     private val pageGapsMillis: LongArray = longArrayOf(1_200, 2_600, 1_800),
     private val pagesPerOpen: Int? = null,
@@ -87,6 +96,9 @@ internal class RingFake(
     private var reauthenticated = false
     private var gapIndex = 0
     private var streamJob: Job? = null
+
+    /** Counts connects that started a connection: a timer of an earlier connection changes nothing. */
+    private var connectAttempt = 0
 
     /** Runs inside each acknowledgement the ring accepts, before it is recorded. */
     var beforeAck: suspend (ByteArray) -> Unit = {}
@@ -165,9 +177,21 @@ internal class RingFake(
         fake.connect()
         if (fake.state.value != LinkState.Idle) return
         fake.setState(LinkState.Connecting)
+        val authAfter = connectMillis
+        val attempt = synchronized(this) { ++connectAttempt }
+        notStreamingAfterMillis?.takeIf { it < authAfter }?.let { after ->
+            scope.launch {
+                delay(after)
+                if (fake.state.value == LinkState.Connecting && attempt == connectAttempt) {
+                    fake.setState(LinkState.NotStreaming)
+                    record("not streaming")
+                }
+            }
+        }
         scope.launch {
-            delay(connectMillis)
-            if (fake.state.value == LinkState.Connecting) {
+            delay(authAfter)
+            val stillComingUp = fake.state.value == LinkState.Connecting || fake.state.value == LinkState.NotStreaming
+            if (stillComingUp && attempt == connectAttempt) {
                 fake.setState(LinkState.Authenticated)
                 record("authenticated")
                 postAuthReply?.let { reply ->
