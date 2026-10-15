@@ -10,8 +10,9 @@ import java.time.Instant
 
 /**
  * The stored form of one ring's epoch archive and its drain facts:
- * `{"headAt":<ms>,"hrvPooling":"agree"|"disagree","lastDrainAt":<ms>,"records":"<hex>","unmovedDrains":…}`,
- * absent facts left out.
+ * `{"headAt":<ms>,"hrvPooling":"agree"|"disagree","lastDrainAt":<ms>,"records":"<hex>","stagedThrough":<ms>,"unmovedDrains":…}`,
+ * absent facts left out (`stagedThrough` is Kotlin-only, PORTING.md D-270; an archive stored
+ * without it reads as nothing staged).
  *
  * Upstream (ios/OpenCircuit/Store/EpochArchiveStore.swift:37-44 @ b1c2fdd) keeps the raw bytes
  * `EpochArchive.encode` writes and each fact in its own `UserDefaults` key; here they are one
@@ -30,6 +31,7 @@ object EpochArchiveCodec {
             "hrvPooling" to m.hrvPooling?.let { JsonPrimitive(verdictName(it)) },
             "lastDrainAt" to m.lastDrainAt?.json(),
             "records" to JsonPrimitive(lowerHex(EpochArchive.encode(archive.records))),
+            "stagedThrough" to m.stagedThrough?.json(),
             "unmovedDrains" to JsonPrimitive(m.unmovedDrains),
         ).toString()
     }
@@ -45,6 +47,8 @@ object EpochArchiveCodec {
                 // A negative count is not a count (EpochArchiveMarks refuses it): the default.
                 unmovedDrains = orDefault(0) { o.optional("unmovedDrains")?.int()?.takeIf { it >= 0 } ?: 0 },
                 hrvPooling = orDefault(null) { o.optional("hrvPooling")?.string()?.let(::verdictOf) },
+                // Absent in every archive written before it: nothing staged yet.
+                stagedThrough = o.lenientDate("stagedThrough"),
             ),
         )
     }

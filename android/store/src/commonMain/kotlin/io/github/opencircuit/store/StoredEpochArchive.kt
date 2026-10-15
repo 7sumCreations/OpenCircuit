@@ -36,6 +36,10 @@ class StoredEpochArchive(records: List<BulkRecord>, val marks: EpochArchiveMarks
  * - [unmovedDrains]: completed drains that left [headAt] unmoved (`sleep.unmovedCompletedDrains`).
  * - [hrvPooling]: the last DECIDED HRV-pooling verdict (`sleep.hrvPoolingVerdict`); null before the
  *   first decision. `NO_EVIDENCE` is the absence of a decision and is never stored, as upstream.
+ * - [stagedThrough] (Kotlin-only, PORTING.md D-270): the end of the newest night staged with every
+ *   earlier night staged too; null before the first. The archive keeps every record from 30 h before
+ *   it ([io.github.opencircuit.ringkit.EpochArchive.retentionKeepingUnstaged]), so a night waiting to
+ *   be staged is never pruned.
  *
  * Only marks that read back as themselves can be built: each date must be stored as more than
  * 0 ms after the epoch and within 64-bit milliseconds (a stored time of 0 or less reads as no date,
@@ -46,12 +50,14 @@ data class EpochArchiveMarks(
     val headAt: Instant? = null,
     val unmovedDrains: Int = 0,
     val hrvPooling: BulkSleep.HRVPooling? = null,
+    val stagedThrough: Instant? = null,
 ) {
     init {
         require(hrvPooling != BulkSleep.HRVPooling.NO_EVIDENCE) { "NO_EVIDENCE is not a decided verdict and is never stored" }
         require(lastDrainAt == null || lastDrainAt.storesAfterEpoch()) { "lastDrainAt $lastDrainAt is not stored after the epoch" }
         require(headAt == null || headAt.storesAfterEpoch()) { "headAt $headAt is not stored after the epoch" }
         require(unmovedDrains >= 0) { "unmovedDrains $unmovedDrains is below 0" }
+        require(stagedThrough == null || stagedThrough.storesAfterEpoch()) { "stagedThrough $stagedThrough is not stored after the epoch" }
     }
 
     /** Whether this time is stored as a positive 64-bit millisecond count (the stored form's one cut). */

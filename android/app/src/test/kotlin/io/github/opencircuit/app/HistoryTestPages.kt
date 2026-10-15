@@ -1,0 +1,110 @@
+package io.github.opencircuit.app
+
+/**
+ * History pages for the sync tests, assembled on the raw byte path: the real overnight `0x4c`
+ * page (`ios/OpenCircuitKit/Sources/RingKitVerify/main.swift:305-309` @ b1c2fdd — 6 × 23-byte
+ * records, counters `0c22a16b` … `0c22a459`, one epoch of 150 s apart) and copies of it with every
+ * record moved whole epochs later, each with its own countdown and XOR trailer written by hand.
+ * Nothing here goes through the app's or `:ringkit`'s own builders.
+ */
+internal object HistoryTestPages {
+
+    /** The real page as captured: header `4c 00 26` (countdown 38: 37 records still queued after it, plus one). */
+    val REAL_PAGE: ByteArray = hex(
+        "4c00260c22a16b55210a7d120a010101010100000402400400000c22a20155000300" +
+            "120a010101010100003c00000d01200c22a297540001005f0a010101010100001101b00f" +
+            "00440c22a32d6027077b120a010101010100402501c02235a00c22a3c351260577120b01" +
+            "0101010108a01000000401300c22a459502d0378120a01010101010160200000040ff0cc",
+    )
+
+    /** The six records' counters, as read off the captured bytes. */
+    val REAL_COUNTERS: List<Long> = listOf(0x0c22a16bL, 0x0c22a201L, 0x0c22a297L, 0x0c22a32dL, 0x0c22a3c3L, 0x0c22a459L)
+
+    private const val RECORD = 23
+    private const val RECORDS_PER_PAGE = 6
+    private const val EPOCH_SECONDS = 150L
+
+    /**
+     * Page [index] (0-based) of a [count]-page backlog: the real page's records moved
+     * `index × 6` epochs later, header countdown = the records still queued after this page + 1.
+     */
+    fun sleepPage(index: Int, count: Int): ByteArray = page(index, queuedAfter = (count - 1 - index) * RECORDS_PER_PAGE, firstEpoch = 0)
+
+    /**
+     * The real `0x47` page `47 00 00 0c 65 86 3a 02 9f 00 30 3c` (upstream's truncated optical
+     * page, the `:ble` tests' `ppgPage47Truncated`): a sensor page the drain acknowledges and counts.
+     */
+    val PPG_PAGE: ByteArray get() = hex("4700000c65863a029f00303c")
+
+    /** The epoch (records after the real page's first) where the all-day backlog starts: past any sleep backlog here. */
+    private const val ALL_DAY_FIRST_EPOCH = 600
+
+    /** Page [index] of a [count]-page all-day (`0x03`) backlog: records of their own, after every sleep page's. */
+    fun allDayPage(index: Int, count: Int): ByteArray =
+        page(index, queuedAfter = (count - 1 - index) * RECORDS_PER_PAGE, firstEpoch = ALL_DAY_FIRST_EPOCH)
+
+    /** The counters of all-day page [index]. */
+    fun allDayCounters(index: Int): List<Long> = REAL_COUNTERS.map { it + (ALL_DAY_FIRST_EPOCH + index * RECORDS_PER_PAGE) * EPOCH_SECONDS }
+
+    /** A [count]-page all-day backlog, oldest first. */
+    fun allDayBacklog(count: Int): List<ByteArray> = (0 until count).map { allDayPage(it, count) }
+
+    /**
+     * Page [index] with [queuedAfter] records still queued after it and its records moved
+     * `firstEpoch + index × 6` epochs later than the real page's. The header countdown (16 bits,
+     * bytes 1–2) is written as the ring writes it: [queuedAfter] + 1, so a channel's last page
+     * reads 1 (a real FR02.022 drain of 652 records counted 649 on its 4-record first page and 1
+     * on its last; ../docs/PROTOCOL.md §5.3).
+     */
+    fun page(index: Int, queuedAfter: Int, firstEpoch: Int): ByteArray {
+        require(queuedAfter in 0 until 0xFFFF)
+        val shift = (firstEpoch + index * RECORDS_PER_PAGE) * EPOCH_SECONDS
+        val records = (0 until RECORDS_PER_PAGE).map { r -> recordAt(r, REAL_COUNTERS[r] + shift) }
+        return assemble(records, countdown = queuedAfter + 1)
+    }
+
+    /**
+     * A sleep channel of [total] records as the real ring pages it: a first page of
+     * [firstPageRecords], then pages of six (the last may be shorter), each header countdown =
+     * the records queued after it + 1. Record `i` is the real page's record `i mod 6`, its counter
+     * moved to `0c22a16b + i × 150 s` (unique, epoch-spaced, oldest first).
+     */
+    fun ringShapedBacklog(total: Int, firstPageRecords: Int): List<ByteArray> {
+        require(total > 0 && firstPageRecords in 1..RECORDS_PER_PAGE)
+        val records = (0 until total).map { i -> recordAt(i % RECORDS_PER_PAGE, REAL_COUNTERS[0] + i * EPOCH_SECONDS) }
+        val chunks = listOf(records.take(firstPageRecords)) + records.drop(firstPageRecords).chunked(RECORDS_PER_PAGE)
+        var queued = total
+        return chunks.map { chunk ->
+            queued -= chunk.size
+            assemble(chunk, countdown = queued + 1)
+        }
+    }
+
+    /** The real page's record [r] (0..5) with its counter set to [counter]. */
+    private fun recordAt(r: Int, counter: Long): ByteArray {
+        val record = REAL_PAGE.copyOfRange(3 + r * RECORD, 3 + (r + 1) * RECORD)
+        record[0] = (counter ushr 24).toByte()
+        record[1] = (counter ushr 16).toByte()
+        record[2] = (counter ushr 8).toByte()
+        record[3] = counter.toByte()
+        return record
+    }
+
+    /** `4c <countdown hi> <countdown lo> <records…> <xor>`. */
+    private fun assemble(records: List<ByteArray>, countdown: Int): ByteArray {
+        require(countdown in 0..0xFFFF)
+        val body = ArrayList<Byte>()
+        body += 0x4C.toByte()
+        body += ((countdown ushr 8) and 0xFF).toByte()
+        body += (countdown and 0xFF).toByte()
+        records.forEach { body += it.toList() }
+        val xor = body.fold(0) { acc, b -> acc xor (b.toInt() and 0xFF) }
+        return (body + xor.toByte()).toByteArray()
+    }
+
+    /** The counters of page [index]'s records. */
+    fun counters(index: Int): List<Long> = REAL_COUNTERS.map { it + index * RECORDS_PER_PAGE * EPOCH_SECONDS }
+
+    /** A [count]-page backlog, oldest first. */
+    fun backlog(count: Int): List<ByteArray> = (0 until count).map { sleepPage(it, count) }
+}

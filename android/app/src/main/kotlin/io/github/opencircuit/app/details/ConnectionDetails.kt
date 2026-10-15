@@ -6,14 +6,22 @@ import io.github.opencircuit.app.live.MeasureEvidence
 import io.github.opencircuit.app.session.ConnectionTimings
 import io.github.opencircuit.app.session.DispatchCounts
 import io.github.opencircuit.app.session.SessionTeardowns
+import io.github.opencircuit.app.sync.AutoSyncSkip
+import io.github.opencircuit.app.sync.AutoSyncSkipReason
+import io.github.opencircuit.app.sync.AutoSyncTrigger
 import io.github.opencircuit.ble.AddressType
 import io.github.opencircuit.ble.LinkDiagnostic
 import io.github.opencircuit.ble.LinkInfo
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.ScanDiagnostic
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
+import io.github.opencircuit.store.SyncLogEntry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /** One line of the card: a label and its value, both plain text. */
 data class DetailRow(val label: String, val value: String)
@@ -30,6 +38,8 @@ data class ConnectionDetailsUi(
     val diagnostics: List<String>,
     /** What Copy puts on the clipboard: every row and line, the address and the name masked. */
     val copyText: String,
+    /** The sync log, newest sync first, one line per sync and per channel: shown only when expanded. */
+    val syncLog: List<String> = emptyList(),
 )
 
 /** What the card reads beyond the ring's session: the pairing sheet's outcome and the scanner's last match. */
@@ -55,6 +65,12 @@ data class DetailsInput(
     val scanToSelectedMillis: Long? = null,
     /** What the ring sent during the running or the last live measure; null before the first. */
     val lastMeasure: MeasureEvidence? = null,
+    /** The ring's sync log, oldest first; null when there is no ring session. */
+    val syncLog: List<SyncLogEntry>? = null,
+    /** The automatic syncs that did not run this session, oldest first; null when the session runs none. */
+    val autoSyncSkips: List<AutoSyncSkip>? = null,
+    /** The phone's time zone, for the skips' times. */
+    val zone: ZoneId = ZoneOffset.UTC,
 )
 
 /**
@@ -76,6 +92,7 @@ object ConnectionDetailsPresenter {
         val masked = rows(input, masked = true)
         val diagnostics = diagnosticLines(input)
         val advertisementFull = advertisement(input, masked = false)
+        val syncLog = SyncLogLines.lines(input.syncLog)
         val copy = buildString {
             appendLine("OpenCircuit connection details")
             masked.forEach { appendLine("${it.label}: ${it.value}") }
@@ -85,6 +102,9 @@ object ConnectionDetailsPresenter {
             appendLine()
             appendLine("Link diagnostics")
             diagnostics.forEach { appendLine(it) }
+            appendLine()
+            appendLine("Sync log")
+            syncLog.forEach { appendLine(it) }
         }
         val names = listOfNotNull(input.ring?.name, input.info?.firmware?.modelName, input.scan?.let { AdStructureParser.parse(it.rawScanRecord).localName })
         return ConnectionDetailsUi(
@@ -93,6 +113,7 @@ object ConnectionDetailsPresenter {
             advertisement = advertisementFull,
             diagnostics = diagnostics,
             copyText = Privacy.scrub(copy, listOfNotNull(input.ring?.address, input.info?.mac), names),
+            syncLog = syncLog,
         )
     }
 
@@ -121,7 +142,34 @@ object ConnectionDetailsPresenter {
             DetailRow("Handler failures", input.counts?.let { opcodeCounts(it.handlerFailures) } ?: NOT_AVAILABLE),
             DetailRow("Connections torn down", input.teardowns?.let(::teardowns) ?: NOT_AVAILABLE),
             DetailRow("Last measure", input.lastMeasure?.let(::measure) ?: "none since the app started"),
+            DetailRow("Last sync continuity", input.syncLog?.let(SyncLogLines::continuity) ?: NOT_AVAILABLE),
+            DetailRow("Ring capacity", input.syncLog?.let(SyncLogLines::capacity) ?: NOT_AVAILABLE),
+            DetailRow("Auto-sync skipped", input.autoSyncSkips?.let { autoSyncSkips(it, input.zone) } ?: NOT_AVAILABLE),
         )
+    }
+
+    /** The newest [SKIPS_SHOWN] skips, newest first: when, which sync, why, and whether the link was closed. */
+    private fun autoSyncSkips(skips: List<AutoSyncSkip>, zone: ZoneId): String {
+        if (skips.isEmpty()) return "none since the app started"
+        val shown = skips.takeLast(SKIPS_SHOWN).reversed().joinToString("; ") { skip ->
+            val time = CLOCK.format(skip.at.atZone(zone))
+            "$time ${trigger(skip.trigger)}: ${reason(skip.reason)}" + if (skip.disconnected) ", link closed" else ""
+        }
+        val earlier = skips.size - SKIPS_SHOWN
+        return if (earlier > 0) "$shown (+$earlier earlier)" else shown
+    }
+
+    private fun trigger(trigger: AutoSyncTrigger): String = when (trigger) {
+        AutoSyncTrigger.LINK_UP -> "link-up"
+        AutoSyncTrigger.CATCH_UP -> "catch-up after the night"
+        AutoSyncTrigger.CADENCE -> "hourly sync"
+    }
+
+    private fun reason(reason: AutoSyncSkipReason): String = when (reason) {
+        AutoSyncSkipReason.THROTTLED -> "last complete sync under 5 min ago"
+        AutoSyncSkipReason.NIGHT_QUIET -> "night quiet"
+        AutoSyncSkipReason.ALREADY_SYNCING -> "a sync was already running"
+        AutoSyncSkipReason.MEASURING -> "a measure was running"
     }
 
     private fun advertisement(input: DetailsInput, masked: Boolean): List<DetailRow> {
@@ -221,6 +269,12 @@ object ConnectionDetailsPresenter {
     private const val NOT_AVAILABLE = "not available"
     private const val NOT_MEASURED = "not measured"
     private const val NOT_READ = "not read yet"
+
+    /** How many automatic-sync skips the row shows. */
+    private const val SKIPS_SHOWN = 3
+
+    /** A skip's time of day, in the phone's zone. */
+    private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT)
 
     /** The rows the collapsed card shows. */
     private val SUMMARY = setOf("Ring", "Address", "ATT MTU", "Bonded")

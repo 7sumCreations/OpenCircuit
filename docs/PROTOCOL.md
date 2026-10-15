@@ -150,10 +150,20 @@ name masked by the app) and the owner's observations.
   frames by appending an XOR trailer produces invalid bytes the ring ignores.
 - The ring ATT-acks any write but only *acts* on commands whose contents are valid.
 
-Bulk frames (`0x47`/`0x4c`) pack fixed-size records, each prefixed by delimiter
-`0x0c` + a **3-byte BE counter** in the sync-cursor space (`0x47` steps `+0x0384`,
-`0x4c` steps `+0x96`; see §5.2/§5.3). Continue a page by ACKing: `0x47` → `c7 00 00`,
-`0x4c` → `cc 00 00`; the page header byte[2] counts remaining records, `0x00` on the last.
+Bulk frames (`0x47`/`0x4c`) pack fixed-size records, each starting with a **4-byte BE
+counter** in the sync-cursor space (`0x47` steps `+0x0384`, `0x4c` steps `+0x96`; see
+§5.2/§5.3). Its first byte reads `0x0c` in every capture so far only because the counter
+was in `0x0c000000`–`0x0cffffff` (2026-05-18 → 2026-11-28 20:23:28 UTC); it is **not** a
+delimiter — from 2026-11-28 20:23:28 UTC records start `0x0d` (🟡 computed from the counter
+epoch, not yet observed on the wire). Continue a page by ACKing: `0x47` → `c7 00 00`,
+`0x4c` → `cc 00 00`; the page header **bytes[1:3] (16-bit BE)** of a `0x4c` page are a
+countdown = **the records still queued AFTER this page, plus one** — `00 01` on a channel's
+last page, not `00 00`. 🟢 Android-verified 2026-10-15 (FR02.022): a 652-record drain, first
+page 4 records → 649 (652 − 4 + 1), then 108 pages of six, last page → 1. Records still to
+come after a page = countdown − 1. Byte[1] is `00` only while fewer than 256 records are
+queued — a third-party hardware capture after ~30 h offline read `4c 02 cd` = countdown 717
+(Gadgetbridge f6f32560; a fact, not their code), and byte[1] was non-zero on our own first
+pages too (§5.6.2).
 
 ## 4. Commands (request → response) 🟢
 
@@ -301,9 +311,11 @@ Structure below is from parallel structural RE of `captures/btsnoop_hr.log`
 3 sync-opens. **Structure is 🟢/🟡; semantic VALUES are mostly 🔴 pending
 ground-truth captures (§6).**
 
-> **Refines §3's bulk-record prefix.** The delimiter is a single byte `0x0c`; the
-> bytes after it are a **3-byte big-endian counter** (the `09`/`0a`/`22` is its high
-> byte — it rolls cleanly `0c 09 ff 9a → 0c 0a 00 30`). This counter shares the
+> **Refines §3's bulk-record prefix.** *(Corrected 2026-10-08, Android port: the first
+> byte is not a delimiter.)* Bytes `[0:4]` are one **4-byte big-endian counter** — the
+> `0x0c` every capture shows is its top byte, and `09`/`0a`/`22` the next one (it rolls
+> cleanly `0c 09 ff 9a → 0c 0a 00 30`; the top byte will roll `0c ff ff ff → 0d 00 00 00`
+> at 2026-11-28 20:23:28 UTC, 🟡 computed, not yet observed). This counter shares the
 > **same value space as the `0x02` sync cursor** (§5.6): late records sit at
 > `0c 22 xx xx`, matching cursor `0c 22 98 c3`. The `+0x0384`/record step is the
 > `0x47` rate; `0x4c` steps `+0x96`.
@@ -328,10 +340,12 @@ frames. **`06 01 00` = HR mode** (short `15 00 <hr>` frames); **`06 02 00` = SpO
 = 96/97 in the live capture; byte[2] is `00`, so don't read HR from these).
 
 ### 5.2 `0x47` — bulk PPG / waveform page (ACK each with `c7 00 00`)
-Page: `[0]`=`0x47` · `[1]`=`00` · **`[2]`=remaining-RECORD countdown** (−5/full page,
-0 on last; e.g. `1c 17 12 0d 08 03 00`) · body = N×**47-byte records** · `[last]`=XOR
+Page: `[0]`=`0x47` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE** (−5/full page,
+0 on last; e.g. byte[2] `1c 17 12 0d 08 03 00` with byte[1] `00` — byte[1] is the high byte,
+non-zero above 255 queued: 🟢 Android-verified 2026-10-15 (a `0x4c` countdown of 649 on FR02.022) + third-party capture `4c 02 cd` = 717, see §3. The "+1" meaning of the `0x4c` countdown (§3, §5.3) is not yet checked on `0x47` pages; the app does not use `0x47` countdowns for progress) · body = N×**47-byte records** · `[last]`=XOR
 (valid 11/11). 🟢
-Record (47 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x0384/rec = 900 s** (cursor space) 🟢 ·
+Record (47 B): `[0:4]`=BE counter (top byte `0x0c` until 2026-11-28, then `0x0d` — not a
+delimiter, see §3) **+0x0384/rec = 900 s** (cursor space) 🟢 ·
 `[4:6]`=16-bit BE **optical baseline/DC** (`[4]`∈{`02`,`03`}, **not const**; `[5]` drifts) 🟡 ·
 `[6:9]`=usually `00 00 00`, else per-record flag/quality (`[8]`∈{0,5,10,15,20}) 🟡 ·
 `[9:47]`=**38 B = 30 × 10-bit big-endian samples** (300 bits + 4 zero pad-bits) 🟢.
@@ -382,9 +396,13 @@ sample spacing 🟡; (3) absolute physical units. Evidence/decoders: `desktop/an
 (stats) and `desktop/decode_0x47.py` (both widths → CSV).
 
 ### 5.3 `0x4c` — bulk activity/sleep page (ACK each with `cc 00 00`)
-Page: `[0]`=`0x4c` · `[1]`=`00` · **`[2]`=remaining-RECORD countdown** (−6/page) ·
+Page: `[0]`=`0x4c` · **`[1:3]`=remaining-RECORD countdown, 16-bit BE = records still queued
+AFTER this page + 1** (−6/page; **1 on a channel's last page**, not 0 — 🟢 Android-verified
+2026-10-15 (FR02.022): a 652-record drain, first page 4 records → 649, last page → 1; byte[1]
+`00` only below 256 queued, third-party capture `4c 02 cd` = 717 too, see §3) ·
 body = 6×**23-byte records** · `[last]`=XOR. 🟢
-Record (23 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x96/rec** (cursor space) 🟢 ·
+Record (23 B): `[0:4]`=BE counter (top byte `0x0c` until 2026-11-28, then `0x0d` — not a
+delimiter, see §3) **+0x96/rec** (cursor space) 🟢 ·
 `[4]`=HR · `[5]`=HRV · `[6]`=confidence · `[7]`=RR×8 · `[8]`=SpO2-or-wake-flag ·
 `[9]`=item2p5 · **`[10:20]`=`acti_counts`** (activity blob) · `[20]`=info · `[21:22]`=trailer
 (all per the APK reconciliation below). Idle/unworn template:
@@ -393,8 +411,8 @@ Record (23 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x96/rec** (cursor space) �
 > **This is the `历史测量响应` ("history MEASUREMENT response") record — NOT the
 > activity record (issue #93 reconciliation, 2026-06-17).** The decompiled app
 > (`pp.txt`, blutter) ships an explicit per-2.5-min offset map whose `utc` field
-> sits at loc `0x3`; our wire counter is at byte `[0:4]` (top byte = the `0x0c`
-> delimiter), so **`wire_index = APK_loc − 3`**. Under that convention the
+> sits at loc `0x3`; our wire counter is at byte `[0:4]` (its top byte is the `0x0c`
+> once read as a delimiter), so **`wire_index = APK_loc − 3`**. Under that convention the
 > MEASUREMENT map (`utc·pr·hrv·conf·resprate·spo2·item2p5·acti_counts·info`)
 > reproduces **byte-for-byte** the §5.3 fields already ground-truthed to the app's
 > 2026-06-13 night — **five independent fields agree**, which is a second,
@@ -402,7 +420,7 @@ Record (23 B): `[0]`=`0x0c` · `[1:4]`=BE counter **+0x96/rec** (cursor space) �
 >
 > | APK field (`历史测量响应`) | APK loc·len | wire idx | meaning | conf |
 > |---|---|---|---|---|
-> | `utc` | 0x3·4 | `[0:4]` | BE counter / cursor (top byte `0x0c`) | 🟢 |
+> | `utc` | 0x3·4 | `[0:4]` | BE counter / cursor (top byte `0x0c` until 2026-11-28 20:23:28 UTC) | 🟢 |
 > | `pr` | 0x7·1 | `[4]` | **HR (bpm)**; <30 = unmeasured sentinel | 🟢 |
 > | `hrv` | 0x8·1 | `[5]` | **HRV / RMSSD (ms)** | 🟢 |
 > | `conf` | 0x9·1 | `[6]` | **confidence / signal quality** 0..~12 (was "[6] quality? 🟡") | 🟢 |
@@ -814,6 +832,32 @@ within the day and `active_seconds` ≤ 150/epoch.
 > `[6:8]`/`[8:10]` as 0.1 °C, streamed live while connected — not in the bulk sync. So it
 > needs neither the session-open auth nor active flag-probing; just read the descriptor.
 
+### 5.3a `0x40` — history page on older Gen 2 firmware (ACK `c0`) 🟡 Android-verified (opcodes only)
+> **Android-verified 2026-10-14, Gen 2 on `FR02.013`.** A ring left unused for about a year, worn one night, then
+> synced: OpenCircuit Android got **zero `0x4c` pages** on both channels (sleep channel: a few `0x47`, exit
+> quiet-after-pages; all-day: nothing). Its diagnostics showed unhandled `0x40` frames (×3) on every connection. The
+> official app, connecting right afterwards over the same firmware, drained the night. An Android HCI snoop of that
+> session (opcode byte only per ATT value, so the payloads were not recoverable) reads:
+> `01→81` ×2 (auth) · `02→82` (open) · **`03→83`** · `07→87` · `47→c7` · then **~400 × `0x40` pages, each answered
+> with `c0`** · `07→87` · `50` · `d0` · then `09→89` and a firmware update (handles `0x0902`/`0x0904`).
+> - 🟡 **On `FR02.013` the night's records travel as `0x40` pages, acknowledged with `c0` (presumably `c0 00 00`,
+>   by analogy with `c7`/`cc`).** A client that doesn't ACK them stalls the drain after the first page or so,
+>   and the night stays on the ring.
+> - 🔴 The `0x40` record layout is unknown (payload not captured). Whether the `03 → 83` exchange is required
+>   is also unknown; OpenCircuit never sends `03`.
+> - 🟡 After the official app updated the same ring to **`FR02.022`**, its next connection streamed **`0x4c`
+>   pages ACKed with `cc`** and no `0x40`. So the `0x40` format looks firmware-dependent (seen on `FR02.013`;
+>   upstream's `0x4c` captures are `FR02.018`).
+> - **Capture needed:** a full-payload snoop of an `FR02.013` (or older) ring draining, to decode `0x40` and the
+>   `03` command's arguments.
+> - 🟡 **Android handling (built and JVM-tested, not yet run against an `FR02.013` ring).** OpenCircuit Android
+>   treats `0x40` as a history page. It stores each page raw on the phone first and only then writes **`c0 00 00`**,
+>   so a page it couldn't store is never acknowledged and the ring keeps it. The commit moves each page into a
+>   permanent raw-page store (at most 5,000 pages per ring, oldest dropped first, the drops counted), so a later
+>   version can decode it. Nothing is decoded from these pages, and a channel that sent one is never judged complete.
+>   The app tells the user to update the ring's firmware in the RingConn app. The `0x40` layout is still 🔴, and the
+>   app still never sends `03`. (`android/PORTING.md` D-274.)
+
 ### 5.4 `0x10` / `0x87` — fixed 19-byte descriptor
 `0x10` ← `d0 00 00` (also spontaneous ~30–60 s); `0x87` ← `07 00 00`. **Identical
 layout** (only `[0]` respid differs; `0x87` body == `0x10` body) → shared descriptor,
@@ -1066,6 +1110,45 @@ flow through the existing `BulkSleep` decode → Apple Health (same schema, no n
 `AllDayChannelTests` guards that daytime `0x03` SpO₂ reaches Health as samples but is kept out of sleep
 staging by the `latestNightRecords` overnight gate. The on-device `byte[6]` sweep (`DataSyncProbe`,
 `sweepAllDayStreams`) is **removed** — superseded by this finding.
+
+#### 5.6.2 The history drain as OpenCircuit Android does it — 🟢 Android-verified on FR02.022 (2026-10-15), except the rows still tagged 🟡
+**Confidence: built and tested against a ring-faithful fake on the JVM and the emulator's demo ring;
+the owner's real-ring syncs with release 0.2.0 (Gen 2, firmware FR02.022, 2026-10-15) re-tagged the
+rows they exercised. Rows still 🟡 were not exercised on the ring.** Where it differs from the iOS app, `android/PORTING.md` names
+the row.
+
+| Step | What the Android app does | Tag / source |
+|---|---|---|
+| Before the first open | The keepalive `d0 00 00` is paused for the whole sync; the first open waits until the status query `:ble` writes after its auth reply (and any keepalive query) is answered by `0x10` / `0x87` / `0x50`, or 2 s | 🟡 Android, unverified on ring (D-266) |
+| Open | `02 00 <now, sync-epoch seconds BE4> <channel> 01 00`, then exactly 300 ms later `07 00 00`. **No `01 00 00` before it** — the iOS app sends one (`RingSession.swift:3939`); live SpO₂ already works without it (§2.1) | 🟢 Android-verified 2026-10-15 (FR02.022): both channels answered `82 00 00 82` to this open, no fallback needed (D-262) |
+| Channels | `0x00` (sleep) then `0x03` (all-day), every sync; sport `0x02` is not opened | 🟢 channels (§5.6.1) · order 🟢 Android-verified 2026-10-15 (FR02.022) |
+| No answer | Neither `0x82` nor a page within 5 s of the open: the link runs the ring's auth again once per sync (`:ble` writes `01 00 00` and answers the challenge) and the open is sent again; nothing 20 s after the open ends the channel "the ring didn't answer" (NO_ACK), link kept | 🟡 Android, unverified on ring (D-264) |
+| `0x82` | `82 <b1> <b2> <xor>`: `[2]` is the ACK flag, `[1] = ff` means nothing to send (`82 ff 00 7d`) | 🟢 layout (iOS `RingSession.swift:4610-4635`) |
+| Pages | Each `0x4c` / `0x47` / `0x4d` page (and, on older firmware, `0x40` → `c0 00 00`, §5.3a, 🟡 not yet run on an FR02.013 ring) is written to the phone's history journal FIRST and only then acknowledged (`cc 00 00` / `c7 00 00` / `cd 00 00`); the ring sends the next page only after the acknowledgement. A page that could not be stored is never acknowledged. An acknowledgement is written only for a page the same connection delivered — the ACK bytes carry no page identity | 🟢 Android-verified 2026-10-15 (FR02.022): 109 `0x4c` + 25 `0x47` pages, every one journaled then acknowledged; acknowledgement latency p50 58 ms / p95 77 ms; 0 pages unacknowledged at disconnect (D-261) |
+| Countdown | Bytes 1–2 of a `0x4c` page header are a 16-bit big-endian countdown = records still queued after the page + 1 (§3). Progress while syncing reads "N of M records", M = records so far + countdown − 1; a countdown of 1 means the channel's records are all in. `0x47` countdowns are not used for progress | 🟢 Android-verified 2026-10-15 (FR02.022): a 652-record drain, first page 4 records → 649, last page → 1 (D-259) |
+| `0x50` | The end of the channel only after this channel's `0x82`; a `0x50` before it is the answer to a status query (§4) | 🟢 Android-verified 2026-10-15 (FR02.022): `0x50` ended BOTH channels (D-266) |
+| End of a round | `0x50` after `0x82`; 6 s after `82 ff`; 20 s after an answered open with no page; 6 s of quiet after a page (one `07 00 00` nudge first); a round still receiving pages runs 45 s, extended 45 s at a time up to 3,600 s; a round that added records and went quiet is reopened, up to 12 times; the whole sync stops at 90 min | 🟢 exits Android-verified (`0x50` on both channels, 1 round each, sleep 12.0 s / all-day 5.3 s, page gap p50 0.0 s / max 0.0 s); 🟡 the timing values were not stressed by this short backlog — unchanged (D-265, D-34) |
+| Pages outside a sync | A page that arrives with no sync running is stored and acknowledged the same way; the next commit takes it | 🟡 Android, unverified on ring (D-261) |
+| Commit | Records are stored only up to the least-drained channel (a channel that told the sync nothing holds every record back), oldest first in transactions of at most 5,000 records; held-back pages stay journaled for the next sync | 🟢 Android-verified 2026-10-15 (FR02.022): both channels COMPLETE, 652 stored, 0 held back (D-267) |
+| Disconnect | With "Disconnect after syncing" on, the link closes only after the commit returned and no page is still being stored or acknowledged (at most 2 s) | 🟢 Android-verified 2026-10-15 (FR02.022): the ring showed disconnected after the commit (D-268) |
+| Pointer after ACK | Expected: the ring moves its resume pointer only on an acknowledgement, so a page cut by a teardown is offered again (the next sync's continuity reads OVERLAP or CONTIGUOUS, never GAP) | 🟡 GB 4a386317 observed it. With this app (FR02.022): a second sync minutes after a complete one stored only 5 new records, continuity CONTIGUOUS — no re-drain. The interrupted-sync case is NOT yet verified on a ring |
+
+**Android-verified findings, Gen 2 FR02.022 (2026-10-15, release 0.2.0, the owner's ring; masked Copy text):**
+- **Throughput:** the sleep channel delivered 652 records in 109 `0x4c` pages (~6 records per page) plus 25 `0x47` pages in 12.0 s; the whole sync (both channels, commit, disconnect) took 25.8 s.
+- **Backlog / capacity:** oldest record 2026-10-13T22:20:22Z on a ring that had been unused and uncharged for about a year before 2026-10-13, so the capacity answer is a lower bound only: **≥ 1 d 6 h**; overwrite-vs-stop is **inconclusive** (the backlog never filled the ring).
+- **Connection timing:** connect→Authenticated took **38.8 s** on the first connect after launch (the auth and data-request writes were done by +2.1 s; "no data frame 10 s after the CCCD" at +11.4 s) and 14.0 s after an app relaunch.
+- **Firmware difference:** FR02.022 sends no `0x40` frames. FR02.013 (the same ring before its update) sends history as `0x40` pages, see §5.3a.
+- **D-43** (quiet after pages with no `0x50` is PARTIAL, not COMPLETE): on FR02.013 the sleep channel sent `0x47` pages, then went quiet with no `0x50`, and was judged PARTIAL, as D-43 intends; on FR02.022 both channels sent `0x50`. No change.
+
+**What the first real-ring sync records.** Connection details' **Sync log** (Copy masks the address)
+holds, per channel, every `0x82` byte for byte, whether the re-auth fallback ran and helped, the
+first and last countdown, pages by opcode, records, first and last record time, exit reason, whether
+the `0x50` came, rounds, duration, page gap p50 / max and acknowledgement latency p50 / p95; per sync
+the oldest and newest record, records per local day, the `0x50` charge markers, continuity against
+the previous sync (±60 s), and a capacity verdict — OVERWRITES_OLDEST / STOPS_WHEN_FULL / a lower
+bound / inconclusive with its reason (fewer than half of 576 records a day over the span is
+inconclusive). These are the numbers that turn the rows above green, answer the ring's storage
+capacity and overwrite-vs-stop, and re-check the D-34 drain constants and the D-43 channel verdicts.
 
 ### 5.7 `0x81` — status replies (← `0x01`)
 **`81 00 XX YY`** (← `01 00 00`): `[2]` is the only varying byte, full 8-bit range,

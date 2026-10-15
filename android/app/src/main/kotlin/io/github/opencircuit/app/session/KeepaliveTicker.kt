@@ -36,6 +36,9 @@ sealed interface KeepaliveProblem {
  *   (`ios/OpenCircuit/BLE/RingSession.swift:1220-1261` @ b1c2fdd); here the link runs its own
  *   auth and there is no history drain to bank the pages a `07` could move (PORTING.md D-232, D-233).
  * - While a measure runs: nothing (the measure's entry writes its own `d0`).
+ * - While a history sync runs ([isSyncing]): nothing — the ring may answer a `d0` with a `0x50`,
+ *   which the drain could take for its end of history. When the sync ends, the cadence starts
+ *   again with one `d0 00 00` at once.
  * - When a measure stops: the status refresh — one `d0 00 00` at once and, if no descriptor with
  *   a battery answers within 750 ms, one more at the next tick, the 30 s cadence kept around a
  *   live read; then the 180 s cadence. Upstream's refresh ladder writes `07 00 00` and
@@ -52,6 +55,8 @@ class KeepaliveTicker(
     /** How many descriptors with a battery have arrived; a change means the ring answered. */
     private val batteryReadings: () -> Int,
     private val log: (String) -> Unit,
+    /** True while a history sync runs: nothing is written then (a `d0` can be answered with a `0x50`). */
+    private val isSyncing: StateFlow<Boolean> = MutableStateFlow(false),
 ) {
     private val problemFlow = MutableStateFlow<KeepaliveProblem?>(null)
     private val started = AtomicBoolean(false)
@@ -66,15 +71,15 @@ class KeepaliveTicker(
             // Both are touched only by this one collector, one value at a time.
             var wasMeasuring = false
             var refreshPending = false
-            combine(linkState, isMeasuring) { state, measuring -> (state == LinkState.Authenticated) to measuring }
+            combine(linkState, isMeasuring, isSyncing) { state, measuring, syncing -> Triple(state == LinkState.Authenticated, measuring, syncing) }
                 .distinctUntilChanged()
-                .collectLatest { (authenticated, measuring) ->
+                .collectLatest { (authenticated, measuring, syncing) ->
                     if (wasMeasuring && !measuring) refreshPending = true
                     wasMeasuring = measuring
                     // Off the authenticated link the card shows the link's own words; a status
                     // query refused as the link went down is not kept beside them.
                     if (!authenticated) problemFlow.value = null
-                    if (!authenticated || measuring) return@collectLatest
+                    if (!authenticated || measuring || syncing) return@collectLatest
                     val refresh = refreshPending
                     refreshPending = false
                     keepWarm(refresh)

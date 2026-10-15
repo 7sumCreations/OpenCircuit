@@ -61,15 +61,18 @@ class RingSessionTracerTest {
         link.emitFrame(TestFrames.chargingResponseDescriptor) // 0x87 → device status
         link.emitFrame(TestFrames.liveHeartRate) // 0x15 → live measure (none running: counted)
         link.emitFrame(TestFrames.heartbeat) // 0x11 → ignored, :ble answered it
-        link.emitFrame(TestFrames.historyPage47) // no handler → counted
+        link.emitFrame(TestFrames.historyPage47) // 0x47 → history routes: no store in this session, so refused
         link.emitFrame(TestFrames.unknown) // no handler → counted
         runCurrent()
 
         assertEquals(71, controller.deviceStatus.state.value.batteryPercent)
         assertEquals(1, controller.liveMeasure.state.value.framesNotUsed)
         assertEquals(1, controller.dispatcher.counts.value.ignored)
-        assertEquals(mapOf(0x47 to 1, 0xee to 1), controller.dispatcher.counts.value.unhandled)
-        assertEquals(2, logLines.size, "one line per unhandled frame: $logLines")
+        assertEquals(mapOf(0xee to 1), controller.dispatcher.counts.value.unhandled)
+        // The page reached the history routes; with nowhere to store it, it is never acknowledged.
+        assertEquals(1, controller.historyPages.counts.value.saveFailures)
+        assertEquals(emptyList(), link.acknowledged)
+        assertEquals(2, logLines.size, "one line for the unhandled frame, one for the page not saved: $logLines")
     }
 
     @Test

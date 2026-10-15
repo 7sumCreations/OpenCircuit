@@ -7,6 +7,7 @@ import io.github.opencircuit.app.connect.ConnectFlowState
 import io.github.opencircuit.app.connect.PairingSheet
 import io.github.opencircuit.app.connect.PermissionSnapshot
 import io.github.opencircuit.app.connect.ScanStep
+import io.github.opencircuit.app.data.AppPrefs
 import io.github.opencircuit.app.details.ConnectionDetailsPresenter
 import io.github.opencircuit.app.details.ConnectionDetailsUi
 import io.github.opencircuit.app.details.DetailsInput
@@ -17,21 +18,28 @@ import io.github.opencircuit.app.live.measureUi
 import io.github.opencircuit.app.session.KeepaliveProblem
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.SessionHost
+import io.github.opencircuit.app.sync.StoredData
+import io.github.opencircuit.app.sync.SyncState
+import io.github.opencircuit.store.SyncLogEntry
 import io.github.opencircuit.ble.AdapterState
 import io.github.opencircuit.ble.LinkDiagnostic
 import io.github.opencircuit.ble.LinkDiagnostics
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import java.time.Instant
+import java.time.ZoneId
 
 /** Everything the Ring screen shows. */
 data class RingUiState(
@@ -43,6 +51,8 @@ data class RingUiState(
     val measure: MeasureUi? = null,
     /** The Connection details card. */
     val details: ConnectionDetailsUi = ConnectionDetailsPresenter.present(DetailsInput()),
+    /** The Ring data card: the last sync, Sync now and the "Disconnect after syncing" switch. */
+    val ringData: RingDataUi = RingDataPresenter.present(RingDataInput(now = Instant.EPOCH)),
 )
 
 /**
@@ -68,6 +78,17 @@ class RingViewModel(
     private val connectFlow: ConnectFlowController? = null,
     adapterState: StateFlow<AdapterState?> = MutableStateFlow(null),
     details: DetailsSources = DetailsSources(),
+    /** Where the "Disconnect after syncing" switch is kept; null keeps it in memory (ON). */
+    private val prefs: AppPrefs? = null,
+    /** The phone's wall clock, for "Last synced N ago". */
+    private val wallClock: () -> Instant = Instant::now,
+    /** The phone's time zone, for the stored days and the last night's times. */
+    private val zone: () -> ZoneId = ZoneId::systemDefault,
+    /**
+     * Re-reads [wallClock] on its own: "Last synced N ago" and the overdue warning must move on
+     * while nothing else changes (the link idle after a sync, the ring out of reach).
+     */
+    clockTicks: Flow<Unit> = everyMinute(),
 ) : ViewModel(scope) {
 
     /** The Ring screen's state. */
@@ -76,8 +97,11 @@ class RingViewModel(
     /** The session the screen shows now, or null. */
     private val controller: RingSessionController? get() = sessions?.current?.value
 
+    /** The switch as shown; follows what was saved. */
+    private val disconnectAfterSync = MutableStateFlow(prefs?.disconnectAfterSync ?: true)
+
     init {
-        fun render(parts: LinkParts, flow: ConnectFlowState, adapter: AdapterState?, detailsInput: DetailsInput): RingUiState {
+        fun render(parts: LinkParts, flow: ConnectFlowState, adapter: AdapterState?, detailsInput: DetailsInput, disconnectAfter: Boolean): RingUiState {
             val measuring = parts.live.mode != null
             val flowCard = ConnectFlowPresenter.scan(flow)
                 ?: if (parts.link == LinkState.Idle) ConnectFlowPresenter.availability(flow, adapter) else null
@@ -86,8 +110,25 @@ class RingViewModel(
                 card = connectionCardUi(parts.link, parts.ringName, parts.status, measuring, parts.problem, flowCard),
                 // Measuring needs an authenticated link (upstream draws the buttons only when ready, VT:319-337).
                 // Only the charger byte blocks Measure; an inferred charge never does (PORTING D-242).
-                measure = if (parts.link == LinkState.Authenticated) measureUi(parts.live, onCharger = parts.status.onCharger) else null,
-                details = ConnectionDetailsPresenter.present(detailsInput.copy(scanToSelectedMillis = flow.scanToSelectedMillis)),
+                // Measure and Sync now never run at once: each disables the other, with the reason.
+                measure = if (parts.link == LinkState.Authenticated) {
+                    measureUi(parts.live, onCharger = parts.status.onCharger, syncing = parts.sync?.syncing == true)
+                } else {
+                    null
+                },
+                details = ConnectionDetailsPresenter.present(detailsInput.copy(scanToSelectedMillis = flow.scanToSelectedMillis, zone = zone())),
+                ringData = RingDataPresenter.present(
+                    RingDataInput(
+                        sync = parts.sync,
+                        log = parts.log,
+                        stored = parts.stored,
+                        liveFirmware = parts.firmware,
+                        disconnectAfterSync = disconnectAfter,
+                        now = wallClock(),
+                        zone = zone(),
+                        measuring = measuring,
+                    ),
+                ),
             )
         }
 
@@ -101,6 +142,8 @@ class RingViewModel(
                 combine(session.link.info, session.timer.timings, session.dispatcher.counts, session.teardowns, diagnostics) { info, timings, counts, teardowns, lines ->
                     DetailsInput(ring = session.link.ring, info = info, timings = timings, counts = counts, teardowns = teardowns, diagnostics = lines)
                 }.combine(session.liveMeasure.state.map { it.evidence }.distinctUntilChanged()) { input, evidence -> input.copy(lastMeasure = evidence) }
+                    .combine(session.syncRecords.entries) { input, log -> input.copy(syncLog = log) }
+                    .combine(session.triggers?.skips ?: flowOf(null)) { input, skips -> input.copy(autoSyncSkips = skips) }
             }
         }
         val scanKept = details.scanMatch != null
@@ -113,16 +156,23 @@ class RingViewModel(
             if (session == null) {
                 flowOf(LinkParts())
             } else {
-                combine(session.state, session.deviceStatus.state, session.liveMeasure.state, session.keepalive.problem) { link, status, live, problem ->
-                    LinkParts(link, status, live, problem, session.link.ring.name)
-                }
+                combine(
+                    session.state, session.deviceStatus.state, session.liveMeasure.state, session.keepalive.problem, session.sync.state,
+                ) { link, status, live, problem, sync ->
+                    LinkParts(link, status, live, problem, session.link.ring.name, sync)
+                }.combine(
+                    combine(session.syncRecords.entries, session.syncRecords.stored, session.link.info) { log, stored, info ->
+                        Triple(log, stored, info.firmware.version.takeIf(String::isNotEmpty))
+                    },
+                ) { parts, (log, stored, firmware) -> parts.copy(log = log, stored = stored, firmware = firmware) }
             }
         }
         sessions?.reconnectRemembered()
         val flowState: StateFlow<ConnectFlowState> = connectFlow?.state ?: MutableStateFlow(ConnectFlowState())
         val initialDetails = DetailsInput(pairing = details.pairingOutcome.value, scanKept = scanKept, scan = details.scanMatch?.value)
-        uiState = combine(linkParts, flowState, adapterState, detailsInput, ::render)
-            .stateIn(scope, SharingStarted.Eagerly, render(LinkParts(), flowState.value, adapterState.value, initialDetails))
+        val switchAndClock: Flow<Boolean> = disconnectAfterSync.combine(clockTicks) { on, _ -> on }
+        uiState = combine(linkParts, flowState, adapterState, detailsInput, switchAndClock, ::render)
+            .stateIn(scope, SharingStarted.Eagerly, render(LinkParts(), flowState.value, adapterState.value, initialDetails, disconnectAfterSync.value))
     }
 
     /**
@@ -138,6 +188,15 @@ class RingViewModel(
             // A ring on its charger is not on a finger: no new measure (the button is disabled too).
             is RingAction.Measure -> controller?.let { if (!it.deviceStatus.state.value.onCharger) it.liveMeasure.start(action.mode) }
             RingAction.StopMeasure -> controller?.liveMeasure?.stop()
+            RingAction.SyncNow -> controller?.sync?.syncNow()
+            is RingAction.SetDisconnectAfterSync -> {
+                if (prefs?.setDisconnectAfterSync(action.on) == false) {
+                    // Not saved: the switch shows what is kept, so the user sees it did not change.
+                    disconnectAfterSync.value = prefs.disconnectAfterSync
+                } else {
+                    disconnectAfterSync.value = action.on
+                }
+            }
             is RingAction.Link -> when (action.action) {
                 LinkAction.CANCEL_SCAN -> connectFlow?.cancelScan()
                 LinkAction.CONTINUE_PAIRING -> connectFlow?.continuePairing()
@@ -205,5 +264,17 @@ class RingViewModel(
         val live: LiveMeasureState = LiveMeasureState(),
         val problem: KeepaliveProblem? = null,
         val ringName: String? = null,
+        val sync: SyncState? = null,
+        val log: List<SyncLogEntry> = emptyList(),
+        val stored: StoredData? = null,
+        val firmware: String? = null,
     )
+}
+
+/** One tick at once, then one a minute: the Ring screen's clock for its "N ago" ages. */
+internal fun everyMinute(): Flow<Unit> = flow {
+    while (true) {
+        emit(Unit)
+        delay(60_000)
+    }
 }

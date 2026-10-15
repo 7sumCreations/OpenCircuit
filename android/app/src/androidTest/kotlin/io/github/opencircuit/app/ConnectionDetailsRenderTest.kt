@@ -30,6 +30,14 @@ import io.github.opencircuit.ble.LinkInfo
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.ScanDiagnostic
 import io.github.opencircuit.ringkit.FirmwareInfo
+import io.github.opencircuit.ringkit.SyncMeasurement.CapacityKind
+import io.github.opencircuit.ringkit.SyncMeasurement.CapacityVerdict
+import io.github.opencircuit.ringkit.SyncMeasurement.Continuity
+import io.github.opencircuit.ringkit.SyncMeasurement.ContinuityKind
+import io.github.opencircuit.store.SyncLogChannel
+import io.github.opencircuit.store.SyncLogEntry
+import java.time.Duration
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -142,5 +150,32 @@ class ConnectionDetailsRenderTest {
         assertTrue(compose.onAllNodesWithText("not available").fetchSemanticsNodes().isNotEmpty())
         compose.onNodeWithText("Show all").performClick()
         compose.onNodeWithText("Link diagnostics").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun showAllGivesTheSyncLogContinuityAndCapacity() {
+        val t = Instant.parse("2026-10-08T09:00:00Z")
+        val entry = SyncLogEntry(
+            startedAt = t.minusMillis(12_500),
+            finishedAt = t,
+            outcome = "PARTIAL",
+            channels = listOf(
+                SyncLogChannel(label = "sleep", channel = 0, syncAcks = listOf("82000082"), continuity = Continuity(ContinuityKind.CONTIGUOUS, 0)),
+                SyncLogChannel(label = "all-day", channel = 3, continuity = Continuity(ContinuityKind.GAP, 2 * 3_600 + 3 * 60)),
+            ),
+            recordsStored = 24,
+            heldBack = 12,
+            heldBackBy = listOf("all-day"),
+            capacity = CapacityVerdict(CapacityKind.LOWER_BOUND, Duration.ofHours(74), null),
+        )
+        show(details(full.copy(syncLog = listOf(entry))))
+
+        compose.onNodeWithText("Show all").performClick()
+
+        compose.onNodeWithText("2 h 3 min missing (all-day channel)").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("at least 3 d 2 h").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Sync log").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("2026-10-08T09:00:00Z · PARTIAL · 24 stored · 12 held back by all-day · 12.5 s").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("  sleep · 0x82 82000082", substring = true).performScrollTo().assertIsDisplayed()
     }
 }

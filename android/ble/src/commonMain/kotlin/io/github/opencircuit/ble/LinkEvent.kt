@@ -17,6 +17,12 @@ internal sealed interface LinkEvent {
     /** A feature write; [command] is already the link's own copy. */
     class Send(val command: ByteArray, val reply: CompletableDeferred<SendResult>) : LinkEvent
 
+    /** The app stored history [page] (already the link's own copy) and asks for its acknowledgement. */
+    class Acknowledge(val page: ByteArray, val reply: CompletableDeferred<SendResult>) : LinkEvent
+
+    /** The app asks for the ring's auth to run again on the open connection ([RingLink.reauthenticate]). */
+    class Reauthenticate(val reply: CompletableDeferred<SendResult>) : LinkEvent
+
     /** A timer of the link ran out. [ticket] tells it from a timer that was cancelled or replaced since. */
     class TimerFired(val timer: LinkTimer, val ticket: Any) : LinkEvent
 
@@ -49,4 +55,10 @@ internal enum class LinkTimer {
 
     /** Marks a connection as up long enough that a drop no longer counts as early. */
     EARLY_DROP,
+
+    /** The wait, after a re-auth's `01 00 00`, for the ring's challenge. */
+    REAUTH,
+
+    /** The wait, after the bring-up's `d0 00 00` is written, for a data frame before `07 00 00` asks again. */
+    FETCH,
 }

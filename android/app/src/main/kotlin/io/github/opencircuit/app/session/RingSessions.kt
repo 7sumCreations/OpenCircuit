@@ -64,7 +64,8 @@ class RingSessions(
 
     override fun reconnectRemembered() {
         val session = currentFlow.value ?: rings.load()?.let(::open) ?: return
-        session.connect()
+        // Nobody tapped for this link-up: the automatic syncs may close it on their throttle.
+        session.reconnect()
     }
 
     /**

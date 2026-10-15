@@ -14,4 +14,8 @@ internal interface KvDao {
 
     @Query("DELETE FROM store_kv WHERE `key` = :key")
     suspend fun delete(key: String)
+
+    /** Every row with `from <= key < until`, in key order (the primary key's index serves both bounds). */
+    @Query("SELECT * FROM store_kv WHERE `key` >= :from AND `key` < :until ORDER BY `key`")
+    suspend fun range(from: String, until: String): List<StoreKvEntity>
 }

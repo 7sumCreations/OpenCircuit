@@ -9,20 +9,21 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * The ring sends its history one page at a time and waits for each page's acknowledgement before
- * the next; a page the link acknowledges is gone from the ring for good. So the link acknowledges
- * every `0x47` / `0x4c` / `0x4d` page and every `0x11` heartbeat exactly once, in arrival order,
- * whatever the frame holds, and those writes (with the auth reply) go ahead of any feature write
- * still waiting, never cutting into the write already in flight (PORTING.md D-190). Upstream does
- * the same per opcode, RingSession.swift:5130-5249; it has no queue to order them.
- * Everything is observed from the scripted ring's write log and the frames delivered.
+ * The ring waits for an acknowledgement after each history page and each `0x11` heartbeat. The
+ * link answers every heartbeat itself, exactly once, in arrival order; a history page is
+ * acknowledged only when the app asks ([RingLink.acknowledge], once the page is stored —
+ * PORTING.md D-261). Both kinds of acknowledgement, and the auth reply, go ahead of any feature
+ * write still waiting, never cutting into the write already in flight (PORTING.md D-190).
+ * Upstream acknowledged every page and heartbeat on receipt, RingSession.swift:5130-5249; it has
+ * no queue to order them. Everything is observed from the scripted ring's write log and the
+ * frames delivered.
  */
 class AckLaneTest {
 
     private fun ack(hexBytes: String) = "write 8327ad98 $hexBytes"
 
     @Test
-    fun everyPageAndHeartbeatIsAckedOnceInArrivalOrderAheadOfQueuedFeatureWrites() = runTest {
+    fun everyHeartbeatIsAckedOnceInArrivalOrderAheadOfQueuedFeatureWritesAndPagesWaitForTheApp() = runTest {
         val (ring, link) = authenticatedLink()
         val delivered = recordFrames(link)
         ring.hold(Operation.WRITE)
@@ -44,13 +45,8 @@ class AckLaneTest {
 
         assertEquals(ack("95 00 00"), whileInFlight, "the write in flight is never cut into")
         assertEquals(
-            listOf(
-                ack("95 00 00"),
-                ack("cc 00 00"), ack("91 00 00"), ack("c7 00 00"), ack("cd 00 00"),
-                ack("cc 00 00"), ack("91 00 00"), ack("c7 00 00"),
-                ack("d0 00 00"), ack("07 00 00"),
-            ),
-            ring.log.takeLast(10),
+            listOf(ack("95 00 00"), ack("91 00 00"), ack("91 00 00"), ack("d0 00 00"), ack("07 00 00")),
+            ring.log.takeLast(5),
         )
         assertEquals(listOf(SendResult.Sent, SendResult.Sent, SendResult.Sent), listOf(inFlight.await(), queued1.await(), queued2.await()))
         assertEquals(listOf("15 00 08 0a b0 a7") + burst.map { it.hexString() }, delivered)
@@ -58,14 +54,18 @@ class AckLaneTest {
     }
 
     @Test
-    fun aPageThatFailsItsChecksumIsStillAckedOnceAndDelivered() = runTest {
+    fun aPageThatFailsItsChecksumIsDeliveredAndAckedOnlyWhenTheAppAsks() = runTest {
         val (ring, link) = authenticatedLink()
         val delivered = recordFrames(link)
         val before = ring.log.size
 
         ring.notify(Fixtures.sleepPage4cBadXor)
         runCurrent()
+        assertEquals(emptyList(), ring.log.drop(before), "not acked on receipt")
+        val result = backgroundScope.async { link.acknowledge(Fixtures.sleepPage4cBadXor) }
+        runCurrent()
 
+        assertEquals(SendResult.Sent, result.await())
         assertEquals(listOf(ack("cc 00 00")), ring.log.drop(before))
         assertEquals(listOf("15 00 08 0a b0 a7", Fixtures.sleepPage4cBadXor.hexString()), delivered)
     }
@@ -86,14 +86,14 @@ class AckLaneTest {
     }
 
     @Test
-    fun aOneBytePageIsStillAckedByItsOpcode() = runTest {
+    fun aOneByteHeartbeatIsStillAckedByItsOpcode() = runTest {
         val (ring, _) = authenticatedLink()
         val before = ring.log.size
 
-        ring.notifyAll(listOf(hex("4c"), hex("47"), hex("4d"), hex("11")))
+        ring.notify(hex("11"))
         runCurrent()
 
-        assertEquals(listOf(ack("cc 00 00"), ack("c7 00 00"), ack("cd 00 00"), ack("91 00 00")), ring.log.drop(before))
+        assertEquals(listOf(ack("91 00 00")), ring.log.drop(before))
     }
 
     @Test
@@ -119,6 +119,7 @@ class AckLaneTest {
     @Test
     fun aChallengeInTheMiddleOfABurstIsAnsweredInArrivalOrderAheadOfQueuedFeatureWrites() = runTest {
         val (ring, link) = authenticatedLink()
+        recordFrames(link)
         ring.hold(Operation.WRITE)
         backgroundScope.async { link.send(hex("950000")) }
         runCurrent()
@@ -127,12 +128,15 @@ class AckLaneTest {
 
         ring.notifyAll(listOf(Fixtures.sleepPage4c, Fixtures.challengeFrame0f, Fixtures.heartbeat(1)))
         runCurrent()
+        val pageAck = backgroundScope.async { link.acknowledge(Fixtures.sleepPage4c) }
+        runCurrent()
         ring.release(Operation.WRITE)
         runCurrent()
 
         assertEquals(
-            listOf(ack("95 00 00"), ack("cc 00 00"), ack("01 01 4b cc e6 00"), ack("91 00 00"), ack("d0 00 00")),
+            listOf(ack("95 00 00"), ack("01 01 4b cc e6 00"), ack("91 00 00"), ack("cc 00 00"), ack("d0 00 00")),
             ring.log.takeLast(5),
         )
+        assertEquals(SendResult.Sent, pageAck.await())
     }
 }

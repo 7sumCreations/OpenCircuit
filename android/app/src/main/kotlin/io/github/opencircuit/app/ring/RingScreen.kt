@@ -11,11 +11,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import io.github.opencircuit.app.details.ConnectionDetailsCard
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.live.MeasureSection
+import io.github.opencircuit.app.sync.SyncLifecycle
 import io.github.opencircuit.ble.RememberedRing
 
 /** What the user can do on the Ring screen. */
@@ -34,17 +37,38 @@ sealed interface RingAction {
 
     /** Tapped Copy on Connection details: the masked text goes to the clipboard. */
     data object CopyDetails : RingAction
+
+    /** Tapped Sync now on the Ring data card. */
+    data object SyncNow : RingAction
+
+    /** Turned the Ring data card's "Disconnect after syncing" switch [on] or off. */
+    data class SetDisconnectAfterSync(val on: Boolean) : RingAction
 }
 
 /**
- * The Ring screen: the connection card (link state and battery), then — once the ring is
- * authenticated — the Measure section, then Connection details (in every build). Takes its whole state as a value so it renders the same
+ * The Ring screen: the connection card (link state and battery), the Ring data card (last sync,
+ * Sync now, the switch), then — once the ring is authenticated — the Measure section, then
+ * Connection details (in every build). Takes its whole state as a value so it renders the same
  * from the app or from a hand-built state in a test. [pulse] animates the live chart's endpoint;
- * the app turns it off when the system asks for reduced motion, tests turn it off.
+ * the app turns it off when the system asks for reduced motion, tests turn it off. [detailsTools]
+ * is drawn at the foot of Connection details (the debug build's test actions; null in release).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Modifier = Modifier, pulse: Boolean = true) {
+fun RingScreen(
+    state: RingUiState,
+    onAction: (RingAction) -> Unit,
+    modifier: Modifier = Modifier,
+    pulse: Boolean = true,
+    detailsTools: (@Composable () -> Unit)? = null,
+) {
+    // The screen stays on while a sync runs: the app stays on top and Android does not freeze it.
+    val view = LocalView.current
+    val keepOn = SyncLifecycle.keepScreenOn(state.ringData.syncing)
+    DisposableEffect(view, keepOn) {
+        view.keepScreenOn = keepOn
+        onDispose { view.keepScreenOn = false }
+    }
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = { TopAppBar(title = { Text(state.title) }) },
@@ -54,6 +78,11 @@ fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Mod
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ConnectionCard(state.card, onAction = { onAction(RingAction.Link(it)) }, onPick = { onAction(RingAction.Pick(it)) })
+            RingDataCard(
+                state.ringData,
+                onSyncNow = { onAction(RingAction.SyncNow) },
+                onDisconnectAfterSync = { onAction(RingAction.SetDisconnectAfterSync(it)) },
+            )
             state.measure?.let { measure ->
                 MeasureSection(
                     measure = measure,
@@ -62,7 +91,7 @@ fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Mod
                     onStop = { onAction(RingAction.StopMeasure) },
                 )
             }
-            ConnectionDetailsCard(state.details, onCopy = { onAction(RingAction.CopyDetails) })
+            ConnectionDetailsCard(state.details, onCopy = { onAction(RingAction.CopyDetails) }, tools = detailsTools)
         }
     }
 }

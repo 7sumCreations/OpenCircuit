@@ -74,6 +74,8 @@ class MainActivity : ComponentActivity() {
                     connectFlow,
                     container.adapterStates.state,
                     container.detailsSources,
+                    prefs = container.appPrefs,
+                    wallClock = { java.time.Instant.ofEpochMilli(container.clock.nowMillis()) },
                 )
             }
         }
@@ -109,19 +111,24 @@ class MainActivity : ComponentActivity() {
                         val state by ringViewModel.uiState.collectAsStateWithLifecycle()
                         val sheet by ringViewModel.pairingSheet.collectAsStateWithLifecycle()
                         LaunchedEffect(sheet) { sheet?.let(::showPairingSheet) }
-                        RingScreen(state = state, onAction = ::onRingAction, pulse = !reducedMotion())
+                        RingScreen(state = state, onAction = ::onRingAction, pulse = !reducedMotion(), detailsTools = VariantLinks.detailsTools)
                     }
                 }
             }
         }
     }
 
+    // A sync is paused when the user leaves the app and resumed on return (SyncLifecycle decides;
+    // no foreground service in this version). Through the session, never through the view model,
+    // which is only built once the Ring screen shows.
     override fun onStart() {
         super.onStart()
         container.adapterStates.start()
+        container.ringSessions.current.value?.sync?.onAppStarted()
     }
 
     override fun onStop() {
+        container.ringSessions.current.value?.sync?.onAppStopped(isChangingConfigurations)
         container.adapterStates.stop()
         super.onStop()
     }

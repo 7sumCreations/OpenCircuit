@@ -177,13 +177,14 @@ class ConnectionDetailsTest {
         val screen = screen()
         screen.link!!.emitFrame(TestFrames.unknown)
         screen.link.emitFrame(TestFrames.unknown)
-        screen.link.emitFrame(TestFrames.historyPage47)
+        // A dense PPG frame (0x48): no route for it (history pages 0x47 / 0x4c / 0x4d have one since E9).
+        screen.link.emitFrame(hex("48000048"))
         screen.link.emitTeardown(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 3))
         screen.link.emitTeardown(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 2))
         runCurrent()
 
         val rows = screen.details.rows
-        assertEquals("0x47 × 1 · 0xee × 2", screen.value(rows, "Frames not handled"))
+        assertEquals("0x48 × 1 · 0xee × 2", screen.value(rows, "Frames not handled"))
         assertEquals("none", screen.value(rows, "Handler failures"))
         assertEquals("2 · last: link dropped · 5 frames undelivered in all", screen.value(rows, "Connections torn down"))
     }

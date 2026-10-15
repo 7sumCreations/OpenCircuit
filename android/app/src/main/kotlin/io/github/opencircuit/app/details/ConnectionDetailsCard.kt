@@ -26,13 +26,19 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The Connection details card. Collapsed, it shows a few rows with the ring's address and name
- * masked; "Show all" expands it to every row with full values, the decoded advertisement and the
+ * masked; "Show all" expands it to every row with full values, the decoded advertisement, the
  * link's whole diagnostics list (nothing cut off: Bluetooth on/off and bond changes must be
- * readable there). Copy hands the masked text to [onCopy]; the user's tap is the only way it
- * leaves the screen. Drawn from [details] alone.
+ * readable there) and the sync log. Copy hands the masked text to [onCopy]; the user's tap is the only way it
+ * leaves the screen. Drawn from [details] alone, plus [tools] at its foot when given (the debug
+ * build's test actions; null in release).
  */
 @Composable
-fun ConnectionDetailsCard(details: ConnectionDetailsUi, onCopy: () -> Unit, modifier: Modifier = Modifier) {
+fun ConnectionDetailsCard(
+    details: ConnectionDetailsUi,
+    onCopy: () -> Unit,
+    modifier: Modifier = Modifier,
+    tools: (@Composable () -> Unit)? = null,
+) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -63,6 +69,15 @@ fun ConnectionDetailsCard(details: ConnectionDetailsUi, onCopy: () -> Unit, modi
                 details.diagnostics.forEach {
                     Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                 }
+                Section("Sync log")
+                Text(
+                    SYNC_LOG_HINT,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                details.syncLog.forEach {
+                    Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                }
             }
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -74,6 +89,7 @@ fun ConnectionDetailsCard(details: ConnectionDetailsUi, onCopy: () -> Unit, modi
                 Spacer(modifier = Modifier.padding(4.dp))
                 TextButton(onClick = onCopy, modifier = Modifier.semantics { contentDescription = "Copy connection details" }) { Text("Copy") }
             }
+            tools?.invoke()
         }
     }
 }
@@ -91,6 +107,11 @@ private fun DetailLine(row: DetailRow) {
         Text(row.value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.55f))
     }
 }
+
+/** Says how to read the sync log: newest sync first, each channel under it, then the sync's measurements. */
+const val SYNC_LOG_HINT =
+    "Newest sync first; each channel's line under it, then the records it brought, the ring's capacity verdict and its firmware. " +
+        "Times are UTC."
 
 /** Says what to look for in the list: the link's adapter and bond events, which only a phone shows. */
 const val DIAGNOSTICS_HINT =

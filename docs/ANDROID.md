@@ -28,9 +28,15 @@ the phone.
   health-store state; a moved entry keeps its health-store sample ids), and the frozen daily
   headache-risk rows, written once per day;
 - small stored values in one key-value table: the sync and alert ledgers, the ring alarm, workout
-  recovery state, the energy ledger and the sleep epoch archive. A value that cannot be read loads
-  as empty or unknown, never as a wrong value; an alarm that cannot be read is kept as stored until
-  the person saves a new one.
+  recovery state, the energy ledger and the sleep epoch archive (which keeps every night not yet
+  staged, up to 14 days). The same table holds the **history journal** — each history page the
+  ring sends, stored raw before the ring is told it may drop it, until a sync's commit has moved
+  its records into the samples — the **raw-page store**, older firmware's `0x40` history pages
+  kept byte for byte so a later version can decode them (up to 5,000 per ring, the oldest dropped
+  first) — and the **sync log**, the last 50 syncs per ring (when, how each channel went, what was
+  stored or held back, and the measurements Connection details shows).
+  A value that cannot be read loads as empty or unknown, never as a wrong value; an alarm that
+  cannot be read is kept as stored until the person saves a new one.
 
 The store deletes only raw ring data on its own: samples, step samples and daytime readings older
 than 30 days, plus a one-time clean-up of raw samples that fail the import checks (heart rates
@@ -121,10 +127,15 @@ writes nothing when it refuses: before `Authenticated` (`NOT_AUTHENTICATED`); th
 commands `01 00 00` and `01 01 …` (`AUTH_COMMAND_RESERVED`); any command outside the `0x01` status
 family without a bond (`NOT_BONDED`); a history sync open while the ATT MTU is below 246, too small
 for a whole history frame (`HISTORY_UNSAFE`, the MTU gate; `LinkInfo.historySafe`).
-Acknowledgements of the ring's pages (`0x47`, `0x4C`, `0x4D`) and heartbeats (`0x11`) are the
-link's job: each is written once, in arrival order, ahead of any waiting `send()`. If the
-coroutine calling `send()` is cancelled while its write still waits its turn, the write is dropped
-and never reaches the ring; a write already under way completes.
+The link answers the ring's heartbeat (`0x11`, with `91 00 00`) by itself. A history page (`0x47`,
+`0x4C`, `0x4D`) is acknowledged only when the app asks (`acknowledge(page)`), after it has stored
+the page: the ring drops a page once it has the acknowledgement, so a page the phone could not
+store is never acknowledged and the ring offers it again. The link writes the acknowledgement only
+for a page this connection delivered and has not acknowledged yet, ahead of any waiting `send()`.
+`reauthenticate()` runs the ring's auth again on an open connection (the link writes `01 00 00`
+and answers the challenge itself; the app never writes it). If the coroutine calling `send()` is
+cancelled while its write still waits its turn, the write is dropped and never reaches the ring; a
+write already under way completes.
 
 **One collector at a time.** `frames` and `teardowns` each take one collector at a time: a second
 collection while one runs throws `IllegalStateException`. Frames wait in order while nobody
@@ -184,8 +195,9 @@ testImplementation(testFixtures(project(":ble")))
 The app (`:app`, package `io.github.opencircuit.android`) is published as a signed APK on this
 fork's GitHub Releases, as a **pre-release** while it is in early development. The first is
 `android-v0.1.0`: onboarding, finding and pairing the ring, the connection card (battery,
-charging, the ring's state) and a live heart-rate or SpO₂ reading. It does not sync history and
-does not write to Health Connect yet. Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
+charging, the ring's state) and a live heart-rate or SpO₂ reading. From `android-v0.2.0` the app
+also syncs the ring's history onto the phone (see "Syncing your ring"); it does not write to Health
+Connect yet. Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
 and its SHA-256 checksum file, and the release notes give the signing certificate's digest.
 
 > **Not affiliated with, authorized, or endorsed by RingConn or JZ_Tech. Not a medical device.**
@@ -252,11 +264,58 @@ the charger. Disconnect ends this connection; **Stop reconnecting** makes the ap
 settles) with a chart; stop it at any time. The app asks the ring to start, reads the ring's answer,
 and stops the ring's mode again afterwards. If the ring refuses or stops answering, the card says so.
 
+**Syncing your ring.** The **Ring data** card, under the connection card, keeps the ring's history
+on the phone. **Sync now** connects to the ring, downloads everything it recorded since the last
+sync — heart rate, HRV, blood oxygen, breathing and every night's sleep, from both of the ring's
+history channels — saves it, and with **Disconnect after syncing** on (the default) closes the
+connection once the data is saved. So you can sync once a day, or every few days, without keeping
+the ring connected. The card then shows when you last synced, what is stored on the phone (date
+range, nights, last night's sleep) and the last sync's result.
+
+- **When it syncs by itself.** Each time the ring connects (opening the app reconnects it), unless
+  the last complete sync was under 5 minutes ago — but not during your night: the app learns your
+  usual sleep window from the nights it has stored (21:30 to 10:00 until it has three), waits, and
+  syncs once you are up (the very first sync runs at any hour). With **Disconnect after syncing** off the ring stays connected and syncs
+  about every hour. **Sync now** always syncs, at any hour.
+- **Why an automatic sync didn't run.** Connection details lists "Auto-sync skipped" rows, each with
+  the trigger it held back (link-up, catch-up after the night, hourly) and the reason: too soon after
+  the last complete sync, during your night, a sync already running, or a measurement running. With
+  **Disconnect after syncing** on, a skipped automatic sync (too soon, or during your night) closes
+  the connection, so the app never holds an idle link; the sync after the night connects the ring
+  itself while the app is still running. A connection you started yourself (Scan & connect, Try
+  again, Sync now) or one a measurement is using is never closed.
+- **A ring that is slow to answer.** Some rings do not answer the app's first request and send their
+  first data frame on their own timer, up to about two minutes after connecting. A sync waits up to
+  2 minutes for it before reporting "Couldn't reach the ring".
+- **Older firmware.** A ring on older Gen 2 firmware (seen on FR02.013) sends history this version
+  can't read. The card says so; the pages are kept on the phone for a later version, and updating
+  the ring's firmware in the RingConn app fixes it now.
+- **Keep the app open.** The screen stays on while a sync runs. Leaving the app pauses it ("Sync
+  paused — open OpenCircuit to finish"); what was already received is saved, and coming back
+  finishes it. Nothing is lost by a pause, a dropped connection or Bluetooth turned off: each page
+  is saved on the phone before the ring is told it may drop it, so the ring sends anything not
+  saved again next time. Measure is unavailable during a sync.
+- **"N records waiting — the all-day channel didn't answer".** A sync stores a record only once
+  every channel has been drained past it, so nothing older is ever skipped; when a channel did not
+  answer, did not finish or was not reached, newer records wait on the phone for the next sync.
+- **The overdue warning.** A ring keeps only a few days of history: a Gen 2 or Gen 2 Air about 7
+  days, a Gen 3 about 10. The card warns in amber at 4 days (Gen 3: 7) and in red at 5 days
+  (Gen 3: 9), counted from the oldest record the ring may still hold — a sync that left a channel
+  unfinished does not reset it.
+- **Steps and skin temperature are only recorded while the ring is connected.** They are not in
+  the ring's history (PROTOCOL.md §5.4), so a ring that syncs and disconnects has no steps or
+  skin temperature for the time it was disconnected. Turn **Disconnect after syncing** off to keep
+  them coming while the app is open.
+
 **Connection details.** Expand the card to see the ring's facts (firmware, address type, ATT MTU,
 whether it is history-safe) and **Link diagnostics**: the last steps of the connection with times,
 the pairing prompt, and a **Last measure** row with what the ring answered to the last live
-request. **Copy connection details** puts the text on the clipboard with the ring's address and name
-masked, so it is safe to paste into a bug report.
+request. **Last sync continuity** says whether the last sync's records joined the one before ("No
+gap since last sync", or how long is missing on which channel), and **Ring capacity** what the syncs
+so far say about how much the ring keeps (a lower bound, whether it overwrites its oldest records
+or stops when full, or why it cannot tell yet). The **Sync log** lists the last syncs, newest
+first, with what each channel did. **Copy connection details** puts the text on the clipboard with
+the ring's address and name masked, so it is safe to paste into a bug report.
 
 **Privacy.** The app has no internet permission and sends nothing anywhere. Its data is excluded
 from both cloud backup and device-to-device transfer. It is not a medical device; talk to a
@@ -272,18 +331,18 @@ clinician about any health concern.
 - **"Ring isn't streaming".** The ring has not accepted this phone. Forget the ring in Android's
   Bluetooth settings, then pair again from the app.
 - **A measure fails.** Open Connection details and read "Last measure": it shows what the ring sent.
+- **"Couldn't reach the ring — try again".** A sync now waits up to 2 minutes for the ring's first
+  data frame, because some rings only start talking on their own timer. Keep the ring close, and tap
+  Sync now again.
+- **"The ring didn't answer the sync request".** Force-stop the official RingConn app if it is
+  installed and tap Sync now again; the connection is kept, so it can be retried at once.
+- **The same records stay "waiting" sync after sync.** Open Connection details and copy the Sync
+  log: it shows which channel did not finish and how each open went, which is what a bug report
+  needs.
+- **"This ring's firmware sends history this version can't read yet".** The ring is on older
+  firmware (seen on FR02.013), which sends its history in a format this version can't read yet.
+  The pages are kept on your phone. Update the ring's firmware in the RingConn app and sync again.
 
 ## FAQ
 
-**Does it need an account or the internet?** No. There is no account, no cloud and no server.
-
-**Is this the RingConn app?** No. It is an independent port of OpenCircuit and is not affiliated
-with RingConn.
-
-**Can it write to Health Connect or sync history?** Not yet; the current release gives live heart
-rate and SpO₂, battery and connection status.
-
-**Which rings work?** RingConn Gen 2, Gen 2 Air and Gen 3, on Android 14 or later.
-
-**Does "Stop reconnecting" unpair the ring?** No. It forgets the ring in the app only; Android's
-own pairing is kept, so pairing again later asks nothing.
+See [`ANDROID_FAQ.md`](ANDROID_FAQ.md): what the app can and can't do today, and common questions.

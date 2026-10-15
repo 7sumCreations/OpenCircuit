@@ -98,9 +98,12 @@ class HistoryTypeGuardTest {
         assertEquals(1, before.size)
 
         page[8 + 3] = 0x13 // the caller reuses its array (subtype byte; the XOR no longer matches)
-        session.complete(hex("500000120c2233440c223344")) // reparses every buffered page
+        session.complete(hex("500000120c2233440c223344"))
 
-        assertEquals(1, session.activityRecords.size, "the buffered page must not change with the caller's array")
+        val untouched = EpochSyncSession()
+        untouched.appendActivityPage(activityPage(counterLow = 0xc3))
+        untouched.complete(hex("500000120c2233440c223344"))
+        assertEquals(untouched, session, "the buffered page must not change with the caller's array")
         assertEquals(0x12, session.activityRecords.single().subtype)
         assertEquals(0x0cL, session.activityRecords.single().timestamp.minusSeconds(Command.SYNC_EPOCH).epochSecond ushr 24)
     }

@@ -64,6 +64,37 @@ object EpochArchive {
         return all.filter { it.counter >= cutoff }
     }
 
+    /**
+     * The most the archive keeps while nights wait to be staged from it: 14 days — a Gen 3 ring's
+     * ~10 days of storage plus a margin (about 16k records, measured at ~15 ms to encode and write).
+     */
+    val STAGED_RETENTION_CAP: Duration = Duration.ofDays(14)
+
+    /**
+     * How far back from [newest] the archive keeps records once nights are staged from it
+     * (Kotlin-only, PORTING.md D-270): back to [RETENTION] before [stagedThrough] — the end of the
+     * newest night saved with every earlier one saved too — so every night not yet staged stays,
+     * never less than [RETENTION], never more than [STAGED_RETENTION_CAP]. Nothing staged yet
+     * (null) keeps the cap: a first backlog of several days is kept until its nights are staged.
+     * Upstream keeps a flat 30 h, which prunes every night of a multi-day drain but the last.
+     */
+    fun retentionKeepingUnstaged(newest: Instant, stagedThrough: Instant?): Duration {
+        if (stagedThrough == null) return STAGED_RETENTION_CAP
+        val sinceStaged = Duration.between(stagedThrough.minus(RETENTION), newest)
+        return minOf(STAGED_RETENTION_CAP, maxOf(RETENTION, sinceStaged))
+    }
+
+    /**
+     * [merge] with the retention [retentionKeepingUnstaged] gives for [stagedThrough], anchored on
+     * the newest record not dated after [notAfter] (required: PORTING.md D-44 — a far-future
+     * garbage record can neither be kept nor become the anchor that prunes genuine history).
+     */
+    fun mergeKeepingUnstaged(existing: List<BulkRecord>, incoming: List<BulkRecord>, stagedThrough: Instant?, notAfter: Instant): List<BulkRecord> {
+        val newest = (existing.asSequence() + incoming.asSequence()).map { it.date() }.filter { !it.isAfter(notAfter) }.maxOrNull()
+            ?: return emptyList()
+        return merge(existing, incoming, retentionKeepingUnstaged(newest, stagedThrough), notAfter)
+    }
+
     /** Serialize to a flat blob (concatenated 23-byte records). A new array on every call. */
     fun encode(records: List<BulkRecord>): ByteArray {
         val out = ByteArray(records.size * BulkRecord.LENGTH)

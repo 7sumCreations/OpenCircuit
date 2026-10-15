@@ -109,7 +109,7 @@ class LinkDiagnosticsTest {
         advance(5_000)
 
         assertEquals("write", link.detailOf("timed out"))
-        assertEquals("linkDropped, 1 undelivered frames", link.detailOf("closed"))
+        assertEquals("linkDropped, 1 undelivered frames, 0 pages unacknowledged", link.detailOf("closed"))
         assertEquals("attempt 1 in 1000 ms", link.detailOf("reconnect scheduled"))
     }
 

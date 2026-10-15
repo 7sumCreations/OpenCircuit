@@ -1,8 +1,12 @@
 package io.github.opencircuit.ringkit
 
-// Accumulates raw epoch pages across one sync drain and reparses them once the end-of-history
-// cursor report reveals the stream high byte. Port of upstream
-// ios/OpenCircuitKit/Sources/OpenCircuitKit/EpochSyncSession.swift:5-76 (@ b1c2fdd).
+// Accumulates raw epoch pages across one sync drain and records the end-of-history cursor report.
+// Port of upstream ios/OpenCircuitKit/Sources/OpenCircuitKit/EpochSyncSession.swift:5-76 (@ b1c2fdd).
+//
+// Upstream dates records from the stream high byte and reparses every buffered page when the `0x50`
+// report reveals it. Each record carries its own full counter (PORTING.md D-260), so here records
+// are dated once, as they arrive, and the report only sets [streamHighByte] and [endOfHistory]: a
+// backlog that spans the counter's `0x0c` → `0x0d` rollover keeps every record at its own date.
 //
 // OWNERSHIP. Upstream is a Swift `mutating struct`, so every assignment was an independent copy.
 // Here it is a mutable class owned by ONE drain: sharing the reference shares the state. A caller
@@ -19,6 +23,7 @@ import java.util.Locale
  */
 class EpochSyncSession(syncOpenCursor: Long? = null) {
 
+    /** The cursor's high byte, from the sync-open cursor and then the `0x50` report. Records do not depend on it. */
     var streamHighByte: Int
         private set
     var activityRecords: List<EpochRecord.ActivityRecord> = emptyList()
@@ -42,31 +47,33 @@ class EpochSyncSession(syncOpenCursor: Long? = null) {
         }
     }
 
-    /** Buffer a `0x4C` page and return the records parsed from it with the current high byte. */
+    /** Buffer a private copy of a `0x4C` page and return the records parsed from it. */
     fun appendActivityPage(data: ByteArray): List<EpochRecord.ActivityRecord> {
-        activityPages += data.copyOf()
-        val records = EpochRecord.parseActivityPage(data, streamHighByte)
+        val page = data.copyOf()
+        activityPages += page
+        val records = EpochRecord.parseActivityPage(page)
         activityRecords = activityRecords + records
         return records
     }
 
-    /** Buffer a `0x47` page and return the records parsed from it with the current high byte. */
+    /** Buffer a private copy of a `0x47` page and return the records parsed from it. */
     fun appendPPGPage(data: ByteArray): List<EpochRecord.PPGRecord> {
-        ppgPages += data.copyOf()
-        val records = EpochRecord.parsePPGPage(data, streamHighByte)
+        val page = data.copyOf()
+        ppgPages += page
+        val records = EpochRecord.parsePPGPage(page)
         ppgRecords = ppgRecords + records
         return records
     }
 
     /**
-     * Apply the `0x50` end-of-history frame: adopt its high byte and reparse every buffered page.
-     * Returns null (and changes nothing) when [data] is not a valid end-of-history frame.
+     * Apply the `0x50` end-of-history frame: keep it and adopt its high byte. Records already
+     * parsed keep their own dates. Returns null (and changes nothing) when [data] is not a valid
+     * end-of-history frame.
      */
     fun complete(data: ByteArray): EpochRecord.EndOfHistoryFrame? {
         val frame = EpochRecord.parseEndOfHistory(data) ?: return null
         endOfHistory = frame
         streamHighByte = frame.streamHighByte
-        reparseBufferedPages()
         return frame
     }
 
@@ -88,11 +95,6 @@ class EpochSyncSession(syncOpenCursor: Long? = null) {
         activityPages.mapTo(c.activityPages) { it.copyOf() }
         ppgPages.mapTo(c.ppgPages) { it.copyOf() }
         return c
-    }
-
-    private fun reparseBufferedPages() {
-        activityRecords = activityPages.flatMap { EpochRecord.parseActivityPage(it, streamHighByte) }
-        ppgRecords = ppgPages.flatMap { EpochRecord.parsePPGPage(it, streamHighByte) }
     }
 
     /** Content equality over the whole state, buffered pages included (upstream `Equatable`). */

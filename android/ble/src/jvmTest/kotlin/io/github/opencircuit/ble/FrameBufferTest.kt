@@ -13,10 +13,10 @@ import kotlin.test.assertFailsWith
 
 /**
  * Every frame the ring sends, except the `81 00` challenge the link answers itself, waits in one
- * ordered buffer per connection until the one collector of `frames` takes it. The link has
- * already acknowledged most of them to the ring, which will never send them again, so none may
- * be lost: frames wait while nobody collects, a collector that stops (or is cancelled) leaves the
- * rest for the next one, and a teardown counts what it had to drop (PORTING.md D-189).
+ * ordered buffer per connection until the one collector of `frames` takes it. None may be lost
+ * without a trace: frames wait while nobody collects, a collector that stops (or is cancelled)
+ * leaves the rest for the next one, and a teardown counts what it had to drop (PORTING.md D-189)
+ * and, apart, the history pages nobody acknowledged (PORTING.md D-261).
  */
 class FrameBufferTest {
 
@@ -142,8 +142,8 @@ class FrameBufferTest {
         ring.dropConnection(8)
         runCurrent()
 
-        // The first data frame and the 5 pages were never collected.
-        assertEquals(listOf(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 6)), teardowns)
+        // The first data frame and the 5 pages were never collected; the 5 pages were never acknowledged.
+        assertEquals(listOf(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = 6, pagesUnacknowledged = 5)), teardowns)
     }
 
     @Test
@@ -169,7 +169,8 @@ class FrameBufferTest {
         val all = listOf(firstDataFrame) + frames.map { it.hexString() }
         assertEquals(all.take(3), delivered.take(3))
         assertEquals(3, delivered.size, "nothing of the torn-down connection is delivered after its teardown")
-        assertEquals(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = all.size - 3), teardowns.first())
+        // Nobody acknowledged a page, delivered or not: all 10 are counted for the ring to offer again.
+        assertEquals(LinkTeardown(TeardownReason.LINK_DROPPED, undeliveredFrames = all.size - 3, pagesUnacknowledged = 10), teardowns.first())
     }
 
     @Test
@@ -188,7 +189,7 @@ class FrameBufferTest {
 
     /** The perf flag on the frame buffer: a 2 000-page burst with nobody collecting. */
     @Test
-    fun aBurstOf2000PagesWithNoCollectorIsBufferedWholeAndEveryPageIsAckedOnce() = runTest {
+    fun aBurstOf2000PagesWithNoCollectorIsBufferedWholeAndOnlyTheHeartbeatsAreAcked() = runTest {
         val (ring, link) = authenticatedLink()
         val before = ring.log.size
         val frames = burst(2_000)
@@ -199,10 +200,9 @@ class FrameBufferTest {
         val got = recordFrames(link)
 
         assertEquals(2_020, frames.size)
-        assertEquals(1_000, writes.count { it == "write 8327ad98 cc 00 00" })
-        assertEquals(1_000, writes.count { it == "write 8327ad98 c7 00 00" })
+        // Pages wait for the app's acknowledge(); the link answers only the 20 heartbeats.
         assertEquals(20, writes.count { it == "write 8327ad98 91 00 00" })
-        assertEquals(2_020, writes.size, "nothing but one ACK per frame")
+        assertEquals(20, writes.size, "nothing but one ACK per heartbeat")
         assertEquals(listOf(firstDataFrame) + frames.map { it.hexString() }, got)
         assertEquals(emptyList(), ring.violations)
     }
