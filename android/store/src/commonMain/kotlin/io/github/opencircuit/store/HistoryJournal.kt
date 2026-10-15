@@ -135,18 +135,6 @@ class HistoryJournal internal constructor(private val db: StoreDatabase, private
         }
     }
 
-    /**
-     * Deletes every row of the ring's journal up to and including sequence number [seq], readable
-     * or not; returns how many. Joins the caller's transaction when one is open, so a commit
-     * deletes the pages it consumed in the same transaction that stored their records.
-     */
-    suspend fun deleteThrough(ringId: String, seq: Long): Int {
-        val prefix = prefixOf(ringId)
-        if (seq < FIRST_SEQ) return 0
-        val until = if (seq >= MAX_SEQ) prefix + END else keyOf(prefix, seq + 1)
-        return db.withWriteTransaction { kv.deleteRange(prefix + FIRST_KEY, until) }
-    }
-
     private fun decode(seq: Long, text: String): Entry? {
         val decoded = readStored(text) { root ->
             val o = root.obj()

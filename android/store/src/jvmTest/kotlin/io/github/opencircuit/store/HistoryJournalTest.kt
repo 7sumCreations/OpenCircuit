@@ -82,19 +82,19 @@ class HistoryJournalTest {
             assertContentEquals(page4c, journal.read("ring").entries.single().page)
             assertContentEquals(page47, journal.read("ring2").entries.single().page)
 
-            journal.deleteThrough("ring", journal.read("ring").entries.single().seq)
+            journal.delete("ring", listOf(journal.read("ring").entries.single().seq))
             assertEquals(emptyList(), journal.read("ring").entries)
             assertEquals(1, journal.read("ring2").entries.size, "the other ring's page is kept")
         }
     }
 
     @Test
-    fun deleteThroughRemovesExactlyThePagesUpToItAndSequenceNumbersAreNeverReused() = runBlocking<Unit> {
+    fun deletingTheOldestPagesKeepsTheRestAndSequenceNumbersAreNeverReused() = runBlocking<Unit> {
         withInMemoryStore { db ->
             val journal = HistoryJournal(db)
             val seqs = (1..4).map { journal.append("ring-A", page4c, at.plusSeconds(it.toLong()), drainId = 3) }
 
-            val deleted = journal.deleteThrough("ring-A", seqs[1])
+            val deleted = journal.delete("ring-A", seqs.take(2))
             val next = journal.append("ring-A", page47, at, drainId = null)
 
             assertEquals(2, deleted)
