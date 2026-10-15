@@ -91,6 +91,7 @@ object SyncLogEntries {
             finishedAt = report.finishedAt,
             outcome = report.outcome.name,
             paused = report.paused,
+            cutByTest = report.cutByTest,
             firmware = firmware,
             channels = channels,
             recordsStored = commit?.records ?: 0,

@@ -154,6 +154,8 @@ class AppContainer(context: Context) {
                 marks = PrefsSyncMarks(keyValues, ringId),
             ),
             zone = { ZoneId.systemDefault() },
+            // The debug build's sync test action; the release build's never cuts.
+            faults = VariantLinks.syncFaults,
         )
     }
 

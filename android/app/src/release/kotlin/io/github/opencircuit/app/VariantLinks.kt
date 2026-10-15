@@ -1,11 +1,13 @@
 package io.github.opencircuit.app
 
+import androidx.compose.runtime.Composable
+import io.github.opencircuit.app.sync.SyncFaultInjector
 import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.RingScanner
 import kotlinx.coroutines.CoroutineScope
 
-/** Release build: no demo ring. The debug build's `VariantLinks` supplies one. */
+/** Release build: no demo ring and no sync test action. The debug build's `VariantLinks` supplies both. */
 internal object VariantLinks {
     /** No demo link in release: every ring gets the phone's Bluetooth link. */
     @Suppress("UNUSED_PARAMETER")
@@ -16,4 +18,10 @@ internal object VariantLinks {
 
     /** Nothing added to the Ring screen's title. */
     const val titleSuffix: String = ""
+
+    /** A release sync is never cut. */
+    val syncFaults: SyncFaultInjector = SyncFaultInjector.NONE
+
+    /** Nothing at the foot of Connection details. */
+    val detailsTools: (@Composable () -> Unit)? = null
 }

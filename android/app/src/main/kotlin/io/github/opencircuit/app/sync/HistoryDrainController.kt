@@ -150,6 +150,8 @@ data class SyncReport(
     val planned: List<String> = emptyList(),
     /** The distinct `0x4c` record counters the sync delivered, over every channel. */
     val counters: Set<Long> = emptySet(),
+    /** The debug build's test action cut this sync on purpose after a set number of pages ([SyncFaultInjector]). */
+    val cutByTest: Boolean = false,
 )
 
 /** A fault a sync reports beside its outcome. */
@@ -244,6 +246,12 @@ class HistoryDrainController(
      * logged, never thrown: the sync's data is stored either way.
      */
     private val record: suspend (SyncReport) -> Unit = {},
+    /**
+     * The debug build's sync test action ([SyncFaultInjector]), taken once at each drain's start:
+     * an armed count N drops the link right after the drain's Nth page is stored and acknowledged,
+     * and the sync ends as for any lost link, its report [SyncReport.cutByTest]. Never cuts by default.
+     */
+    private val faults: SyncFaultInjector = SyncFaultInjector.NONE,
 ) {
     private val stateFlow = MutableStateFlow(SyncState())
     private val syncingFlow = MutableStateFlow(false)
@@ -383,7 +391,15 @@ class HistoryDrainController(
         val run = SyncRun(deadline = monotonicMillis() + AndroidDrainTiming.WHOLE_SYNC.toMillis(), window = nightWindow())
         val drainId = wallClock().toEpochMilli()
         val signals = Channel<HistorySignal>(Channel.UNLIMITED)
-        pages.attach(drainId) { signals.trySend(it) }
+        val cutAfter = faults.takeCutAfterPages()
+        val cut = AtomicBoolean(false)
+        // On the ACK lane, after the Nth page's acknowledgement was written: the link-lost path does the rest.
+        pages.attach(drainId, { signals.trySend(it) }, cutAfter) {
+            cut.set(true)
+            log("history-drain: the sync test action cuts the link after $cutAfter pages")
+            link.disconnect()
+        }
+        if (cutAfter != null) log("history-drain: the sync test action is armed: cut after $cutAfter pages")
         try {
             coroutineScope {
                 val watcher = launch {
@@ -416,7 +432,7 @@ class HistoryDrainController(
         val evidence = SyncEvidence(sleep?.verdict, sleep?.records ?: 0, run.nightOnOtherChannels.size)
         return commitAndReport(
             run.outcome(plan.size), run.reports, plan, teardowns, linkWasUp = true, evidence = evidence,
-            startedAt = startedAt, counters = run.counters.toSet(), pauseStoppedDrain = run.paused,
+            startedAt = startedAt, counters = run.counters.toSet(), pauseStoppedDrain = run.paused, cutByTest = cut.get(),
         )
     }
 
@@ -677,6 +693,7 @@ class HistoryDrainController(
         startedAt: Instant,
         counters: Set<Long> = emptySet(),
         pauseStoppedDrain: Boolean = false,
+        cutByTest: Boolean = false,
     ): SyncReport {
         // A paused sync's commit starts no transaction 5 s after the pause, inside Android's
         // 10 s cached-app freeze delay; what is left stays stored for the resumed sync.
@@ -728,6 +745,7 @@ class HistoryDrainController(
             startedAt = startedAt,
             planned = plan.map { it.label },
             counters = counters,
+            cutByTest = cutByTest,
         )
     }
 

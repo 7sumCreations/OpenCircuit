@@ -16,6 +16,7 @@ import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.app.sync.StoreHistory
 import io.github.opencircuit.app.sync.StoredData
 import io.github.opencircuit.app.sync.SyncEvidence
+import io.github.opencircuit.app.sync.SyncFaultInjector
 import io.github.opencircuit.store.SyncLogEntry
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CommitPlanner
@@ -133,6 +134,8 @@ internal suspend fun TestScope.syncWorld(
     triggerZone: (() -> ZoneId)? = null,
     /** The raw-page store's cap per ring (older firmware's `0x40` pages); the app's own when not set. */
     rawPagesKept: Int = RawHistoryPages.KEPT,
+    /** The debug build's sync test action, as the debug app wires it; never cuts by default. */
+    syncFaults: SyncFaultInjector = SyncFaultInjector.NONE,
     makeRing: (CoroutineScope, () -> Long) -> RingFake,
 ): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
@@ -158,7 +161,7 @@ internal suspend fun TestScope.syncWorld(
         backgroundScope,
         monotonicMillis = { testScheduler.currentTime },
         log = { logs += it },
-        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources, zone = { zone }),
+        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources, zone = { zone }, faults = syncFaults),
     )
     val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, prefs = prefs, wallClock = wall, zone = { zone })
     return SyncWorld(db, ring, store, prefs, session, viewModel, logs)

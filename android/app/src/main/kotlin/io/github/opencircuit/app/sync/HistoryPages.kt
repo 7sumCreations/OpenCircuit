@@ -102,7 +102,10 @@ class HistoryPages(
 ) {
     private class Arrival(val frame: ByteArray, val receivedAt: Instant, val drainId: Long?)
 
-    private class Attached(val drainId: Long, val sink: (HistorySignal) -> Unit)
+    private class Attached(val drainId: Long, val sink: (HistorySignal) -> Unit, val cutAfterPages: Int?, val cut: () -> Unit) {
+        /** This drain's pages stored and acknowledged. Touched only by the one ACK lane. */
+        var acknowledged = 0
+    }
 
     private val queue = Channel<Arrival>(Channel.UNLIMITED)
     private val attached = AtomicReference<Attached?>(null)
@@ -146,9 +149,15 @@ class HistoryPages(
     suspend fun awaitIdle(timeoutMillis: Long): Boolean =
         withTimeoutOrNull(timeoutMillis) { inFlight.first { it == 0 } } != null
 
-    /** Drain [drainId] starts: pages arriving from now on carry its id, and their signals go to [sink]. */
-    fun attach(drainId: Long, sink: (HistorySignal) -> Unit) {
-        attached.set(Attached(drainId, sink))
+    /**
+     * Drain [drainId] starts: pages arriving from now on carry its id, and their signals go to
+     * [sink]. With [cutAfterPages] (the debug build's test action, [SyncFaultInjector]), [cut] runs
+     * on this ACK lane right after that many of the drain's pages were stored and acknowledged —
+     * after the last one's [HistorySignal.PageStored], before any later frame is handled — so the
+     * cut never falls between a page's journal write and its acknowledgement.
+     */
+    fun attach(drainId: Long, sink: (HistorySignal) -> Unit, cutAfterPages: Int? = null, cut: () -> Unit = {}) {
+        attached.set(Attached(drainId, sink, cutAfterPages, cut))
     }
 
     /** Drain [drainId] is over: no more signals to it (a newer drain's attachment is left alone). */
@@ -199,6 +208,7 @@ class HistoryPages(
                 // A 0x40 page's layout is unknown (PORTING.md D-274): no countdown is read from it.
                 val countdown = if (opcode == PAGE_40) null else EpochRecord.remainingRecordCountdown(page)
                 signal(arrival, HistorySignal.PageStored(opcode, countdown, records.map { it.counter }, night, latency))
+                cutIfDue(arrival)
             }
             else -> {
                 countsFlow.update { it.copy(ackFailures = it.ackFailures + 1) }
@@ -206,6 +216,15 @@ class HistoryPages(
                 signal(arrival, HistorySignal.AckFailed(result))
             }
         }
+    }
+
+    /** Counts an acknowledged page of the attached drain it arrived in, and cuts once its armed count is reached. */
+    private fun cutIfDue(arrival: Arrival) {
+        val drain = attached.get() ?: return
+        val after = drain.cutAfterPages ?: return
+        if (arrival.drainId != drain.drainId) return
+        drain.acknowledged++
+        if (drain.acknowledged == after) drain.cut()
     }
 
     /** Tells the drain the frame arrived in, if that drain is still attached. */

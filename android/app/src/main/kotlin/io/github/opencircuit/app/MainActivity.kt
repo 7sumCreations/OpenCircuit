@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
                         val state by ringViewModel.uiState.collectAsStateWithLifecycle()
                         val sheet by ringViewModel.pairingSheet.collectAsStateWithLifecycle()
                         LaunchedEffect(sheet) { sheet?.let(::showPairingSheet) }
-                        RingScreen(state = state, onAction = ::onRingAction, pulse = !reducedMotion())
+                        RingScreen(state = state, onAction = ::onRingAction, pulse = !reducedMotion(), detailsTools = VariantLinks.detailsTools)
                     }
                 }
             }

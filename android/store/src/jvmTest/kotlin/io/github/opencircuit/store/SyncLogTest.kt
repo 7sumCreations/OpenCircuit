@@ -79,6 +79,7 @@ class SyncLogTest {
         recordsPerDay = mapOf("2026-10-05" to 100, "2026-10-06" to 576),
         chargeMarkers = listOf(t0.minus(Duration.ofDays(2))),
         capacity = SyncMeasurement.CapacityVerdict(SyncMeasurement.CapacityKind.LOWER_BOUND, Duration.ofSeconds(259_050), null),
+        cutByTest = true,
     )
 
     @Test

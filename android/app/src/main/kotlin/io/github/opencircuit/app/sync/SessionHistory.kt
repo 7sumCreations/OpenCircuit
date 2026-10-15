@@ -20,6 +20,8 @@ class SessionHistory(
     val triggers: SyncTriggerSources? = null,
     /** The phone's time zone: the sync log's local days. */
     val zone: () -> ZoneId = { ZoneOffset.UTC },
+    /** The debug build's sync test action ([SyncFaultInjector]); never cuts by default and in release. */
+    val faults: SyncFaultInjector = SyncFaultInjector.NONE,
 ) {
     companion object {
         /**

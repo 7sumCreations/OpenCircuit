@@ -50,11 +50,18 @@ sealed interface RingAction {
  * Sync now, the switch), then — once the ring is authenticated — the Measure section, then
  * Connection details (in every build). Takes its whole state as a value so it renders the same
  * from the app or from a hand-built state in a test. [pulse] animates the live chart's endpoint;
- * the app turns it off when the system asks for reduced motion, tests turn it off.
+ * the app turns it off when the system asks for reduced motion, tests turn it off. [detailsTools]
+ * is drawn at the foot of Connection details (the debug build's test actions; null in release).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Modifier = Modifier, pulse: Boolean = true) {
+fun RingScreen(
+    state: RingUiState,
+    onAction: (RingAction) -> Unit,
+    modifier: Modifier = Modifier,
+    pulse: Boolean = true,
+    detailsTools: (@Composable () -> Unit)? = null,
+) {
     // The screen stays on while a sync runs: the app stays on top and Android does not freeze it.
     val view = LocalView.current
     val keepOn = SyncLifecycle.keepScreenOn(state.ringData.syncing)
@@ -84,7 +91,7 @@ fun RingScreen(state: RingUiState, onAction: (RingAction) -> Unit, modifier: Mod
                     onStop = { onAction(RingAction.StopMeasure) },
                 )
             }
-            ConnectionDetailsCard(state.details, onCopy = { onAction(RingAction.CopyDetails) })
+            ConnectionDetailsCard(state.details, onCopy = { onAction(RingAction.CopyDetails) }, tools = detailsTools)
         }
     }
 }

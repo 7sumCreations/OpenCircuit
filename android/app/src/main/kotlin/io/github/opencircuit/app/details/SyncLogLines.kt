@@ -57,8 +57,10 @@ internal object SyncLogLines {
     private fun header(e: SyncLogEntry): String {
         val by = if (e.heldBackBy.isEmpty()) "" else " by ${e.heldBackBy.joinToString(", ")}"
         val paused = if (e.paused) " · paused" else ""
+        // The debug build's test action cut it on purpose: never read as a real link loss.
+        val cut = if (e.cutByTest) " · cut by the test action" else ""
         val took = millis(Duration.between(e.startedAt, e.finishedAt).toMillis())
-        return "${e.finishedAt} · ${e.outcome} · ${e.recordsStored} stored · ${e.heldBack} held back$by · $took$paused"
+        return "${e.finishedAt} · ${e.outcome} · ${e.recordsStored} stored · ${e.heldBack} held back$by · $took$paused$cut"
     }
 
     private fun channelLine(c: SyncLogChannel): String {

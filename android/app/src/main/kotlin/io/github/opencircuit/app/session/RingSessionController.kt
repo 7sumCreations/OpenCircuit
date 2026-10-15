@@ -98,6 +98,7 @@ class RingSessionController(
         awaitStatusQuiet = statusQueries::awaitQuiet,
         nightWindow = { triggers?.nightWindow()?.window },
         record = syncRecords::record,
+        faults = history.faults,
     )
 
     /**

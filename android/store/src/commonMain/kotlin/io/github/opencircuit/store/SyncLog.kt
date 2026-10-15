@@ -101,6 +101,8 @@ data class SyncLogEntry(
     val chargeMarkers: List<Instant> = emptyList(),
     /** What this sync says about the ring's storage. */
     val capacity: SyncMeasurement.CapacityVerdict? = null,
+    /** The debug build's test action cut this sync on purpose (the link dropped after a set number of pages). */
+    val cutByTest: Boolean = false,
 )
 
 /**

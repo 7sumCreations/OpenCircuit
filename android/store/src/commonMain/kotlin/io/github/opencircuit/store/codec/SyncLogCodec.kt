@@ -25,6 +25,8 @@ internal object SyncLogCodec {
         "capacity" to e.capacity?.let(::capacity),
         "channels" to JsonArray(e.channels.map(::channel)),
         "chargeMarkers" to JsonArray(e.chargeMarkers.map { it.json() }),
+        // Written only when set: every other entry's stored text is unchanged.
+        "cutByTest" to JsonPrimitive(true).takeIf { e.cutByTest },
         "droppedAfterBound" to JsonPrimitive(e.droppedAfterBound),
         "finishedAt" to e.finishedAt.json(),
         "firmware" to e.firmware?.let(::JsonPrimitive),
@@ -69,6 +71,7 @@ internal object SyncLogCodec {
             recordsPerDay = o.optional("recordsPerDay")?.obj()?.mapValues { it.value.int() }.orEmpty(),
             chargeMarkers = o.optional("chargeMarkers")?.array()?.map { it.instant() }.orEmpty(),
             capacity = o.optional("capacity")?.let(::capacityOf),
+            cutByTest = o.optional("cutByTest")?.bool() ?: false,
         )
     }
 
