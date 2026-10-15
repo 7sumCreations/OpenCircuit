@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** The link's torn-down connections as the app saw them. */
 data class SessionTeardowns(
@@ -147,8 +148,11 @@ class RingSessionController(
 
     private val started = AtomicBoolean(false)
 
-    /** The next link-up is one the user asked for ([connect]); taken at that link-up ([takeUserLinkUp]). */
-    private val userLinkUp = AtomicBoolean(false)
+    /**
+     * The connection attempt the user asked for ([connect]), or null: taken at that attempt's
+     * link-up ([takeUserLinkUp]), and dropped when the attempt ends without one ([settleUserLinkUp]).
+     */
+    private val userLinkUp = AtomicReference<UserLinkUp?>(null)
 
     init {
         // Descriptors and 0x50 frames also answer a status query (PROTOCOL.md §4).
@@ -189,6 +193,7 @@ class RingSessionController(
         scope.launch {
             link.state.collect {
                 timer.onState(it)
+                settleUserLinkUp(it)
                 // The link writes its own d0 right after its auth reply (PORTING.md D-257).
                 if (it == LinkState.Authenticated) statusQueries.onQuery()
                 if (it != LinkState.Authenticated) liveMeasure.onLinkLost()
@@ -203,7 +208,8 @@ class RingSessionController(
      */
     fun connect() {
         // An authenticated link brings no new link-up: nothing to mark.
-        if (link.state.value != LinkState.Authenticated) userLinkUp.set(true)
+        val now = link.state.value
+        if (now != LinkState.Authenticated) userLinkUp.set(UserLinkUp(requestedIn = now))
         connectLink()
     }
 
@@ -212,7 +218,7 @@ class RingSessionController(
      * the link-up is nobody's request, so it drops any earlier user mark.
      */
     fun reconnect() {
-        userLinkUp.set(false)
+        userLinkUp.set(null)
         connectLink()
     }
 
@@ -221,7 +227,39 @@ class RingSessionController(
      * link-up the link makes on its own (after a drop) is automatic again. Read by the automatic
      * syncs at each link-up.
      */
-    fun takeUserLinkUp(): Boolean = userLinkUp.getAndSet(false)
+    fun takeUserLinkUp(): Boolean = userLinkUp.getAndSet(null) != null
+
+    /**
+     * Ends the user's mark with the attempt it was set for (every exit releases what the start
+     * set): the link back at rest — idle, reconnecting, pairing failed, Bluetooth off — after the
+     * attempt got under way, or at a resting state other than the one [connect] was called in,
+     * means it ended without a link-up the automatic syncs took (it failed, dropped, or its
+     * `Authenticated` was conflated away before they saw it). The link's own next reconnect is then
+     * automatic. The state [connect] was called in, seen before the link moved, is not an end:
+     * the link changes state on its own event loop, after [connect] returns.
+     */
+    private fun settleUserLinkUp(state: LinkState) {
+        userLinkUp.updateAndGet { mark ->
+            when {
+                mark == null -> null
+                state == LinkState.Authenticated -> mark // the automatic syncs take it at this link-up
+                state.comingUp -> mark.copy(underway = true)
+                mark.underway || state != mark.requestedIn -> null
+                else -> mark
+            }
+        }
+    }
+
+    /** A connection attempt the user asked for: the state the link was in when asked, and whether it has moved on since. */
+    private data class UserLinkUp(val requestedIn: LinkState, val underway: Boolean = false)
+
+    /** The link is opening a connection, not yet authenticated. */
+    private val LinkState.comingUp: Boolean
+        get() = when (this) {
+            LinkState.Connecting, LinkState.Discovering, LinkState.PairingNeeded,
+            LinkState.Preparing, LinkState.Authenticating, LinkState.NotStreaming -> true
+            else -> false
+        }
 
     private fun connectLink() {
         start()

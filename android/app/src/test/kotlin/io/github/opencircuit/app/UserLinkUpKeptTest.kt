@@ -10,6 +10,7 @@ import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import java.time.Duration
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -91,6 +92,104 @@ class UserLinkUpKeptTest {
             assertEquals(listOf(60_500L), w.disconnects().drop(1), "closed at its link-up")
             assertEquals(
                 listOf(AutoSyncSkip(wallStart.plusMillis(60_500), AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = true)),
+                w.skips(),
+            )
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aUserConnectThatDropsBeforeItsLinkUpLeavesTheLinksOwnReconnectAutomatic() = runTest {
+        // The mark belongs to the attempt it was set for: one that ends before its link-up takes it along.
+        val w = syncedAndClosed()
+        try {
+            sessionsOf(w.session).connect(w.session.link.ring)
+            advanceTo(60_200)
+            assertEquals(LinkState.Connecting, w.session.state.value, "the user's connect is still coming up")
+            w.ring.dropLink()
+            advanceTo(65_000)
+            assertEquals(LinkState.Idle, w.session.state.value, "it never authenticated")
+            assertEquals(emptyList(), w.skips(), "no link-up yet, so nothing was evaluated")
+
+            w.ring.reconnectOnItsOwn()
+            advanceTo(70_000)
+            assertEquals(LinkState.Idle, w.session.state.value, "the link's own reconnect inside the throttle is closed")
+            assertEquals(65_500L, w.disconnects().last(), "closed at its link-up")
+            assertEquals(
+                listOf(AutoSyncSkip(wallStart.plusMillis(65_500), AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = true)),
+                w.skips(),
+            )
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aUserLinkUpWhoseAuthenticatedStateIsConflatedAwayLeavesTheNextReconnectAutomatic() = runTest {
+        // The link authenticates and drops before any collector runs: the automatic syncs never see
+        // the link-up, so nothing takes the mark there; the drop must end it.
+        val w = syncedAndClosed()
+        try {
+            sessionsOf(w.session).connect(w.session.link.ring)
+            advanceTo(60_200)
+            w.ring.fake.setState(LinkState.Authenticated)
+            w.ring.dropLink()
+            advanceTo(65_000)
+            assertEquals(LinkState.Idle, w.session.state.value)
+            assertEquals(emptyList(), w.skips(), "the conflated link-up was never evaluated")
+
+            w.ring.reconnectOnItsOwn()
+            advanceTo(70_000)
+            assertEquals(LinkState.Idle, w.session.state.value, "the link's own reconnect inside the throttle is closed")
+            assertEquals(
+                listOf(AutoSyncSkip(wallStart.plusMillis(65_500), AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = true)),
+                w.skips(),
+            )
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aUserConnectThatFailsBeforeAnyCollectorSawItComingUpLeavesTheNextReconnectAutomatic() = runTest {
+        // Connecting and the failure land before any collector runs: it sees only the link reconnecting.
+        val w = syncedAndClosed()
+        try {
+            sessionsOf(w.session).connect(w.session.link.ring)
+            w.ring.fake.setState(LinkState.Reconnecting(attempt = 1, delay = Duration.ofSeconds(1)))
+            advanceTo(61_000)
+            w.ring.fake.setState(LinkState.Idle)
+            advanceTo(65_000)
+            assertEquals(emptyList(), w.skips(), "the failed attempt brought no link-up")
+
+            w.ring.reconnectOnItsOwn()
+            advanceTo(70_000)
+            assertEquals(LinkState.Idle, w.session.state.value, "the link's own reconnect inside the throttle is closed")
+            assertEquals(
+                listOf(AutoSyncSkip(wallStart.plusMillis(65_500), AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = true)),
+                w.skips(),
+            )
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aUserConnectThatComesUpSlowlyIsStillTheUsers() = runTest {
+        // The attempt passing through its coming-up states keeps the mark until its own link-up.
+        val w = syncedAndClosed()
+        try {
+            val closedAfterSync = w.disconnects()
+            w.ring.connectMillis = 8_000
+            sessionsOf(w.session).connect(w.session.link.ring)
+            advanceTo(64_000)
+            assertEquals(LinkState.Connecting, w.session.state.value, "still coming up")
+            advanceTo(75_000)
+            assertEquals(LinkState.Authenticated, w.session.state.value, "the user's slow link-up is kept")
+            assertEquals(closedAfterSync, w.disconnects())
+            assertEquals(
+                listOf(AutoSyncSkip(wallStart.plusMillis(68_000), AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = false)),
                 w.skips(),
             )
         } finally {
