@@ -97,9 +97,24 @@ internal class SyncWorld(
     val viewModel: RingViewModel,
     /** Every line the session logged, in order. */
     val logs: List<String>,
+    private val nightsRead: NightsReadHook = NightsReadHook(),
 ) {
     val journal = HistoryJournal(db)
     val blobs = BlobStore(db)
+
+    /**
+     * Runs inside each read of the stored nights the automatic syncs make (a suspension point
+     * between their busy check and their start): something that starts meanwhile, a measure, races them.
+     */
+    var duringNightsRead: suspend () -> Unit
+        get() = nightsRead.run
+        set(value) { nightsRead.run = value }
+}
+
+/** What [SyncWorld.duringNightsRead] runs; built before the session, so the read can reach it. */
+internal class NightsReadHook {
+    @Volatile
+    var run: suspend () -> Unit = {}
 }
 
 /**
@@ -146,11 +161,12 @@ internal suspend fun TestScope.syncWorld(
     val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { zone }, chunkRecords, insideChunk, rawPagesKept = rawPagesKept), ring::note)
     val prefs = PrefsAppPrefs(keyValues)
     val logs = CopyOnWriteArrayList<String>()
+    val nightsRead = NightsReadHook()
     // As the app's AppContainer.historyFor: the store's latest nights, the ring's marks in the preferences.
     val sources = if (triggers) {
         SyncTriggerSources(
             zone = triggerZone ?: { zone },
-            storedNights = { learningNights(db) },
+            storedNights = { nightsRead.run(); learningNights(db) },
             marks = PrefsSyncMarks(keyValues, TEST_RING_ID),
         )
     } else {
@@ -164,7 +180,7 @@ internal suspend fun TestScope.syncWorld(
         history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources, zone = { zone }, faults = syncFaults),
     )
     val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, prefs = prefs, wallClock = wall, zone = { zone })
-    return SyncWorld(db, ring, store, prefs, session, viewModel, logs)
+    return SyncWorld(db, ring, store, prefs, session, viewModel, logs, nightsRead)
 }
 
 /**

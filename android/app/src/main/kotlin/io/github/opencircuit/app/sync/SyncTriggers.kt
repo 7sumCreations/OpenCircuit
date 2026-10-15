@@ -264,9 +264,12 @@ class SyncTriggers(
                 delay(if (wait == 0L) TICK_MILLIS else wait)
                 continue
             }
-            catchUpOwed = false
-            start(AutoSyncTrigger.CATCH_UP, "catch-up after the night; connecting")
-            return
+            // Owed until a sync serves it: a refused start is tried again a tick on.
+            if (start(AutoSyncTrigger.CATCH_UP, "catch-up after the night; connecting")) {
+                catchUpOwed = false
+                return
+            }
+            delay(TICK_MILLIS)
         }
     }
 
@@ -294,8 +297,8 @@ class SyncTriggers(
             return untilOrTick(now, ends)
         }
         if (catchUpOwed) {
-            catchUpOwed = false
-            start(AutoSyncTrigger.CATCH_UP, "catch-up after the night")
+            // Owed until a sync serves it: a refused start (a measure began meanwhile) is evaluated again.
+            if (start(AutoSyncTrigger.CATCH_UP, "catch-up after the night")) catchUpOwed = false
             return TICK_MILLIS
         }
         val cadence = cadence(now)
@@ -325,14 +328,21 @@ class SyncTriggers(
         else -> null
     }
 
-    private fun start(trigger: AutoSyncTrigger, reason: String) {
+    /**
+     * Starts the [trigger]'s sync; returns whether a sync now serves it: this one started, or the
+     * controller refused because another sync started since the check (it drains the same ring).
+     * False when a measure refused it: the trigger is not served.
+     */
+    private fun start(trigger: AutoSyncTrigger, reason: String): Boolean {
         if (sync.syncNow()) {
             ownSync.set(true)
             log("sync-trigger: $reason")
-        } else {
-            // The controller refused: a sync or a measure started since the check.
-            skipped(wallClock(), trigger, busyReason() ?: AutoSyncSkipReason.ALREADY_SYNCING)
+            return true
         }
+        // The controller refused: a sync or a measure started since the check.
+        val why = busyReason() ?: AutoSyncSkipReason.ALREADY_SYNCING
+        skipped(wallClock(), trigger, why)
+        return why == AutoSyncSkipReason.ALREADY_SYNCING
     }
 
     /**

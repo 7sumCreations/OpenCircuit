@@ -1,10 +1,12 @@
 package io.github.opencircuit.app
 
 import io.github.opencircuit.app.data.PrefsSyncMarks
+import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.sync.AutoSyncSkip
 import io.github.opencircuit.app.sync.AutoSyncSkipReason
 import io.github.opencircuit.app.sync.AutoSyncTrigger
 import io.github.opencircuit.app.sync.SyncOutcome
+import io.github.opencircuit.app.sync.SyncTriggers
 import io.github.opencircuit.ble.LinkState
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -12,6 +14,7 @@ import java.time.Instant
 import java.time.ZoneId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * "Disconnect after syncing" ON holds no idle link through the night (PORTING.md D-275): an
@@ -99,6 +102,65 @@ class NightQuietDisconnectTest {
             advanceTo(local(10) + 3_000)
             assertEquals(1, w.sleepOpens().size, "the catch-up runs on the held link")
             assertEquals(2, w.connects().size, "no new connect for it")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aCatchUpRefusedByAMeasureStartingAtTheNightsEndStaysOwedAndRunsOnceTheMeasureEnds() = runTest {
+        val w = night()
+        try {
+            advanceTo(60_000)
+            sessionsOf(w.session).connect(w.session.link.ring)
+            // The measure starts while the catch-up's evaluation reads the stored nights, after its busy check.
+            var started = false
+            w.duringNightsRead = {
+                if (!started && testScheduler.currentTime >= local(10)) {
+                    started = true
+                    w.session.liveMeasure.start(LiveMode.HEART_RATE)
+                }
+            }
+            advanceTo(local(10) + 3_000)
+            assertTrue(started, "the measure started at the night's end")
+            assertTrue(w.session.liveMeasure.isMeasuring.value)
+            assertEquals(emptyList(), w.sleepOpens(), "no sync during the measure")
+            assertEquals(
+                AutoSyncSkip(twoAm.plusMillis(local(10)), AutoSyncTrigger.CATCH_UP, AutoSyncSkipReason.MEASURING),
+                w.skips().last(),
+            )
+
+            advanceTo(local(10) + 30_000)
+            w.session.liveMeasure.stop()
+            advanceTo(local(10) + 30_000 + SyncTriggers.TICK_MILLIS + 3_000)
+            assertEquals(1, w.sleepOpens().size, "the owed catch-up runs once the measure has ended")
+            advanceTo(local(11))
+            assertEquals(1, w.sleepOpens().size, "exactly once")
+            assertEquals(SyncOutcome.COMPLETE, w.session.sync.state.value.last?.outcome)
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aCatchUpRefusedBecauseTheUsersSyncStartedIsServedByItAndNeverRunsAgain() = runTest {
+        val w = night()
+        try {
+            advanceTo(60_000)
+            sessionsOf(w.session).connect(w.session.link.ring)
+            // The user's Sync now starts while the catch-up's evaluation reads the stored nights.
+            var tapped = false
+            w.duringNightsRead = {
+                if (!tapped && testScheduler.currentTime >= local(10)) {
+                    tapped = true
+                    assertTrue(w.session.sync.syncNow(), "the user's Sync now starts")
+                }
+            }
+            advanceTo(local(10) + 3_000)
+            assertTrue(tapped)
+            assertEquals(1, w.sleepOpens().size, "the user's sync runs")
+            advanceTo(local(11))
+            assertEquals(1, w.sleepOpens().size, "the catch-up it served never runs after it")
         } finally {
             w.db.close()
         }
