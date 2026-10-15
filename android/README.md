@@ -16,8 +16,9 @@ needs no Google Play Services (the target phone runs GrapheneOS).
 **Early development.** The protocol and decoding core (`:ringkit`, ported from the iOS
 `OpenCircuitKit`), the on-device store (`:store`), the Bluetooth link (`:ble`) and a first
 app (`:app`) exist. The app onboards, finds and pairs the ring, shows its connection and
-battery, and takes a live heart-rate or SpO₂ reading. History sync and Health Connect come
-later. Signed APKs are published as pre-releases on GitHub Releases, installable with
+battery, and takes a live heart-rate or SpO₂ reading, and syncs the ring's history onto the phone
+(version 0.2.1 is current). Health Connect comes later. What works today is listed in
+[`../docs/ANDROID_FAQ.md`](../docs/ANDROID_FAQ.md). Signed APKs are published as pre-releases on GitHub Releases, installable with
 Obtainium: see [`../docs/ANDROID.md`](../docs/ANDROID.md), "Installing the app".
 
 ## Where it comes from
