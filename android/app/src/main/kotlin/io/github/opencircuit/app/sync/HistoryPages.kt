@@ -23,7 +23,7 @@ import kotlin.coroutines.cancellation.CancellationException
 sealed interface HistorySignal {
     /**
      * A page is stored and acknowledged; [countdown] is the page's raw header countdown — the
-     * records the ring says are still queued after it, plus one (16 bits, `0x47` / `0x4c` only;
+     * records the ring says are still queued after it, plus one (16 bits, `0x47` / `0x4c` only, null for `0x40`;
      * ../docs/PROTOCOL.md §5.3), and [counters] the counters of the `0x4c` records it
      * held (empty for any other page), so a drain counts unique records, not pages; [nightCounters]
      * are those of its sleep-vitals records (the night layout).
@@ -73,9 +73,11 @@ data class HistoryPageCounts(
 )
 
 /**
- * The frame dispatcher's handler for the history frames: `0x47`, `0x4c` and `0x4d` pages, the
- * `0x82` sync answer and the `0x50` end-of-history report (registered at the session's
- * construction, before any frame is dispatched).
+ * The frame dispatcher's handler for the history frames: `0x40`, `0x47`, `0x4c` and `0x4d` pages,
+ * the `0x82` sync answer and the `0x50` end-of-history report (registered at the session's
+ * construction, before any frame is dispatched). A `0x40` page is older Gen 2 firmware's history
+ * (FR02.013, ACK `c0`); its layout is unknown, so it is stored and acknowledged like any page and
+ * decoded never — the commit keeps it raw (PORTING.md D-274).
  *
  * Every page is first stored ([HistoryStore.append]) and only then acknowledged to the ring
  * ([acknowledge]): the ring drops a page once it has the acknowledgement, so a page that could not
@@ -194,7 +196,9 @@ class HistoryPages(
                 }
                 val records = if (opcode == PAGE_4C) BulkSleep.recordsFromPage(page) else emptyList()
                 val night = records.filter { it.layout == BulkRecord.Layout.SLEEP_VITALS }.map { it.counter }
-                signal(arrival, HistorySignal.PageStored(opcode, EpochRecord.remainingRecordCountdown(page), records.map { it.counter }, night, latency))
+                // A 0x40 page's layout is unknown (PORTING.md D-274): no countdown is read from it.
+                val countdown = if (opcode == PAGE_40) null else EpochRecord.remainingRecordCountdown(page)
+                signal(arrival, HistorySignal.PageStored(opcode, countdown, records.map { it.counter }, night, latency))
             }
             else -> {
                 countsFlow.update { it.copy(ackFailures = it.ackFailures + 1) }
@@ -212,8 +216,9 @@ class HistoryPages(
 
     companion object {
         /** The frames this handler is registered for. */
-        val OPCODES: List<Int> = listOf(0x47, 0x4C, 0x4D, 0x82, 0x50)
+        val OPCODES: List<Int> = listOf(0x40, 0x47, 0x4C, 0x4D, 0x82, 0x50)
 
+        private const val PAGE_40 = 0x40
         private const val PAGE_4C = 0x4C
         private const val SYNC_ACK = 0x82
         private const val END_OF_HISTORY = 0x50

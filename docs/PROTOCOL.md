@@ -850,6 +850,13 @@ within the day and `active_seconds` ≤ 150/epoch.
 >   upstream's `0x4c` captures are `FR02.018`).
 > - **Capture needed:** a full-payload snoop of an `FR02.013` (or older) ring draining, to decode `0x40` and the
 >   `03` command's arguments.
+> - 🟡 **Android handling (built and JVM-tested, not yet run against an `FR02.013` ring).** OpenCircuit Android
+>   treats `0x40` as a history page. It stores each page raw on the phone first and only then writes **`c0 00 00`**,
+>   so a page it couldn't store is never acknowledged and the ring keeps it. The commit moves each page into a
+>   permanent raw-page store (at most 5,000 pages per ring, oldest dropped first, the drops counted), so a later
+>   version can decode it. Nothing is decoded from these pages, and a channel that sent one is never judged complete.
+>   The app tells the user to update the ring's firmware in the RingConn app. The `0x40` layout is still 🔴, and the
+>   app still never sends `03`. (`android/PORTING.md` D-274.)
 
 ### 5.4 `0x10` / `0x87` — fixed 19-byte descriptor
 `0x10` ← `d0 00 00` (also spontaneous ~30–60 s); `0x87` ← `07 00 00`. **Identical
@@ -1117,7 +1124,7 @@ the row.
 | Channels | `0x00` (sleep) then `0x03` (all-day), every sync; sport `0x02` is not opened | 🟢 channels (§5.6.1) · order 🟢 Android-verified 2026-10-15 (FR02.022) |
 | No answer | Neither `0x82` nor a page within 5 s of the open: the link runs the ring's auth again once per sync (`:ble` writes `01 00 00` and answers the challenge) and the open is sent again; nothing 20 s after the open ends the channel "the ring didn't answer" (NO_ACK), link kept | 🟡 Android, unverified on ring (D-264) |
 | `0x82` | `82 <b1> <b2> <xor>`: `[2]` is the ACK flag, `[1] = ff` means nothing to send (`82 ff 00 7d`) | 🟢 layout (iOS `RingSession.swift:4610-4635`) |
-| Pages | Each `0x4c` / `0x47` / `0x4d` page is written to the phone's history journal FIRST and only then acknowledged (`cc 00 00` / `c7 00 00` / `cd 00 00`); the ring sends the next page only after the acknowledgement. A page that could not be stored is never acknowledged. An acknowledgement is written only for a page the same connection delivered — the ACK bytes carry no page identity | 🟢 Android-verified 2026-10-15 (FR02.022): 109 `0x4c` + 25 `0x47` pages, every one journaled then acknowledged; acknowledgement latency p50 58 ms / p95 77 ms; 0 pages unacknowledged at disconnect (D-261) |
+| Pages | Each `0x4c` / `0x47` / `0x4d` page (and, on older firmware, `0x40` → `c0 00 00`, §5.3a, 🟡 not yet run on an FR02.013 ring) is written to the phone's history journal FIRST and only then acknowledged (`cc 00 00` / `c7 00 00` / `cd 00 00`); the ring sends the next page only after the acknowledgement. A page that could not be stored is never acknowledged. An acknowledgement is written only for a page the same connection delivered — the ACK bytes carry no page identity | 🟢 Android-verified 2026-10-15 (FR02.022): 109 `0x4c` + 25 `0x47` pages, every one journaled then acknowledged; acknowledgement latency p50 58 ms / p95 77 ms; 0 pages unacknowledged at disconnect (D-261) |
 | Countdown | Bytes 1–2 of a `0x4c` page header are a 16-bit big-endian countdown = records still queued after the page + 1 (§3). Progress while syncing reads "N of M records", M = records so far + countdown − 1; a countdown of 1 means the channel's records are all in. `0x47` countdowns are not used for progress | 🟢 Android-verified 2026-10-15 (FR02.022): a 652-record drain, first page 4 records → 649, last page → 1 (D-259) |
 | `0x50` | The end of the channel only after this channel's `0x82`; a `0x50` before it is the answer to a status query (§4) | 🟢 Android-verified 2026-10-15 (FR02.022): `0x50` ended BOTH channels (D-266) |
 | End of a round | `0x50` after `0x82`; 6 s after `82 ff`; 20 s after an answered open with no page; 6 s of quiet after a page (one `07 00 00` nudge first); a round still receiving pages runs 45 s, extended 45 s at a time up to 3,600 s; a round that added records and went quiet is reopened, up to 12 times; the whole sync stops at 90 min | 🟢 exits Android-verified (`0x50` on both channels, 1 round each, sleep 12.0 s / all-day 5.3 s, page gap p50 0.0 s / max 0.0 s); 🟡 the timing values were not stressed by this short backlog — unchanged (D-265, D-34) |

@@ -102,6 +102,13 @@ data class CommitResult(
      * fails (none of its records can be read). Counted, so the loss is shown.
      */
     val pagesNotKept: Int = 0,
+    /**
+     * `0x40` pages (older Gen 2 firmware, layout unknown) moved into the permanent raw-page store,
+     * so a later version can decode them; nothing is ingested from them (PORTING.md D-274).
+     */
+    val rawPagesKept: Int = 0,
+    /** Kept raw pages deleted, oldest first, to stay within that store's cap. */
+    val rawPagesDropped: Int = 0,
     /** Distinct records held back for a later commit, because a channel may still hold older ones. */
     val heldBack: Int = 0,
     /** Stored pages kept for a later commit (one of their records is held back). */

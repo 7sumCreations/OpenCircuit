@@ -21,6 +21,7 @@ import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CommitPlanner
 import io.github.opencircuit.store.BlobStore
 import io.github.opencircuit.store.HistoryJournal
+import io.github.opencircuit.store.RawHistoryPages
 import io.github.opencircuit.store.StoreDatabase
 import io.github.opencircuit.store.StoreFactory
 import io.github.opencircuit.store.openInMemory
@@ -130,6 +131,8 @@ internal suspend fun TestScope.syncWorld(
     reuseDb: StoreDatabase? = null,
     /** The automatic syncs' time zone; [zone] when null (a test makes it throw). */
     triggerZone: (() -> ZoneId)? = null,
+    /** The raw-page store's cap per ring (older firmware's `0x40` pages); the app's own when not set. */
+    rawPagesKept: Int = RawHistoryPages.KEPT,
     makeRing: (CoroutineScope, () -> Long) -> RingFake,
 ): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
@@ -137,7 +140,7 @@ internal suspend fun TestScope.syncWorld(
     val db = reuseDb ?: StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
     val wall = { wallStart.plusMillis(testScheduler.currentTime) }
     val ring = makeRing(backgroundScope) { testScheduler.currentTime }
-    val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { zone }, chunkRecords, insideChunk), ring::note)
+    val store = RecordingStore(StoreHistory({ db }, TEST_RING_ID, { zone }, chunkRecords, insideChunk, rawPagesKept = rawPagesKept), ring::note)
     val prefs = PrefsAppPrefs(keyValues)
     val logs = CopyOnWriteArrayList<String>()
     // As the app's AppContainer.historyFor: the store's latest nights, the ring's marks in the preferences.

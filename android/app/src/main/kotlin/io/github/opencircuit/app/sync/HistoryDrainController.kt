@@ -113,6 +113,8 @@ data class ChannelReport(
     val pages: List<PageSeen> = emptyList(),
     /** The charge markers in this channel's `0x50` end reports. */
     val chargeMarkers: List<Instant> = emptyList(),
+    /** `0x40` pages: older Gen 2 firmware's history, stored, acknowledged and kept raw, never decoded (PORTING.md D-274). */
+    val pages40: Int = 0,
 )
 
 /** One `0x4c` page as a channel saw it: its [newest] record's counter and the records it [added] that the sync had not had yet. */
@@ -461,6 +463,7 @@ class HistoryDrainController(
         channel: ChannelRun,
     ): HistoryChannelTrace {
         val trace = HistoryChannelTrace(step.label, step.channel, wallClock())
+        channel.pages40ByRound += 0
         trace.reopenRound = round
         trace.recordsAtStart = run.counters.size
         fun finish(reason: HistoryChannelExitReason): HistoryChannelTrace {
@@ -523,6 +526,8 @@ class HistoryDrainController(
                             PAGE_4C -> trace.page4CCount++
                             PAGE_47 -> trace.page47Count++
                             PAGE_4D -> trace.page4DCount = (trace.page4DCount ?: 0) + 1
+                            // Older firmware's history; the ported trace has no count for it (PORTING.md D-274).
+                            PAGE_40 -> channel.pages40ByRound[channel.pages40ByRound.lastIndex]++
                         }
                         sawPages = true
                         quietFrom = now
@@ -744,6 +749,7 @@ class HistoryDrainController(
         "history-drain label=${trace.label} round=${trace.reopenRound ?: 0} outcome=${trace.outcome.rawValue} " +
             "exit=${trace.exitReason?.rawValue} ack=${trace.sawSyncAck} flag=${trace.syncAckFlag ?: "-"} " +
             "empty=${trace.sawEmptyHistorySignal} 4c=${trace.page4CCount} 47=${trace.page47Count} 4d=${trace.page4DCount ?: 0} " +
+            "40=${channel.pages40ByRound.lastOrNull() ?: 0} " +
             "50=${trace.endMarkerCount} added=${trace.recordsAdded} nudges=${trace.fetchNudges ?: 0} " +
             "fallback=${channel.openFallback.name.lowercase(Locale.ROOT)} countdown=${channel.firstCountdown ?: "-"}..${channel.lastCountdown ?: "-"} " +
             "statusReplies=${channel.statusReplies}"
@@ -791,6 +797,9 @@ class HistoryDrainController(
         val ackLatencies = mutableListOf<Long>()
         val pages = mutableListOf<PageSeen>()
         val chargeMarkers = mutableListOf<Instant>()
+
+        /** `0x40` pages (older firmware's history, never decoded) per round, the current round last. */
+        val pages40ByRound = mutableListOf<Int>()
         var done = false
         private var firstPageAt: Long? = null
         private var firstPageRecords = 0
@@ -819,7 +828,8 @@ class HistoryDrainController(
             label = step.label,
             channel = step.channel,
             rounds = rounds.map { it.copy() },
-            verdict = HistoryChannelVerdict.of(rounds),
+            verdict = verdictWith40(HistoryChannelVerdict.of(rounds), pages40ByRound.sum()),
+            pages40 = pages40ByRound.sum(),
             syncAcks = syncAcks.toList(),
             openFallback = openFallback,
             fallbackHelped = fallbackHelped,
@@ -863,6 +873,18 @@ class HistoryDrainController(
         private val CEILING = AndroidDrainTiming.CEILING.toMillis()
         private val STEP = AndroidDrainTiming.EXTEND_STEP.toMillis()
 
+        /**
+         * A channel's verdict once [pages40] `0x40` pages came: never COMPLETE, EMPTY or "didn't
+         * answer" from pages this version cannot read (PORTING.md D-274). The ring sent history
+         * and dropped each page on its acknowledgement; the pages are kept raw, nothing is ingested
+         * from them, so the channel is PARTIAL — its commit releases no record past what it decoded
+         * ([CommitPlanner.drained]: through its last `0x4c` record, or nothing), the sync is not
+         * COMPLETE (the automatic syncs do not count it as one), and no night is staged from it.
+         */
+        internal fun verdictWith40(verdict: HistoryChannelOutcome?, pages40: Int): HistoryChannelOutcome? =
+            if (pages40 > 0) HistoryChannelOutcome.PARTIAL else verdict
+
+        private const val PAGE_40 = 0x40
         private const val PAGE_47 = 0x47
         private const val PAGE_4C = 0x4C
         private const val PAGE_4D = 0x4D

@@ -25,6 +25,11 @@ data class RingDataUi(
     val lastSync: String? = null,
     /** What went wrong with the last sync, in the user's words; null when nothing did. */
     val problem: String? = null,
+    /**
+     * The last sync got history pages this version can't read yet (older Gen 2 firmware's `0x40`
+     * pages, kept raw on the phone): what that means and what to do; null otherwise.
+     */
+    val firmwareNotice: String? = null,
     /** Whether Sync now can be tapped. */
     val syncEnabled: Boolean = false,
     /** The button's label. */
@@ -116,6 +121,7 @@ object RingDataPresenter {
             },
             lastSync = last?.let { lastSyncRow(it, outcome) },
             problem = last?.let { problemOf(outcome) ?: lostFrames(it.undeliveredFrames) },
+            firmwareNotice = last?.takeIf { e -> e.rawPagesKept > 0 || e.channels.any { it.pages40 > 0 } }?.let { FIRMWARE_CANT_READ },
             notices = last?.let(::notices).orEmpty(),
             syncEnabled = sync != null && !input.measuring,
             syncBlockedBy = if (sync != null && input.measuring) STOP_MEASURING_TO_SYNC else null,
@@ -135,7 +141,14 @@ object RingDataPresenter {
             SyncOutcome.COMPLETE -> if (stored == 0) UP_TO_DATE else "${records(stored)} · complete"
             // Pages came and are kept on the phone, whether or not the commit stored them.
             SyncOutcome.SAVE_FAILED, SyncOutcome.COMMIT_FAILED -> "${records(stored)} · $PARTIAL"
-            else -> if (stored == 0 && entry.heldBack == 0) NO_DATA else "${records(stored)} · $PARTIAL"
+            // Older firmware's pages came and are kept raw: data was received, none of it readable yet.
+            else -> if (stored == 0 && entry.heldBack == 0 && entry.rawPagesKept > 0) {
+                "${count(entry.rawPagesKept)} ${if (entry.rawPagesKept == 1) "page" else "pages"} kept, not readable yet"
+            } else if (stored == 0 && entry.heldBack == 0) {
+                NO_DATA
+            } else {
+                "${records(stored)} · $PARTIAL"
+            }
         }
     }
 
@@ -231,6 +244,9 @@ object RingDataPresenter {
     /** ASCII digits with a comma every three, whatever the phone's locale ("4,312"). */
     private fun count(n: Int): String = String.format(Locale.ROOT, "%,d", n)
 
+    /** Older Gen 2 firmware sends history as `0x40` pages this version keeps raw but cannot read (PORTING.md D-274). */
+    private const val FIRMWARE_CANT_READ =
+        "This ring's firmware sends history this version can't read yet. It's kept on your phone — update the ring's firmware in the RingConn app."
     private const val PAUSED = "Sync paused — open OpenCircuit to finish"
     private const val UP_TO_DATE = "Up to date"
     private const val NO_DATA = "No data received"

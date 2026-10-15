@@ -98,6 +98,24 @@ class RingDataCardStateTest {
     }
 
     @Test
+    fun olderFirmwarePagesShowTheFirmwareLineAndOnlyThen() {
+        val line = "This ring's firmware sends history this version can't read yet. It's kept on your phone — " +
+            "update the ring's firmware in the RingConn app."
+        assertNull(card(log = listOf(entry(SyncOutcome.COMPLETE, stored = 12))).firmwareNotice, "a ring on current firmware")
+
+        val kept = card(log = listOf(entry(SyncOutcome.PARTIAL) { it.copy(rawPagesKept = 1) }))
+        assertEquals(line, kept.firmwareNotice)
+        assertEquals("1 page kept, not readable yet", kept.lastSync)
+
+        // The commit failed, so nothing was moved yet, but the channel counted the pages: still said.
+        val counted = card(log = listOf(entry(SyncOutcome.COMMIT_FAILED, channels = listOf(SyncLogChannel(label = "sleep", channel = 0, pages40 = 3)))))
+        assertEquals(line, counted.firmwareNotice)
+        assertEquals("Couldn't save — will retry", counted.problem, "the save problem is shown beside it")
+
+        assertNull(card(log = listOf(entry(SyncOutcome.PARTIAL) { it.copy(rawPagesKept = 2) }, entry(SyncOutcome.COMPLETE, stored = 4))).firmwareNotice, "only the last sync counts")
+    }
+
+    @Test
     fun aSyncThatGotNothingSaysNoDataReceivedWithItsReason() {
         val ui = card(log = listOf(entry(SyncOutcome.NO_ACK, channels = emptyList())))
         assertEquals("No data received", ui.lastSync)

@@ -31,8 +31,10 @@ the phone.
   recovery state, the energy ledger and the sleep epoch archive (which keeps every night not yet
   staged, up to 14 days). The same table holds the **history journal** — each history page the
   ring sends, stored raw before the ring is told it may drop it, until a sync's commit has moved
-  its records into the samples — and the **sync log**, the last 50 syncs per ring (when, how each
-  channel went, what was stored or held back, and the measurements Connection details shows).
+  its records into the samples — the **raw-page store**, older firmware's `0x40` history pages
+  kept byte for byte so a later version can decode them (up to 5,000 per ring, the oldest dropped
+  first) — and the **sync log**, the last 50 syncs per ring (when, how each channel went, what was
+  stored or held back, and the measurements Connection details shows).
   A value that cannot be read loads as empty or unknown, never as a wrong value; an alarm that
   cannot be read is kept as stored until the person saves a new one.
 
@@ -320,6 +322,9 @@ clinician about any health concern.
 - **The same records stay "waiting" sync after sync.** Open Connection details and copy the Sync
   log: it shows which channel did not finish and how each open went, which is what a bug report
   needs.
+- **"This ring's firmware sends history this version can't read yet".** The ring is on older
+  firmware (seen on FR02.013), which sends its history in a format this version can't read yet.
+  The pages are kept on your phone. Update the ring's firmware in the RingConn app and sync again.
 
 ## FAQ
 

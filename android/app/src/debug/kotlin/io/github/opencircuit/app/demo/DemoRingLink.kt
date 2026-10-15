@@ -269,7 +269,8 @@ class DemoRingLink(
         private const val SPO2_MODE = 0x02
 
         /** The history pages the ring waits on an acknowledgement for. */
-        private val PAGE_OPCODES = setOf(0x47, 0x4C, 0x4D)
+        /** As the real link: `0x40` (older Gen 2 firmware, ACK `c0`), `0x47`, `0x4c`, `0x4d`. */
+        private val PAGE_OPCODES = setOf(0x40, 0x47, 0x4C, 0x4D)
 
         /** `02 00 <cursor, 4 bytes> <channel> 01 00`, the channel at byte 6. */
         private const val SYNC_OPEN_LENGTH = 9

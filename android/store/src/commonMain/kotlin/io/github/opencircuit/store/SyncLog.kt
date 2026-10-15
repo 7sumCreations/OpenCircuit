@@ -31,6 +31,8 @@ data class SyncLogChannel(
     val pages4c: Int = 0,
     val pages47: Int = 0,
     val pages4d: Int = 0,
+    /** `0x40` pages: older Gen 2 firmware's history, kept raw and not decoded (PORTING.md D-274). */
+    val pages40: Int = 0,
     /** New `0x4c` records (unique counters). */
     val records: Int = 0,
     /** The lowest and highest record counter delivered (sync-epoch seconds). */
@@ -86,6 +88,10 @@ data class SyncLogEntry(
     val pagesUnacknowledged: Int = 0,
     /** Frames the link received that the app never took. */
     val undeliveredFrames: Int = 0,
+    /** Pages this version cannot decode (`0x40`) the commit moved into the permanent raw-page store ([RawHistoryPages]). */
+    val rawPagesKept: Int = 0,
+    /** Kept raw pages the commit deleted, oldest first, to stay within that store's cap. */
+    val rawPagesDropped: Int = 0,
     /** The oldest and newest record the sync delivered. */
     val oldestRecord: Instant? = null,
     val newestRecord: Instant? = null,

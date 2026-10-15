@@ -58,6 +58,15 @@ fun RingDataCard(
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
+            // Read out once when it appears, as the problem line above is.
+            ui.firmwareNotice?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
             ui.notices.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
             FilledTonalButton(onClick = onSyncNow, enabled = ui.syncEnabled) { Text(ui.syncLabel) }
             ui.syncBlockedBy?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }

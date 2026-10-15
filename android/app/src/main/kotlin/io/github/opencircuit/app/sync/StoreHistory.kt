@@ -18,6 +18,7 @@ import io.github.opencircuit.ringkit.TemperatureSample
 import io.github.opencircuit.store.BlobStore
 import io.github.opencircuit.store.HistoryJournal
 import io.github.opencircuit.store.LocalStore
+import io.github.opencircuit.store.RawHistoryPages
 import io.github.opencircuit.store.SleepNightExtras
 import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.SleepStoreException
@@ -40,7 +41,10 @@ import kotlin.coroutines.cancellation.CancellationException
  * store's ingest allows into the future), stores their samples in one ingest, and deletes exactly
  * the journal rows the chunk consumes. If a chunk throws, nothing of it is stored and its rows stay
  * in the journal; the chunks before it are kept. Pages holding a record held back stay for a later
- * commit, as does a page that arrives while the commit runs.
+ * commit, as does a page that arrives while the commit runs. A `0x40` page (older Gen 2 firmware,
+ * layout unknown) holds no record this version can read: the first chunk moves it into the
+ * permanent raw-page store ([RawHistoryPages], at most [rawPagesKept] per ring, the oldest dropped
+ * and counted) in the same transaction that deletes its journal row (PORTING.md D-274).
  *
  * Then nights (PORTING.md D-269, D-270): the sync's [SyncEvidence] and the released records of pages
  * stored outside any drain go through `HistoryCommitGate.decide` (D-43); on STAGE or
@@ -65,6 +69,7 @@ class StoreHistory(
     private val chunkRecords: Int = CommitPlanner.CHUNK_RECORDS,
     private val insideChunk: suspend (index: Int) -> Unit = {},
     private val nights: (StoreDatabase) -> NightWriter = { StoreNightWriter(SleepStore(it)) },
+    private val rawPagesKept: Int = RawHistoryPages.KEPT,
 ) : HistoryStore {
 
     override suspend fun append(page: ByteArray, receivedAt: Instant, drainId: Long?): Long =
@@ -75,7 +80,9 @@ class StoreHistory(
         val journal = HistoryJournal(db)
         val blobs = BlobStore(db)
         val samples = LocalStore(db)
+        val raw = RawHistoryPages(db, rawPagesKept)
         val read = journal.read(ringId)
+        val bySeq = read.entries.associateBy { it.seq }
         val opcodes = read.entries.associate { it.seq to (it.page.firstOrNull()?.toInt()?.and(0xFF)) }
         val pages = read.entries.map { CommitPlanner.Page(it.seq, if (opcodes[it.seq] == PAGE_4C) BulkSleep.recordsFromPage(it.page) else emptyList()) }
         // A 0x4c page whose XOR trailer fails yields no record; it was acknowledged, so its loss is counted.
@@ -93,9 +100,12 @@ class StoreHistory(
                 val merge = blobs.mergeEpochArchive(ringId, chunk.records, notAfter = now.plus(NOT_AFTER_ALLOWANCE), now = now)
                 // The HRV gate is calibrated on the whole archive, never on one chunk (BulkSleep.samples).
                 val ingested = samples.ingest(BulkSleep.samples(chunk.records, calibratedBy = merge.records), now, zone())
+                // Older firmware's 0x40 pages cannot be decoded yet: kept raw, in the transaction
+                // that deletes them from the journal, so they are never lost (PORTING.md D-274).
+                val kept = raw.keep(ringId, chunk.consumed.filter { opcodes[it] == PAGE_40 }.map { bySeq.getValue(it) }, now)
                 journal.delete(ringId, chunk.consumed)
                 insideChunk(index)
-                Pair(merge.droppedAfterBound, ingested.size)
+                Triple(merge.droppedAfterBound, ingested.size, kept)
             }
             released += chunk.records
             val consumedPages = chunk.consumed.filter { it in opcodes }
@@ -105,7 +115,9 @@ class StoreHistory(
                 samplesStored = result.samplesStored + stored.second,
                 droppedAfterBound = result.droppedAfterBound + stored.first,
                 unreadablePages = result.unreadablePages + (chunk.consumed.size - consumedPages.size),
-                pagesNotKept = result.pagesNotKept + consumedPages.count { opcodes[it] != PAGE_4C || it in unparsed },
+                pagesNotKept = result.pagesNotKept + consumedPages.count { (opcodes[it] != PAGE_4C && opcodes[it] != PAGE_40) || it in unparsed },
+                rawPagesKept = result.rawPagesKept + stored.third.kept,
+                rawPagesDropped = result.rawPagesDropped + stored.third.dropped,
                 chunks = result.chunks + 1,
             )
         }
@@ -257,6 +269,7 @@ class StoreHistory(
         samples.samples(MetricKind.TEMPERATURE, from, to).map { TemperatureSample(it.start, it.value) }
 
     private companion object {
+        const val PAGE_40 = 0x40
         const val PAGE_4C = 0x4C
 
         /** How far past `now` a record may be dated and still be kept (the store's ingest allows the same). */

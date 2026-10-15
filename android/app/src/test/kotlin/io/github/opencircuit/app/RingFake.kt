@@ -45,6 +45,10 @@ import kotlinx.coroutines.launch
  *   sends the pages it was given byte for byte; the builders (`HistoryTestPages`, `BacklogPages`)
  *   write each `0x4c` countdown as the real ring does: records still queued after the page + 1,
  *   so a channel's last page reads 1 (a real FR02.022 drain of 652 records: 649 → 1).
+ * - Page formats per firmware: a channel's pages may be `0x4c` / `0x47` / `0x4d` (FR02.018 and
+ *   later, e.g. FR02.022) or `0x40` (older Gen 2 firmware, FR02.013 — the night arrives as `0x40`
+ *   pages, each released only by its `c0` acknowledgement, ../docs/PROTOCOL.md §5.3a). The `0x40`
+ *   layout was never captured, so test `0x40` pages carry arbitrary bodies.
  * - A `07 00 00` with no open before it (a fetch nudge) gets nothing.
  * - [ignoreOpensUntilReauth]: every open is ignored (no `0x82`, no page) until [reauthenticate];
  *   [ignoreAllOpens]: every open is ignored, re-auth or not.
@@ -343,6 +347,7 @@ internal class RingFake(
          */
         val END_OF_HISTORY: ByteArray = hex("500000120c22aae40c22acb5")
 
-        private val PAGE_OPCODES = setOf(0x47, 0x4C, 0x4D)
+        /** The pages that wait for an acknowledgement, as on the real link: `0x40` (older Gen 2 firmware, ACK `c0`), `0x47`, `0x4c`, `0x4d`. */
+        private val PAGE_OPCODES = setOf(0x40, 0x47, 0x4C, 0x4D)
     }
 }

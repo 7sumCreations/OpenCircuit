@@ -74,7 +74,9 @@ internal object SyncLogLines {
         val countdown = c.firstCountdown?.let { "countdown $it → ${c.lastCountdown}" } ?: "countdown none"
         val gap = c.pageGapP50Millis?.let { "gap p50 ${millis(it)} max ${millis(c.pageGapMaxMillis ?: it)}" } ?: "gap none"
         val ack = c.ackLatencyP50Millis?.let { "ack p50 $it ms p95 ${c.ackLatencyP95Millis ?: it} ms" } ?: "ack none"
-        return "  ${c.label} · 0x82 $acks · fallback $fallback · 4c×${c.pages4c} 47×${c.pages47} 4d×${c.pages4d} · ${c.records} records · $range · " +
+        // 0x40 (older firmware's history, kept raw) only when it came, so other rings' lines read as before.
+        val pages40 = if (c.pages40 > 0) " 40×${c.pages40}" else ""
+        return "  ${c.label} · 0x82 $acks · fallback $fallback · 4c×${c.pages4c} 47×${c.pages47} 4d×${c.pages4d}$pages40 · ${c.records} records · $range · " +
             "$countdown · exit ${c.exitReason?.rawValue ?: "none"} · end ${if (c.endSeen) "yes" else "no"} · rounds ${c.rounds} · " +
             "${c.durationMillis?.let(::millis) ?: "duration none"} · $gap · $ack · re-offers ${c.reoffers} · status replies ${c.statusReplies} · " +
             continuityWords(c.continuity)
@@ -88,7 +90,8 @@ internal object SyncLogLines {
         val span = if (oldest != null && newest != null) "$oldest → $newest" else "no records"
         return "  capacity ${e.capacity?.let(::words) ?: "not measured"} · records $span · per day $days · charge markers $charges · " +
             "nights ${e.nightsStaged} staged, ${e.nightsWaiting} waiting · ${e.droppedAfterBound} past the bound · " +
-            "${e.pagesUnacknowledged} pages unacknowledged · ${e.undeliveredFrames} frames undelivered · firmware ${e.firmware ?: "not read"}"
+            "${e.pagesUnacknowledged} pages unacknowledged · ${e.undeliveredFrames} frames undelivered · firmware ${e.firmware ?: "not read"}" +
+            if (e.rawPagesKept > 0 || e.rawPagesDropped > 0) " · ${e.rawPagesKept} raw pages kept, ${e.rawPagesDropped} dropped" else ""
     }
 
     private fun words(v: CapacityVerdict): String {
