@@ -35,6 +35,16 @@ class JetpackAdapterSourceTest {
         val noId = adapter.replace("meta.clientRecordId, meta.version)", ")")
         assertEquals(listOf("id and version on ring records"), AdapterScan.missing(noId))
         assertEquals(listOf("page size 1000"), AdapterScan.missing(adapter.replace("const val PAGE_SIZE = 1000", "const val PAGE_SIZE = 5000")))
+        val unclassified = adapter.replace("HealthErrors.retryReason(", "listOf(")
+        assertEquals(listOf("state errors classified"), AdapterScan.missing(unclassified))
+        assertEquals(listOf("foreground user asked"), AdapterScan.missing(adapter.replace("isUserForeground", "isSystemUser")))
+    }
+
+    @Test
+    fun theSdksOwnErrorCodesNameTheRetryableCauses() {
+        // The platform's constants, never their values copied (android-36.1: 7 and 8).
+        assertEquals(listOf("rate limit code"), AdapterScan.missing(adapter.replace("HealthConnectException.ERROR_RATE_LIMIT_EXCEEDED ->", "7 ->")))
+        assertEquals(listOf("data sync code"), AdapterScan.missing(adapter.replace("HealthConnectException.ERROR_DATA_SYNC_IN_PROGRESS ->", "8 ->")))
     }
 }
 
@@ -47,6 +57,10 @@ object AdapterScan {
         "id and version on ring records" to "meta.clientRecordId, meta.version)",
         "missing grant mapped" to "catch (e: SecurityException)",
         "request contract" to "PermissionController.createRequestPermissionResultContract()",
+        "state errors classified" to "HealthErrors.retryReason(",
+        "foreground user asked" to "isUserForeground",
+        "rate limit code" to "HealthConnectException.ERROR_RATE_LIMIT_EXCEEDED -> PlatformError.RATE_LIMIT_EXCEEDED",
+        "data sync code" to "HealthConnectException.ERROR_DATA_SYNC_IN_PROGRESS -> PlatformError.DATA_SYNC_IN_PROGRESS",
     )
 
     fun missing(source: String): List<String> = required.filterValues { it !in source }.keys.toList()

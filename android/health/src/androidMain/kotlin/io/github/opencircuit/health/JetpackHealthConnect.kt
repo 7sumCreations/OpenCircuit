@@ -2,6 +2,7 @@ package io.github.opencircuit.health
 
 import android.content.Context
 import android.health.connect.HealthConnectException
+import android.os.UserManager
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
@@ -102,11 +103,16 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
         } catch (e: IllegalArgumentException) {
             throw HealthInvalidRecordException(e.message ?: "a record breaks a platform rule")
         } catch (e: IllegalStateException) {
-            when ((e.cause as? HealthConnectException)?.errorCode) {
-                HealthConnectException.ERROR_RATE_LIMIT_EXCEEDED -> throw HealthRetryLaterException(RetryReason.RATE_LIMITED, "the write quota is spent")
-                HealthConnectException.ERROR_DATA_SYNC_IN_PROGRESS -> throw HealthRetryLaterException(RetryReason.DATA_SYNC_IN_PROGRESS, "a data sync is in progress")
-                else -> throw HealthCallFailedException("Health Connect could not complete the call", e)
+            // Jetpack wraps every platform error it has no type for; the code tells the retryable ones apart.
+            val error = when ((e.cause as? HealthConnectException)?.errorCode) {
+                HealthConnectException.ERROR_RATE_LIMIT_EXCEEDED -> PlatformError.RATE_LIMIT_EXCEEDED
+                HealthConnectException.ERROR_DATA_SYNC_IN_PROGRESS -> PlatformError.DATA_SYNC_IN_PROGRESS
+                else -> PlatformError.OTHER
             }
+            // The platform refuses a user who is not in front with no code of its own: ask Android who is.
+            val inFront = appContext.getSystemService(UserManager::class.java)?.isUserForeground ?: true
+            val reason = HealthErrors.retryReason(error, inFront) ?: throw HealthCallFailedException("Health Connect could not complete the call", e)
+            throw HealthRetryLaterException(reason, "Health Connect asked to be called later: $reason")
         } catch (e: Exception) {
             throw HealthCallFailedException("Health Connect could not complete the call", e)
         }

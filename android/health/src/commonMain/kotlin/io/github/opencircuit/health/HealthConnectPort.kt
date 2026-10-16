@@ -77,6 +77,37 @@ enum class RetryReason {
     NOT_FOREGROUND_USER,
 }
 
+/**
+ * What the platform's error code says about an `IllegalStateException` from Health Connect (Jetpack
+ * wraps every platform error it has no Kotlin type for in one). The adapter maps the SDK's own
+ * constants to these.
+ */
+enum class PlatformError {
+    /** `HealthConnectException.ERROR_RATE_LIMIT_EXCEEDED`: the write quota is spent for now. */
+    RATE_LIMIT_EXCEEDED,
+
+    /** `HealthConnectException.ERROR_DATA_SYNC_IN_PROGRESS`: a backup, restore or migration is running. */
+    DATA_SYNC_IN_PROGRESS,
+
+    /** Any other code, or none. */
+    OTHER,
+}
+
+/** Which Health Connect state errors are worth trying again later, and why. */
+object HealthErrors {
+    /**
+     * The reason to try again later, or null for a real failure. The quota and a data sync say so
+     * in their code. A call from a user who is not the phone's foreground user (another user
+     * switched in) is refused by the platform with no code of its own, so any other state error
+     * while the app's user is not in front is taken as that refusal; in front, it is a failure.
+     */
+    fun retryReason(error: PlatformError, userInForeground: Boolean): RetryReason? = when (error) {
+        PlatformError.RATE_LIMIT_EXCEEDED -> RetryReason.RATE_LIMITED
+        PlatformError.DATA_SYNC_IN_PROGRESS -> RetryReason.DATA_SYNC_IN_PROGRESS
+        PlatformError.OTHER -> if (userInForeground) null else RetryReason.NOT_FOREGROUND_USER
+    }
+}
+
 /** The call was refused for now, for [reason]; nothing of it was stored. Try again later. */
 class HealthRetryLaterException(val reason: RetryReason, message: String) :
     IllegalStateException(message), HealthCallException
