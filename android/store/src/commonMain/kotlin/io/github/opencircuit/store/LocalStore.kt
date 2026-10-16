@@ -515,6 +515,21 @@ class LocalStore internal constructor(
     }
 
     /**
+     * As [pendingHealthSamples] for one [kind], each with its row id: two stored rows of one kind may
+     * share a start (the start is indexed, not unique), and the row id tells them apart for good.
+     */
+    suspend fun pendingHealthSampleRows(kind: MetricKind): List<StoredSampleRow> {
+        if (kind !in HEALTH_MIRRORED_KINDS) return emptyList()
+        val mark = healthMarks().last(kind)
+        val rows = if (mark == null) sampleDao.positiveSamples(kind.rawValue) else sampleDao.positiveSamplesAfter(kind.rawValue, mark)
+        return rows.mapNotNull { row -> row.toSample()?.let { StoredSampleRow(row.id, it) } }
+    }
+
+    /** Every stored sample of [kind] with `from <= start < until`, any value, with its row id, oldest first (ties in row order). */
+    suspend fun sampleRows(kind: MetricKind, from: Instant, until: Instant): List<StoredSampleRow> =
+        sampleDao.samples(kind.rawValue, from, until).mapNotNull { row -> row.toSample()?.let { StoredSampleRow(row.id, it) } }
+
+    /**
      * Moves each kind's Health Connect mark to the newest start among [samples] of that kind —
      * forward only, never back — in one transaction. Pass only what Health Connect accepted. Kinds
      * that are not written from the store (steps, energy, sleep) move no mark.

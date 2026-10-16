@@ -209,6 +209,54 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
         put(HEALTH_WRITE_GENERATION, generation.toString(), now)
     }
 
+    // Health Connect write failures (upstream `hk.failures.byMetric`, HealthKitWriter.swift
+    // :377-396): record type name → last failure time. An unreadable value is reported.
+
+    /**
+     * The types whose last Health Connect write failed, by name, with when: null when none,
+     * [Decoded.Unreadable] when what is stored is not `NAME=epochMillis` pairs joined by `;`.
+     */
+    suspend fun loadHealthWriteFailures(): Decoded<Map<String, Instant>>? {
+        val raw = kv.get(HEALTH_WRITE_FAILURES)?.value ?: return null
+        val out = sortedMapOf<String, Instant>()
+        for (pair in raw.split(';')) {
+            val parts = pair.split('=')
+            val name = parts.getOrNull(0)
+            val millis = parts.getOrNull(1)
+            if (parts.size != 2 || name == null || millis == null || !FAILURE_NAME.matches(name) || !ASCII_DIGITS.matches(millis)) {
+                return Decoded.Unreadable(raw, "not NAME=epochMillis pairs")
+            }
+            val ms = millis.toLongOrNull() ?: return Decoded.Unreadable(raw, "a time out of range")
+            out[name] = Instant.ofEpochMilli(ms)
+        }
+        return Decoded.Readable(out.toMap())
+    }
+
+    /**
+     * Saves [failures] (type name → last failure time, at or after 1970), replacing what was
+     * stored; an empty map removes the value. A name is an upper-case constant (`SLEEP_SESSION`).
+     */
+    suspend fun saveHealthWriteFailures(failures: Map<String, Instant>, now: Instant) {
+        failures.forEach { (name, at) ->
+            require(FAILURE_NAME.matches(name)) { "a failure's name must be an upper-case constant, was \"$name\"" }
+            require(!at.isBefore(Instant.EPOCH)) { "a failure time must be at or after 1970, was $at" }
+        }
+        if (failures.isEmpty()) {
+            kv.delete(HEALTH_WRITE_FAILURES)
+            return
+        }
+        put(HEALTH_WRITE_FAILURES, failures.toSortedMap().entries.joinToString(";") { (name, at) -> "$name=${at.toEpochMilli()}" }, now)
+    }
+
+    // Health Connect's permission screen shown once: after it, a "Not connected" card offers
+    // Health Connect's settings instead of asking again (Android shows the screen only so often).
+
+    /** Whether the permission screen was shown. Any stored value counts: a damaged one must not make the card ask again in a loop. */
+    suspend fun loadHealthPermissionsRequested(): Boolean = kv.get(HEALTH_PERMISSIONS_REQUESTED) != null
+
+    /** Records that the permission screen was shown and answered. */
+    suspend fun saveHealthPermissionsRequested(now: Instant) = put(HEALTH_PERMISSIONS_REQUESTED, "1", now)
+
     // Epoch archive: records only through the bounded merge.
 
     /** The stored archive and its drain facts; [StoredEpochArchive.EMPTY] when none or unreadable. */
@@ -325,7 +373,10 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
         const val PENDING_STAGED = "sleep.pendingStagedSegments"
         const val ENERGY_LEDGER = "hk.activeEnergy"
         const val HEALTH_WRITE_GENERATION = "hc.writeGeneration"
+        const val HEALTH_WRITE_FAILURES = "hc.writeFailures"
+        const val HEALTH_PERMISSIONS_REQUESTED = "hc.permissionsRequested"
         val ASCII_DIGITS = Regex("[0-9]+")
+        val FAILURE_NAME = Regex("[A-Z][A-Z0-9_]*")
 
         fun perRing(name: String, ringId: String): String {
             require(ringId.isNotEmpty() && '/' !in ringId) { "a ring id must be non-empty and contain no '/': \"$ringId\"" }
