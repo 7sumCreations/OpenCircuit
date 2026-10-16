@@ -691,8 +691,8 @@ class SleepStore internal constructor(
      * Applies the wearer's edit of the nap detected at [originalStart]: the new window is kept beside
      * the detected one (the start stays the nap's key, so a later detection finds the same nap), all of
      * it asleep, the segments the whole window in bed and asleep. On the first edit the ring's staging
-     * is kept aside. When the window written to Health is no longer inside the new one, the nap is
-     * marked unwritten so Health can be corrected; a widening leaves it. Returns false, writing
+     * is kept aside. Unless the new window is exactly the one written to Health, the nap is marked
+     * unwritten so Health's record is replaced (a widening too). Returns false, writing
      * nothing, when [newEnd] is not after [newStart], the new window shares time with a stored night,
      * or no nap is stored at [originalStart]. Throws, writing nothing, when a lookup or the write fails.
      */
@@ -709,10 +709,11 @@ class SleepStore internal constructor(
             // Reversibility before the segments are replaced, and only from a nap that is still the
             // ring's recording: an edited nap's segments are edit output, never a recording.
             val keepRecording = row.recordedNapSegmentsData == null && !row.isManuallyEdited
-            // A window written to Health that the new one no longer covers must be rewritten there; a
-            // widening is left to the append-only write.
-            val writtenNotCovered = row.healthWritten && row.healthWrittenEnd > row.healthWrittenStart &&
-                (row.healthWrittenStart < from || row.healthWrittenEnd > to)
+            // Health Connect holds the nap as one record under its start, replaced whole: any window
+            // other than the one written there must be written again, a widening too (upstream keeps a
+            // widened nap written, for its append-only write; PORTING.md D-292). A written nap with no
+            // known written window cannot be checked, so it is written again as well.
+            val stillAsWritten = row.healthWritten && row.healthWrittenStart == from && row.healthWrittenEnd == to
             sleepDao.updateNap(
                 row.copy(
                     recordedNapSegmentsData = if (keepRecording) row.napSegmentsData else row.recordedNapSegmentsData,
@@ -722,7 +723,7 @@ class SleepStore internal constructor(
                     isLongNap = isLongNap(from, to),
                     isManuallyEdited = true,
                     napSegmentsData = coarse,
-                    healthWritten = row.healthWritten && !writtenNotCovered,
+                    healthWritten = stillAsWritten,
                     updatedAt = at,
                 ),
             )

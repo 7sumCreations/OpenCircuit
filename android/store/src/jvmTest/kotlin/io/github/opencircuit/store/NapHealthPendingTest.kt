@@ -95,8 +95,12 @@ class NapHealthPendingTest {
             store.markNapWritten(a)
             store.markNapWritten(b)
             store.markNapWritten(manual)
-            // A widening keeps the nap written: its window is detected ∪ edited.
+            // A widening re-arms the write (the record is replaced whole under its id) …
             assertTrue(store.editNap(a, at("2025-06-15T12:30:00Z"), aEnd, now, utc))
+            assertEquals(listOf(a), store.pendingNaps().map { it.start }, "the widened nap waits to be written again")
+            assertEquals(listOf(DateInterval(b, bEnd), DateInterval(manual, manualEnd)), store.healthWrittenNapWindows(june, july))
+            // … and once rewritten its window is detected ∪ edited.
+            store.markNapWritten(a)
 
             assertEquals(
                 listOf(DateInterval(at("2025-06-15T12:30:00Z"), aEnd), DateInterval(b, bEnd), DateInterval(manual, manualEnd)),
