@@ -158,6 +158,23 @@ class SkinTempNightTest {
         assertNull(samples.mark(MetricKind.TEMPERATURE))
     }
 
+    /** The feature check is a call too: when it fails, skin temperature fails and the other types still write. */
+    @Test
+    fun aFailingFeatureCheckFailsSkinTemperatureOnly() = runTest {
+        seedThreePriorNightsAndTonight()
+        val heartRate = QuantitySample(MetricKind.HEART_RATE, clock.now().minusSeconds(600), value = 60.0)
+        samples.add(heartRate)
+        val featureCheckFails = object : HealthConnectPort by hc {
+            override suspend fun featureAvailable(feature: HealthFeature): Boolean = throw HealthCallFailedException("refused", null)
+        }
+
+        val result = HealthWriter(featureCheckFails, samples, WriteGeneration(generations), InMemoryHealthFailures(), clock::now, { zone }, { RingDevice("Gen 2") }).flush()
+
+        assertEquals(setOf(RecordType.SKIN_TEMPERATURE), result.failures.keys)
+        assertNull(samples.mark(MetricKind.TEMPERATURE))
+        assertEquals(heartRate.start, samples.mark(MetricKind.HEART_RATE))
+    }
+
     @Test
     fun aLateReadingRewritesItsNightUnderTheSameIdWithAHigherVersion() = runTest {
         val tonight = seedThreePriorNightsAndTonight()

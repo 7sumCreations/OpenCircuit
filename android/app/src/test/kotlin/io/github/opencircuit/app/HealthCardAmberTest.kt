@@ -111,6 +111,16 @@ class HealthCardAmberTest {
         assertFalse(ui.buttonEnabled)
     }
 
+    /** A write that stopped before it could report (the store could not be read) is amber too, never a quiet "Connected". */
+    @Test
+    fun aWriteThatStoppedIsAmberWithTryAgain() {
+        val ui = card(connected(), HealthFlushState(last = FlushResult(finishedAt = now), error = "IllegalStateException"))
+
+        assertEquals("Could not write to Health Connect. It will be retried on the next sync.", ui.warning)
+        assertEquals("Try again", ui.button)
+        assertTrue(ui.buttonEnabled)
+    }
+
     // ---- skin temperature not on this phone ----
 
     @Test
@@ -174,6 +184,37 @@ class HealthCardAmberTest {
         assertEquals(1, memory.marks)
         assertTrue(access.state.value.asked)
         assertEquals(setOf(HealthPermission.HEART_RATE), access.state.value.granted)
+    }
+
+    /**
+     * The screen resumes as the permission screen answers: the resume's read starts first and is
+     * slow; the answer's read, after the flag is saved, must be the one left on the card.
+     */
+    @Test
+    fun anOlderReadNeverReplacesTheAnswersRead() = runTest {
+        val hc = FakeHealthConnect({ now })
+        val slowFirst = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var reads = 0
+        val memory = object : HealthAccessMemory {
+            var asked = false
+            override suspend fun asked(): Boolean {
+                val seen = asked
+                if (reads++ == 0) slowFirst.await()
+                return seen
+            }
+            override suspend fun markAsked() { asked = true }
+            override suspend fun failures(): Map<RecordType, Instant> = emptyMap()
+        }
+        val access = HealthAccess(hc, memory, backgroundScope, log = {})
+
+        access.refresh()
+        runCurrent()
+        access.permissionScreenAnswered()
+        runCurrent()
+        slowFirst.complete(Unit)
+        runCurrent()
+
+        assertTrue(access.state.value.asked, "the newer read, with the flag saved, is what the card shows")
     }
 
     @Test

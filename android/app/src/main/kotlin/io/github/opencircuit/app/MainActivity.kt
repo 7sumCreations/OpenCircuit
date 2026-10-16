@@ -31,8 +31,6 @@ import io.github.opencircuit.app.connect.PairingSheet
 import io.github.opencircuit.app.connect.ScanStep
 import io.github.opencircuit.app.health.HealthCardSources
 import io.github.opencircuit.app.health.HealthSettingsLink
-import io.github.opencircuit.health.HealthPermission
-import io.github.opencircuit.health.JetpackHealthConnect
 import io.github.opencircuit.app.onboarding.Destination
 import io.github.opencircuit.app.onboarding.LaunchFlow
 import io.github.opencircuit.app.onboarding.OnboardingScreen
@@ -41,6 +39,8 @@ import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingScreen
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.ui.OpenCircuitTheme
+import io.github.opencircuit.health.HealthPermission
+import io.github.opencircuit.health.JetpackHealthConnect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

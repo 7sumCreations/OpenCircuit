@@ -109,9 +109,13 @@ class InMemoryHealthSleep : HealthSleepStore {
 
     override suspend fun pendingNaps(): List<StoredNapToWrite> = synchronized(lock) { napList.map { it.nap }.filter { !it.healthWritten } }
 
-    override suspend fun markNapWritten(start: Instant) = synchronized(lock) {
-        val i = napList.indexOfFirst { it.nap.start == start }
-        if (i >= 0) napList[i] = napList[i].copy(nap = napList[i].nap.copy(healthWritten = true))
+    /** As the store: marked only while the nap still shows what was sent. */
+    override suspend fun markNapWritten(nap: StoredNapToWrite) = synchronized(lock) {
+        val i = napList.indexOfFirst { it.nap.start == nap.start }
+        val current = napList.getOrNull(i)?.nap ?: return@synchronized
+        if (current.shownStart == nap.shownStart && current.shownEnd == nap.shownEnd && current.segments == nap.segments) {
+            napList[i] = napList[i].copy(nap = current.copy(healthWritten = true))
+        }
     }
 
     override suspend fun autoNaps(from: Instant, to: Instant): List<StoredNapToWrite> = synchronized(lock) {

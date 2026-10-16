@@ -108,8 +108,20 @@ object ActiveEnergyDays {
         val sleepWindow: DateInterval?,
     )
 
-    /** One bucket to write: its span and the kilocalories it carries (0 when it lowers a bucket that is gone). */
-    data class Change(val start: Instant, val end: Instant, val kilocalories: Double) {
+    /**
+     * What a store keeps for a bucket written while it was still running (its record ended at the
+     * clock): no total matches it, so the bucket is written again, over its whole span, once it closes.
+     */
+    const val WRITTEN_RUNNING = -1.0
+
+    /**
+     * One bucket to write: its span and the kilocalories it carries (0 when it lowers a bucket that
+     * is gone); [closed] is false for the bucket still running, whose span ends at the clock.
+     */
+    data class Change(val start: Instant, val end: Instant, val kilocalories: Double, val closed: Boolean = true) {
+        /** What the store keeps for this bucket once Health Connect accepted it. */
+        val keptValue: Double get() = if (closed) kilocalories else WRITTEN_RUNNING
+
         /** The bucket's record `oc:ae:<start>`, measured by [device]. */
         fun record(zone: ZoneId, device: RingDevice, version: Long): ActiveCaloriesBurned = ActiveCaloriesBurned(
             start = start,
@@ -150,8 +162,9 @@ object ActiveEnergyDays {
             val before = written[start]
             val changed = if (before == null) kcal > 0 else Math.abs(kcal - before) > SAME_KCAL
             if (!changed) return@mapNotNull null
-            val end = minOf(start.plusMillis(BUCKET_MILLIS), dayEnd, now)
-            if (start.isBefore(end)) Change(start, end, kcal) else null
+            val full = minOf(start.plusMillis(BUCKET_MILLIS), dayEnd)
+            val end = minOf(full, now)
+            if (start.isBefore(end)) Change(start, end, kcal, closed = end == full) else null
         }
     }
 }

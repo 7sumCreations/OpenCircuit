@@ -112,7 +112,7 @@ class HealthConnectSleepReadBackTest {
         override suspend fun queuedEdits() = queue.toList()
         override suspend fun clearQueuedEdit(edit: QueuedNightEdit) = queue.remove(edit)
         override suspend fun pendingNaps() = if (napWritten) emptyList() else listOf(nap)
-        override suspend fun markNapWritten(start: Instant) { napWritten = true }
+        override suspend fun markNapWritten(nap: StoredNapToWrite) { napWritten = true }
         override suspend fun autoNaps(from: Instant, to: Instant) = emptyList<StoredNapToWrite>()
         override suspend fun deleteNaps(starts: List<Instant>) = Unit
     }

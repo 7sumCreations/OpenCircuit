@@ -63,6 +63,23 @@ class WriteGenerationTest {
         }
     }
 
+    /**
+     * Health Connect keeps the app's records after an uninstall, and a reinstall (or cleared data)
+     * starts with no stored generation. Counting again from 1 would lose to every version a previous
+     * install wrote, so every replacement would be ignored: the first generation of an empty store
+     * starts above the floor it is given (the wall clock in milliseconds, in the app).
+     */
+    @Test
+    fun anEmptyStoreStartsAboveTheFloorAndAStoredOneIgnoresIt() = runTest {
+        val floor = 1_760_000_000_000L
+        val store = MemoryStore()
+        val generation = WriteGeneration(store) { floor }
+        assertEquals(listOf(floor + 1, floor + 2), List(2) { generation.next() })
+        // Once stored, the counter is not a clock: a floor set back changes nothing.
+        assertEquals(floor + 3, WriteGeneration(store) { 5L }.next())
+        assertEquals(42L, WriteGeneration(MemoryStore(41)) { floor }.next())
+    }
+
     @Test
     fun nothingStoredMeansNothingHandedOutYet() = runTest {
         val store = MemoryStore()

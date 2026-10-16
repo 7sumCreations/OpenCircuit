@@ -42,6 +42,25 @@ interface HealthSampleStore {
 
     /** Moves each kind's mark to the newest of [samples] (forward only). Only what Health Connect accepted. */
     suspend fun markWritten(samples: List<QuantitySample>)
+
+    /**
+     * Whether a sample of [kind] above zero, newer than the kind's mark and not after [upTo], is
+     * stored: asked instead of reading them all for a type the user has not allowed.
+     */
+    suspend fun hasPending(kind: MetricKind, upTo: Instant): Boolean = pendingSamples(kind).any { !it.start.isAfter(upTo) }
+
+    /**
+     * A watermark of what is stored now (the store's highest row id), read before a flush reads what
+     * is pending; null for a store that keeps none.
+     */
+    suspend fun rowWatermark(): Long? = null
+
+    /**
+     * As [markWritten], by a flush that read what is pending after [seenWatermark]: a mark never
+     * passes a sample stored after it (a sync or a live reading landing while the flush sends), so
+     * that sample stays pending.
+     */
+    suspend fun markWritten(samples: List<QuantitySample>, seenWatermark: Long?) = markWritten(samples)
 }
 
 /** What one flush did, per record type. Counts only: no value, no id. */
@@ -158,8 +177,12 @@ class HealthWriter(
         private var catchingUp = false
         private var calls = 0
 
+        /** What the store held before this flush read anything: a sample stored later is never marked by it. */
+        private var watermark: Long? = null
+
         suspend fun run(): FlushResult {
             if (port.sdkStatus() != HealthSdkStatus.AVAILABLE) return FlushResult(finishedAt = clock(), available = false, failureMap = failureStore.load())
+            watermark = store.rowWatermark()
             val granted = port.grantedWrites()
             writeHeartRate(granted)
             for ((kind, type) in ScalarRecords.TYPES) writeScalar(kind, type, granted)
@@ -196,14 +219,16 @@ class HealthWriter(
 
         private suspend fun version(): Long = version ?: generation.next().also { version = it }
 
+        /** For a type not allowed: notes it when something waits, without reading what waits. */
+        private suspend fun notAllowed(type: RecordType, waiting: suspend () -> Boolean) {
+            if (waiting()) notGranted += type
+        }
+
         private suspend fun writeHeartRate(granted: Set<HealthPermission>) {
             val type = RecordType.HEART_RATE
+            if (type.permission !in granted) return notAllowed(type) { store.hasPending(MetricKind.HEART_RATE, now) }
             val hourStarts = HrHours.hoursToRebuild(store.pendingSamples(MetricKind.HEART_RATE), now)
             if (hourStarts.isEmpty()) return
-            if (type.permission !in granted) {
-                notGranted += type
-                return
-            }
             // One read covers every hour: everything after the first hour's start is in a pending hour or before the mark in it.
             val stored = store.samples(MetricKind.HEART_RATE, hourStarts.first(), hourStarts.last().plusSeconds(SECONDS_PER_HOUR))
                 .groupBy { HrHours.hourStart(it.start) }
@@ -214,12 +239,9 @@ class HealthWriter(
 
         /** Heart-rate variability, blood oxygen or breathing rate: one record per pending stored sample. */
         private suspend fun writeScalar(kind: MetricKind, type: RecordType, granted: Set<HealthPermission>) {
+            if (type.permission !in granted) return notAllowed(type) { store.hasPending(kind, now) }
             val pending = store.pendingRows(kind).filter { !it.sample.start.isAfter(now) }
             if (pending.isEmpty()) return
-            if (type.permission !in granted) {
-                notGranted += type
-                return
-            }
             // Every stored row at the pending starts, so each id's ordinal counts them all.
             val atStarts = store.rows(kind, pending.first().sample.start, pending.last().sample.start.plusMillis(1))
             writeItems(type, ScalarRecords.items(kind, pending, atStarts, now, zone(), device(), version()))
@@ -232,13 +254,27 @@ class HealthWriter(
          */
         private suspend fun writeSkinTemperature(granted: Set<HealthPermission>) {
             val type = RecordType.SKIN_TEMPERATURE
-            val pending = store.pendingSamples(MetricKind.TEMPERATURE).filter { !it.start.isAfter(now) }
-            if (pending.isEmpty()) return
-            if (!port.featureAvailable(HealthFeature.SKIN_TEMPERATURE)) {
+            val allowed = type.permission in granted
+            // Not allowed: only whether anything waits, never every held reading.
+            val pending = if (allowed) store.pendingSamples(MetricKind.TEMPERATURE).filter { !it.start.isAfter(now) } else emptyList()
+            if (if (allowed) pending.isEmpty() else !store.hasPending(MetricKind.TEMPERATURE, now)) return
+            val supported = try {
+                port.featureAvailable(HealthFeature.SKIN_TEMPERATURE)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: HealthRetryLaterException) {
+                catchingUp = true
+                return
+            } catch (e: Exception) {
+                // A failed check fails this type only; the kind of failure, never a value.
+                failures[type] = e::class.simpleName ?: "failure"
+                return
+            }
+            if (!supported) {
                 unsupported += type
                 return
             }
-            if (type.permission !in granted) {
+            if (!allowed) {
                 notGranted += type
                 return
             }
@@ -254,9 +290,14 @@ class HealthWriter(
             writeItems(type, items)
         }
 
+        /** The stored nights with their timelines, read once per flush (sleep and resting heart rate both use them). */
+        private var storedNights: List<StoredSleepNight>? = null
+
+        private suspend fun storedNights(): List<StoredSleepNight> = storedNights ?: sleep.nights().also { storedNights = it }
+
         /** The settled nights, then the queued edits, then the naps: three independent steps. */
         private suspend fun writeSleep(granted: Set<HealthPermission>) {
-            val nights = sleep.nights()
+            val nights = storedNights()
             writeSettledNights(nights, granted)
             writeQueuedEdits(nights, granted)
             writeNaps(granted)
@@ -308,7 +349,8 @@ class HealthWriter(
          * night's end, so no settle margin); then the ids the night no longer has are deleted and the
          * naps the edited window absorbed are removed; the edit marks move from what was written; the
          * item is cleared only if it is still the one written. An edit of a night no longer stored,
-         * or with nothing in it, is dropped. Without the sleep grant the queue waits (upstream drops
+         * or with nothing in it, is dropped; so is one breaking a platform rule for good (counted as
+         * rejected), while one starting ahead of the clock waits. Without the sleep grant the queue waits (upstream drops
          * it when sleep is denied). A queue this build cannot read is a failure of the type, and the
          * rest of the flush goes on.
          */
@@ -339,9 +381,11 @@ class HealthWriter(
                     sleep.clearQueuedEdit(edit)
                     continue
                 }
+                if (session.start.isAfter(now)) continue // kept queued: written once the clock passes its start
                 if (HealthRanges.violation(session, now) != null) {
-                    // Kept queued: a night ending ahead of the clock is written once it is past.
+                    // A rule broken for good: the edit can never be written, so it is dropped, counted once.
                     reject(type, 1)
+                    sleep.clearQueuedEdit(edit)
                     continue
                 }
                 when (send(type, listOf(session))) {
@@ -352,7 +396,11 @@ class HealthWriter(
                         sleep.markEditWritten(night.night, published, night.recordedEnd)
                         sleep.clearQueuedEdit(edit)
                     }
-                    Sent.REFUSED_RECORD -> reject(type, 1)
+                    Sent.REFUSED_RECORD -> {
+                        // Refused by the platform for a rule our table missed: as above, dropped once.
+                        reject(type, 1)
+                        sleep.clearQueuedEdit(edit)
+                    }
                     Sent.STOP -> return
                 }
             }
@@ -399,7 +447,7 @@ class HealthWriter(
                     RecordMeta(RecordIds.nap(nap.start), v, RecordingMethod.AUTOMATICALLY_RECORDED, device())
                 }
                 val session = SleepMapping.session(segments, SleepMapping.pathOf(segments), meta, zone(), NAP_TITLE) ?: return@mapNotNull null
-                WriteItem(session, emptyList()) { sleep.markNapWritten(nap.start) }
+                WriteItem(session, emptyList()) { sleep.markNapWritten(nap) }
             }
             writeItems(type, items)
         }
@@ -415,12 +463,9 @@ class HealthWriter(
          */
         private suspend fun writeStepsThenDistance(granted: Set<HealthPermission>) {
             val type = RecordType.STEPS
+            if (type.permission !in granted) return notAllowed(type) { activity.hasPendingSteps(now) }
             val pending = activity.pendingSteps().filter { !it.start.isAfter(now) }
             if (pending.isEmpty()) return
-            if (type.permission !in granted) {
-                notGranted += type
-                return
-            }
             // Every stored row at the pending starts: rows that share a start are one record.
             val atStarts = activity.steps(pending.first().start, pending.last().start.plusMillis(1))
             val v = version()
@@ -456,7 +501,7 @@ class HealthWriter(
             val from = days.first().atStartOfDay(zone).toInstant()
             val heartRate = store.samples(MetricKind.HEART_RATE, from, now).map { HRSample(it.value.toInt(), it.start, it.end) }
             if (heartRate.isEmpty()) return
-            val stages = sleep.nights().flatMap { it.timeline }.filter { it.end.isAfter(from) }
+            val stages = storedNights().flatMap { it.timeline }.filter { it.end.isAfter(from) }
             val starts = days.associateBy { it.atStartOfDay(zone).toInstant() }
             val values = RestingHR.dailyValues(heartRate, stages, zone).mapNotNull { v -> starts[v.day]?.let { it to v.bpm } }
             if (values.isEmpty()) return
@@ -542,7 +587,7 @@ class HealthWriter(
                 val kept = writtenAndChanges.first.toMutableMap()
                 writtenAndChanges.second.map { change ->
                     WriteItem(change.record(zone, ring, v), emptyList()) {
-                        kept[change.start] = change.kilocalories
+                        kept[change.start] = change.keptValue
                         activity.setEnergyWritten(day, kept.toMap())
                     }
                 }
@@ -576,7 +621,7 @@ class HealthWriter(
                 if (catchingUp) return
                 val built = PeriodRecords.build(entry, now, zone, v)
                 val fresh = built.ids
-                periods.recordWrittenIds(entry.start, (entry.writtenIds + fresh).distinct(), finalized = false)
+                periods.recordWrittenIds(entry, (entry.writtenIds + fresh).distinct(), finalized = false)
                 if (!writeItems(RecordType.MENSTRUATION_FLOW, built.flows.map { WriteItem(it, emptyList()) })) return
                 if (!writeItems(RecordType.MENSTRUATION_PERIOD, built.periods.map { WriteItem(it, emptyList()) })) return
                 val (goneFlows, goneOthers) = entry.writtenIds.filter { it !in fresh }.distinct().partition(PeriodRecords::isFlowId)
@@ -584,7 +629,7 @@ class HealthWriter(
                     if (goneFlows.isNotEmpty() && !delete(RecordType.MENSTRUATION_FLOW, goneFlows)) addAll(goneFlows)
                     if (goneOthers.isNotEmpty() && !delete(RecordType.MENSTRUATION_PERIOD, goneOthers)) addAll(goneOthers)
                 }
-                periods.recordWrittenIds(entry.start, fresh + undeleted, finalized = undeleted.isEmpty())
+                periods.recordWrittenIds(entry, fresh + undeleted, finalized = undeleted.isEmpty())
             }
         }
 
@@ -664,7 +709,7 @@ class HealthWriter(
         }
 
         private suspend fun accepted(type: RecordType, items: List<WriteItem>) {
-            store.markWritten(items.flatMap { it.samples })
+            store.markWritten(items.flatMap { it.samples }, watermark)
             written[type] = (written[type] ?: 0) + items.size
             for (item in items) item.afterAccepted?.invoke()
         }

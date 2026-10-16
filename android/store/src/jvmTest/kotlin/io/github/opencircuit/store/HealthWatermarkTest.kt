@@ -191,4 +191,46 @@ class HealthWatermarkTest {
             assertEquals(emptyList(), store.pendingHealthSamples(MetricKind.HRV_SDNN))
         }
     }
+
+    /** The existence check agrees with the pending read: above zero, after the mark, not after the limit. */
+    @Test
+    fun whetherAnythingIsPendingIsAnsweredWithoutReadingIt() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = LocalStore(db)
+            assertEquals(false, store.hasPendingHealthSamples(MetricKind.HEART_RATE, at(1_000)))
+            db.plantSample(MetricKind.HEART_RATE.rawValue, 50, 0.0)
+            assertEquals(false, store.hasPendingHealthSamples(MetricKind.HEART_RATE, at(1_000)), "a zero is never pending")
+            store.ingest(listOf(hr(70.0, 100), hr(72.0, 200)), now, utc)
+            assertEquals(true, store.hasPendingHealthSamples(MetricKind.HEART_RATE, at(1_000)))
+            assertEquals(false, store.hasPendingHealthSamples(MetricKind.HEART_RATE, at(99)), "nothing at or before the limit")
+            store.markHealthWritten(listOf(hr(70.0, 100)))
+            assertEquals(true, store.hasPendingHealthSamples(MetricKind.HEART_RATE, at(1_000)))
+            store.markHealthWritten(listOf(hr(72.0, 200)))
+            assertEquals(false, store.hasPendingHealthSamples(MetricKind.HEART_RATE, at(1_000)))
+            assertEquals(false, store.hasPendingHealthSamples(MetricKind.STEPS, at(1_000)), "a kind not written from here")
+        }
+    }
+
+    /**
+     * A write reads what is pending, a sync stores older samples while it sends, then the write
+     * marks what it sent: the mark stops before the samples it never saw, which stay pending.
+     */
+    @Test
+    fun aMarkNeverPassesASampleStoredAfterTheWriterRead() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = LocalStore(db)
+            store.ingest(listOf(hr(70.0, 100), spo2(0.97, 100)), now, utc)
+            val seen = store.sampleRowWatermark()
+            val read = store.pendingHealthSamples()
+
+            store.insertLiveSamples(listOf(hr(64.0, 50), hr(66.0, 300)), now)
+            store.markHealthWritten(read, seen)
+
+            assertEquals(listOf(64.0, 70.0, 66.0), store.pendingHealthSamples(MetricKind.HEART_RATE).map { it.value })
+            assertEquals(emptyList(), store.pendingHealthSamples(MetricKind.SPO2), "a kind with nothing new moves as before")
+
+            store.markHealthWritten(store.pendingHealthSamples(MetricKind.HEART_RATE), store.sampleRowWatermark())
+            assertEquals(emptyList(), store.pendingHealthSamples(MetricKind.HEART_RATE))
+        }
+    }
 }

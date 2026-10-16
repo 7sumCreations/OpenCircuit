@@ -40,6 +40,20 @@ class StepHealthPendingTest {
     }
 
     @Test
+    fun whetherAStepRowIsPendingIsAnsweredWithoutReadingThem() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = LocalStore(db)
+            assertEquals(false, store.hasPendingStepSamples(now))
+            store.threeReadings()
+            assertEquals(true, store.hasPendingStepSamples(now))
+            assertEquals(false, store.hasPendingStepSamples(at("09:29:59")), "none starts at or before the limit")
+
+            store.markStepSamplesWritten(store.pendingStepSampleRows().map { it.id })
+            assertEquals(false, store.hasPendingStepSamples(now))
+        }
+    }
+
+    @Test
     fun markingTakesOutOnlyTheRowsNamed() = runBlocking<Unit> {
         withInMemoryStore { db ->
             val store = LocalStore(db)

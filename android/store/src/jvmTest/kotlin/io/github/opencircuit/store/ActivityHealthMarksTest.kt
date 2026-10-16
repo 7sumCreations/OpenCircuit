@@ -66,6 +66,21 @@ class ActivityHealthMarksTest {
         }
     }
 
+    /** A bucket written while running is kept as the running marker, and only that negative value is taken. */
+    @Test
+    fun aBucketWrittenWhileRunningIsKeptAsTheRunningMarker() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = BlobStore(db)
+            val day = LocalDate.of(2026, 10, 16)
+            val buckets = mapOf(Instant.parse("2026-10-16T09:00:00Z") to 4.0, Instant.parse("2026-10-16T09:15:00Z") to ENERGY_WRITTEN_RUNNING)
+
+            store.saveHealthEnergyWritten(day, buckets, now)
+
+            assertEquals(buckets, BlobStore(db).loadHealthEnergyWritten(day))
+            assertFailsWith<IllegalArgumentException> { store.saveHealthEnergyWritten(day, mapOf(Instant.parse("2026-10-16T09:30:00Z") to -2.0), now) }
+        }
+    }
+
     @Test
     fun theKilocaloriesWrittenPerBucketAreKeptPerDayAndOldDaysForgotten() = runBlocking<Unit> {
         withInMemoryStore { db ->

@@ -61,6 +61,10 @@ object AdapterScan {
         "foreground user asked" to "isUserForeground",
         "rate limit code" to "HealthConnectException.ERROR_RATE_LIMIT_EXCEEDED -> PlatformError.RATE_LIMIT_EXCEEDED",
         "data sync code" to "HealthConnectException.ERROR_DATA_SYNC_IN_PROGRESS -> PlatformError.DATA_SYNC_IN_PROGRESS",
+        // A fault of ours (a record in another type's call, a ring record naming no ring) is a failed
+        // call, shown on the card — never a record the platform refused, counted and dropped quietly.
+        "type mismatch is a failure" to "throw HealthCallFailedException(\"a \${record.type} record in a \$type call\")",
+        "ring record without ring is a failure" to "?: throw HealthCallFailedException(\"a ring record names no ring\")",
     )
 
     fun missing(source: String): List<String> = required.filterValues { it !in source }.keys.toList()

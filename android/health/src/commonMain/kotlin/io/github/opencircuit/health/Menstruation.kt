@@ -28,14 +28,18 @@ interface HealthPeriodStore {
     /** The periods to look at: never written or edited since, still open, or ending on a day after [today]'s in [zone]. Oldest first. */
     suspend fun periodsNeedingMirror(today: Instant, zone: ZoneId): List<PeriodToWrite>
 
-    /** Names [ids] as the period's records, written up to date when [finalized]. No period at [start]: nothing. */
-    suspend fun recordWrittenIds(start: Instant, ids: List<String>, finalized: Boolean)
+    /**
+     * Names [ids] as the records of the period written from [entry], written up to date when
+     * [finalized] and the period still has [entry]'s end and flow (one the wearer edited meanwhile
+     * stays to be written). No period at its start: nothing.
+     */
+    suspend fun recordWrittenIds(entry: PeriodToWrite, ids: List<String>, finalized: Boolean)
 
     companion object {
         /** Holds nothing: a writer built without the period log. */
         val NONE: HealthPeriodStore = object : HealthPeriodStore {
             override suspend fun periodsNeedingMirror(today: Instant, zone: ZoneId): List<PeriodToWrite> = emptyList()
-            override suspend fun recordWrittenIds(start: Instant, ids: List<String>, finalized: Boolean) = Unit
+            override suspend fun recordWrittenIds(entry: PeriodToWrite, ids: List<String>, finalized: Boolean) = Unit
         }
     }
 }

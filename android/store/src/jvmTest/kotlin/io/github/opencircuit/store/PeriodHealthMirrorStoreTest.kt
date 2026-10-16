@@ -45,6 +45,24 @@ class PeriodHealthMirrorStoreTest {
         }
     }
 
+    /** The wearer edits the period while its records are sent: the write of the old version never finalizes the edited one. */
+    @Test
+    fun aPeriodEditedWhileItWasWrittenIsNotFinalized() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = LocalStore(db)
+            store.log(day(1), day(5))
+            val sent = store.periodEntriesNeedingHealthMirror(now, utc).single()
+            store.log(day(1), day(6))
+
+            store.recordPeriodEntryHealthIds(day(1), listOf("oc:flow:2026-10-01"), finalized = true, writtenEnd = sent.end, writtenFlowLevelRaw = sent.flowLevelRaw)
+
+            assertEquals(listOf(day(1)), store.periodEntriesNeedingHealthMirror(now, utc).map { it.start }, "the edit is still to be written")
+            assertEquals(listOf("oc:flow:2026-10-01"), store.periodEntriesNeedingHealthMirror(now, utc).single().hkSampleUUIDs, "what was sent stays named")
+            store.recordPeriodEntryHealthIds(day(1), listOf("oc:flow:2026-10-01"), finalized = true, writtenEnd = day(6), writtenFlowLevelRaw = 2)
+            assertEquals(emptyList(), store.periodEntriesNeedingHealthMirror(now, utc))
+        }
+    }
+
     @Test
     fun aWrittenOpenPeriodStaysAskedForBecauseADayMayHaveElapsed() = runBlocking<Unit> {
         withInMemoryStore { db ->

@@ -1,6 +1,8 @@
 package io.github.opencircuit.store
 
 import io.github.opencircuit.ringkit.DateInterval
+import io.github.opencircuit.ringkit.SleepSegment
+import io.github.opencircuit.ringkit.SleepStage
 import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import java.time.ZoneId
@@ -113,6 +115,60 @@ class NapHealthPendingTest {
             )
             assertEquals(listOf(DateInterval(manual, manualEnd)), store.healthWrittenNapWindows(at("2025-06-17T00:00:00Z"), at("2025-06-18T00:00:00Z")), "only the naps overlapping the span")
             assertTrue(store.healthWrittenNapWindows(aEnd, at("2025-06-15T15:00:00Z")).isEmpty(), "touching at an end is not overlapping")
+        }
+    }
+
+    // Health Connect holds a nap as one record under its start, replaced whole: whatever changes
+    // what it would hold must write it again.
+
+    private val staged = listOf(
+        SleepSegment(a, aEnd, SleepStage.IN_BED),
+        SleepSegment(a, at("2025-06-15T13:40:00Z"), SleepStage.ASLEEP_CORE),
+        SleepSegment(at("2025-06-15T13:40:00Z"), at("2025-06-15T13:50:00Z"), SleepStage.AWAKE),
+        SleepSegment(at("2025-06-15T13:50:00Z"), aEnd, SleepStage.ASLEEP_CORE),
+    )
+
+    @Test
+    fun aReDetectionThatChangesAWrittenNapReArmsIt() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            store.saveNap(a, aEnd, 90, false, now = now, zone = utc)
+            store.markNapWritten(a)
+
+            store.saveNap(a, aEnd, 90, false, now = now, zone = utc)
+            assertTrue(store.pendingNaps().isEmpty(), "the same detection again changes nothing")
+
+            store.saveNap(a, at("2025-06-15T14:45:00Z"), 105, false, now = now, zone = utc)
+            assertEquals(listOf(a), store.pendingNaps().map { it.start }, "a longer nap is written again")
+        }
+    }
+
+    @Test
+    fun anEditToTheSameWindowThatDropsTheRingsStagingReArmsIt() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            store.saveNap(a, aEnd, 80, false, segments = staged, now = now, zone = utc)
+            store.markNapWritten(a)
+
+            assertTrue(store.editNap(a, a, aEnd, now, utc))
+
+            assertEquals(listOf(a), store.pendingNaps().map { it.start }, "Health Connect holds the staging, the app shows it all asleep")
+        }
+    }
+
+    @Test
+    fun aNapChangedWhileItsRecordWasSentIsNotMarkedWritten() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = SleepStore(db)
+            store.saveNap(a, aEnd, 90, false, now = now, zone = utc)
+            val sent = store.pendingNaps().single()
+            store.saveNap(a, at("2025-06-15T14:45:00Z"), 105, false, now = now, zone = utc)
+
+            store.markNapWritten(a, sent.start, sent.end, sent.segments)
+
+            assertEquals(listOf(a), store.pendingNaps().map { it.start }, "the longer nap still waits")
+            store.markNapWritten(a, a, at("2025-06-15T14:45:00Z"), null)
+            assertTrue(store.pendingNaps().isEmpty())
         }
     }
 }

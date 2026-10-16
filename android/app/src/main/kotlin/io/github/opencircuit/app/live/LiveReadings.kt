@@ -90,7 +90,8 @@ class StoreLiveReadings(
  * Heart rate, SpO₂ and skin temperature are kept outside the sync cursor (PORTING.md D-293), so a
  * later drain keeps the ring's older backlog. The frame handlers return at once: the readings are
  * kept in arrival order by one coroutine on [scope]; a store write that fails is logged by its kind
- * and the next reading goes on (the baseline then stays at the last reading kept).
+ * and the next reading goes on (the baseline then stays at the last reading whose steps were
+ * stored, even when only the baseline's own save failed).
  */
 class LiveReadings(
     private val store: LiveReadingStore,
@@ -165,8 +166,10 @@ class LiveReadings(
             store.addSteps(update.deltaToAdd.toLong(), at, windowStart)
         }
         val next = StepBaseline(raw, day, at)
-        store.saveStepBaseline(next)
+        // The fold moves past this reading before the save: its delta is stored already, so a save
+        // that fails must not make the next reading credit the same steps again.
         baseline = next
+        store.saveStepBaseline(next)
     }
 
     private suspend fun keepTemperature(celsius: Double, at: Instant) {

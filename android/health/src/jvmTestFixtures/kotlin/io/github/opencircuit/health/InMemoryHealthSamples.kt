@@ -43,11 +43,25 @@ class InMemoryHealthSamples : HealthSampleStore {
         stored.filter { it.sample.kind == kind && !it.sample.start.isBefore(from) && it.sample.start.isBefore(until) }.sortedBy { it.sample.start }
     }
 
-    override suspend fun markWritten(samples: List<QuantitySample>): Unit = synchronized(lock) {
+    override suspend fun markWritten(samples: List<QuantitySample>) = markWritten(samples, null)
+
+    override suspend fun hasPending(kind: MetricKind, upTo: Instant): Boolean = synchronized(lock) {
+        val mark = marks[kind]
+        stored.any { it.sample.kind == kind && it.sample.value > 0 && (mark == null || it.sample.start.isAfter(mark)) && !it.sample.start.isAfter(upTo) }
+    }
+
+    override suspend fun rowWatermark(): Long = synchronized(lock) { nextId - 1 }
+
+    /** As the store: a mark stops just before the oldest positive sample added after [seenWatermark] that it would pass. */
+    override suspend fun markWritten(samples: List<QuantitySample>, seenWatermark: Long?): Unit = synchronized(lock) {
         for ((kind, ofKind) in samples.groupBy { it.kind }) {
             val newest = ofKind.maxOf { it.start }
+            val unseen = seenWatermark?.let { seen ->
+                stored.filter { it.rowId > seen && it.sample.kind == kind && it.sample.value > 0 && !it.sample.start.isAfter(newest) }.minOfOrNull { it.sample.start }
+            }
+            val target = unseen?.let { minOf(newest, it.minusMillis(1)) } ?: newest
             val current = marks[kind]
-            if (current == null || newest.isAfter(current)) marks[kind] = newest
+            if (current == null || target.isAfter(current)) marks[kind] = target
         }
     }
 }

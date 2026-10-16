@@ -147,6 +147,39 @@ class EditedNightReplaceTest {
         assertTrue(sleep.editsMarked.isEmpty())
     }
 
+    /** A rule the edit breaks for good can never be written: it is dropped and counted, not retried every flush. */
+    @Test
+    fun anEditThePlatformRefusesIsDroppedAndCountedOnce() = runBlocking<Unit> {
+        writtenUnedited()
+        sleep.queue(edit())
+        hc.failNext(RecordType.SLEEP_SESSION, HealthInvalidRecordException("stages overlap"))
+
+        val first = writer().flush()
+        assertEquals(1, first.rejected[RecordType.SLEEP_SESSION])
+        assertTrue(sleep.queued().isEmpty(), "dropped, not queued for ever")
+
+        val second = writer().flush()
+        assertEquals(null, second.rejected[RecordType.SLEEP_SESSION])
+        assertEquals(recorded.minOf { it.start }, sessions().single().start, "the night as it was, untouched")
+        assertTrue(sleep.editsMarked.isEmpty())
+    }
+
+    /** Only an edit starting ahead of the clock waits: it is written once the clock passes it. */
+    @Test
+    fun anEditStartingAheadOfTheClockStaysQueued() = runBlocking<Unit> {
+        sleep.putNight(StoredSleepNight(key, night, edited = true, timeline = recorded, recordedEnd = at(7.0)))
+        sleep.queue(edit())
+        now = at(-2.5)
+
+        writer().flush()
+
+        assertEquals(listOf(edit()), sleep.queued())
+        now = Instant.parse("2026-06-20T09:00:00Z")
+        writer().flush()
+        assertTrue(sleep.queued().isEmpty())
+        assertEquals(at(-2.0), sessions().single().start)
+    }
+
     @Test
     fun withoutTheSleepGrantTheEditWaitsQueued() = runBlocking<Unit> {
         sleep.putNight(StoredSleepNight(key, night, edited = true, timeline = recorded, recordedEnd = at(7.0)))

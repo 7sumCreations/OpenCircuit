@@ -49,6 +49,24 @@ class RestingHrDayTest {
 
     private fun resting() = hc.records(RecordType.RESTING_HEART_RATE).map { it as RestingHeartRate }.sortedBy { it.time }
 
+    /** Every stored night is read once per flush: sleep and resting heart rate share the read. */
+    @Test
+    fun theStoredNightsAreReadOncePerFlush() = runTest {
+        day("2026-10-15")
+        var reads = 0
+        val counting = object : HealthSleepStore by sleep {
+            override suspend fun nights(): List<StoredSleepNight> = sleep.nights().also { reads++ }
+        }
+
+        HealthWriter(
+            hc, samples, WriteGeneration(InMemoryWriteGenerations()), InMemoryHealthFailures(), clock::now, { zone }, { RingDevice("Gen 2") },
+            sleep = counting, activity = activity,
+        ).flush()
+
+        assertEquals(1, reads)
+        assertTrue(resting().isNotEmpty())
+    }
+
     /** The edge exactly: at the day's start + 12 h − 1 ms it is not final; at + 12 h it is. */
     @Test
     fun aDayIsWrittenOnceTwelveHoursPastItsStartAndNotAMillisecondBefore() = runTest {

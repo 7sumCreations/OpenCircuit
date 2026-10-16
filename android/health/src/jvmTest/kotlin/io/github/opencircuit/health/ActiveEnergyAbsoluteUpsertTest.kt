@@ -134,6 +134,23 @@ class ActiveEnergyAbsoluteUpsertTest {
         assertEquals(listOf("oc:ae:${at("09:00:00").toEpochMilli()}", "oc:ae:${at("09:15:00").toEpochMilli()}"), energy().map { it.meta.clientRecordId })
     }
 
+    /** A bucket written while running, whose total does not change, still gets its full span once it closes. */
+    @Test
+    fun aRunningBucketIsWrittenAgainOverItsWholeSpanOnceItCloses() = runTest {
+        clock.set(at("09:10:00"))
+        walk(at("09:00:00"), 5)
+        writer().flush()
+        assertEquals(listOf(at("09:10:00")), energy().map { it.end })
+
+        clock.set(at("09:40:00"))
+        writer().flush()
+
+        assertEquals(listOf(at("09:15:00")), energy().map { it.end })
+        val calls = hc.calls.size
+        writer().flush()
+        assertEquals(calls, hc.calls.size, "a closed bucket is not written again")
+    }
+
     @Test
     fun notAllowedWritesNothingAndTheNextAllowedFlushCatchesUp() = runTest {
         hc.revoke(HealthPermission.ACTIVE_CALORIES_BURNED)

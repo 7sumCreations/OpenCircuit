@@ -18,6 +18,6 @@ class StoreHealthPeriods(private val database: suspend () -> StoreDatabase) : He
             PeriodToWrite(it.start, it.end, it.flowLevelRaw, it.healthWritten, it.hkSampleUUIDs)
         }
 
-    override suspend fun recordWrittenIds(start: Instant, ids: List<String>, finalized: Boolean) =
-        LocalStore(database()).recordPeriodEntryHealthIds(start, ids, finalized)
+    override suspend fun recordWrittenIds(entry: PeriodToWrite, ids: List<String>, finalized: Boolean) =
+        LocalStore(database()).recordPeriodEntryHealthIds(entry.start, ids, finalized, writtenEnd = entry.end, writtenFlowLevelRaw = entry.flowLevelRaw)
 }

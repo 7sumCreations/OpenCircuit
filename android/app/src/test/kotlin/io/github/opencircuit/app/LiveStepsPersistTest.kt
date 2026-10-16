@@ -173,6 +173,41 @@ class LiveStepsPersistTest {
         assertEquals(listOf("live readings: a reading could not be kept (IllegalStateException)"), logs, "the kind only, never a value")
     }
 
+    /**
+     * The delta was stored but the baseline's save failed: the next reading folds against the
+     * reading whose steps were stored, never crediting the same steps twice.
+     */
+    @Test
+    fun aFailedBaselineSaveNeverCountsTheSameStepsTwice() = runTest {
+        val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
+        val wall = { wallStart.plusMillis(testScheduler.currentTime) }
+        var failNext = false
+        val real = StoreLiveReadings({ db }, wall, { utc })
+        val flaky = object : LiveReadingStore by real {
+            override suspend fun saveStepBaseline(baseline: io.github.opencircuit.store.StepBaseline) {
+                if (failNext) {
+                    failNext = false
+                    throw IllegalStateException("disk full")
+                }
+                real.saveStepBaseline(baseline)
+            }
+        }
+        val readings = LiveReadings(flaky, backgroundScope, wall, { utc }, log = {})
+
+        advanceTo(7 * 60_000L)
+        readings.onDescriptor(hex(descriptor81))
+        testScheduler.runCurrent()
+        failNext = true
+        advanceTo(8 * 60_000L)
+        readings.onDescriptor(descriptor(100))
+        testScheduler.runCurrent()
+        advanceTo(9 * 60_000L)
+        readings.onDescriptor(descriptor(120))
+        testScheduler.runCurrent()
+
+        assertEquals(listOf(81L, 19L, 20L), LocalStore(db).stepSamples(Instant.EPOCH, Instant.parse("2100-01-01T00:00:00Z")).map { it.delta })
+    }
+
     /** A frame that is not a descriptor stores nothing. */
     @Test
     fun onlyDescriptorsAreFolded() = runTest {

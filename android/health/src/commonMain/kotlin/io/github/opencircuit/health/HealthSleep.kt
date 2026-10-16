@@ -79,7 +79,11 @@ interface HealthSleepStore {
     /** The naps not written yet, earliest first. */
     suspend fun pendingNaps(): List<StoredNapToWrite>
 
-    suspend fun markNapWritten(start: Instant)
+    /**
+     * Marks the nap [nap] was read from written, only if it still shows what [nap] shows (its window
+     * and staging): a nap changed while its record was sent stays pending, so the change is written.
+     */
+    suspend fun markNapWritten(nap: StoredNapToWrite)
 
     /** The naps the ring alone detected (never edited or added) sharing time with `[from, to]`. */
     suspend fun autoNaps(from: Instant, to: Instant): List<StoredNapToWrite>
@@ -100,7 +104,7 @@ interface HealthSleepStore {
             override suspend fun queuedEdits(): List<QueuedNightEdit> = emptyList()
             override suspend fun clearQueuedEdit(edit: QueuedNightEdit): Boolean = false
             override suspend fun pendingNaps(): List<StoredNapToWrite> = emptyList()
-            override suspend fun markNapWritten(start: Instant) = Unit
+            override suspend fun markNapWritten(nap: StoredNapToWrite) = Unit
             override suspend fun autoNaps(from: Instant, to: Instant): List<StoredNapToWrite> = emptyList()
             override suspend fun deleteNaps(starts: List<Instant>) = Unit
         }

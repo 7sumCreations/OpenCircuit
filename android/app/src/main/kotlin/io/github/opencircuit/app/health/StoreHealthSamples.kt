@@ -1,5 +1,6 @@
 package io.github.opencircuit.app.health
 
+import io.github.opencircuit.health.ActiveEnergyDays
 import io.github.opencircuit.health.HealthActivityStore
 import io.github.opencircuit.health.HealthFailureStore
 import io.github.opencircuit.health.HealthSampleStore
@@ -19,6 +20,7 @@ import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.store.BlobStore
+import io.github.opencircuit.store.ENERGY_WRITTEN_RUNNING
 import io.github.opencircuit.store.LocalStore
 import io.github.opencircuit.store.MirroredNight
 import io.github.opencircuit.store.PendingSleepReconcile
@@ -51,6 +53,12 @@ class StoreHealthSamples(private val database: suspend () -> StoreDatabase) : He
         SleepStore(database()).sleepSummaries(from, until).map { NightWindow(it.keyText, it.night, it.inBedStart, it.inBedEnd, it.skinTempC) }
 
     override suspend fun markWritten(samples: List<QuantitySample>) = store().markHealthWritten(samples)
+
+    override suspend fun hasPending(kind: MetricKind, upTo: Instant): Boolean = store().hasPendingHealthSamples(kind, upTo)
+
+    override suspend fun rowWatermark(): Long = store().sampleRowWatermark()
+
+    override suspend fun markWritten(samples: List<QuantitySample>, seenWatermark: Long?) = store().markHealthWritten(samples, seenWatermark)
 }
 
 /**
@@ -68,6 +76,8 @@ class StoreHealthActivity(
 
     override suspend fun pendingSteps(): List<StepRow> = store().pendingStepSampleRows().map { it.toStepRow() }
 
+    override suspend fun hasPendingSteps(upTo: Instant): Boolean = store().hasPendingStepSamples(upTo)
+
     override suspend fun steps(from: Instant, until: Instant): List<StepRow> = store().stepSampleRows(from, until).map { it.toStepRow() }
 
     override suspend fun markStepsWritten(ids: List<Long>) = store().markStepSamplesWritten(ids)
@@ -81,9 +91,12 @@ class StoreHealthActivity(
 
     override suspend fun setDayMark(type: RecordType, day: LocalDate) = blobs().saveHealthDayMark(type.name, day, now())
 
-    override suspend fun energyWritten(day: LocalDate): Map<Instant, Double> = blobs().loadHealthEnergyWritten(day)
+    // The writer's "written while running" value and the store's are named on each side; mapped here.
+    override suspend fun energyWritten(day: LocalDate): Map<Instant, Double> =
+        blobs().loadHealthEnergyWritten(day).mapValues { (_, v) -> if (v == ENERGY_WRITTEN_RUNNING) ActiveEnergyDays.WRITTEN_RUNNING else v }
 
-    override suspend fun setEnergyWritten(day: LocalDate, written: Map<Instant, Double>) = blobs().saveHealthEnergyWritten(day, written, now())
+    override suspend fun setEnergyWritten(day: LocalDate, written: Map<Instant, Double>) =
+        blobs().saveHealthEnergyWritten(day, written.mapValues { (_, v) -> if (v == ActiveEnergyDays.WRITTEN_RUNNING) ENERGY_WRITTEN_RUNNING else v }, now())
 
     override suspend fun forgetEnergyBefore(day: LocalDate) = blobs().forgetHealthEnergyWrittenBefore(day)
 
@@ -140,7 +153,7 @@ class StoreHealthSleep(
 
     override suspend fun pendingNaps(): List<StoredNapToWrite> = sleep().pendingNaps().map { it.toWrite() }
 
-    override suspend fun markNapWritten(start: Instant) = sleep().markNapWritten(start)
+    override suspend fun markNapWritten(nap: StoredNapToWrite) = sleep().markNapWritten(nap.start, nap.shownStart, nap.shownEnd, nap.segments)
 
     override suspend fun autoNaps(from: Instant, to: Instant): List<StoredNapToWrite> = sleep().autoNaps(from, to).map { it.toWrite() }
 

@@ -115,17 +115,19 @@ class AppContainer(context: Context) {
     /** Health Connect on this phone (the platform's, Android 14 and later); the one client of the app. */
     val healthConnect: JetpackHealthConnect = JetpackHealthConnect(context)
 
-    /**
-     * Writes what the store holds and Health Connect lacks. The ring's model comes from the current
-     * session's firmware revision, when one has been read.
-     */
     /** The Health Connect write-failure map in the store, shared by every write and the card. */
     private val healthFailures = StoreHealthFailures({ database.await() }, wallNow, log)
 
+    /**
+     * Writes what the store holds and Health Connect lacks. The ring's model comes from the current
+     * session's firmware revision, when one has been read. A store with no write generation yet
+     * (a first install, a reinstall, cleared data) starts it above the wall clock in milliseconds,
+     * above any version an earlier install left in Health Connect.
+     */
     private val healthWriter = HealthWriter(
         port = healthConnect,
         store = StoreHealthSamples { database.await() },
-        generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow)),
+        generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow)) { clock.nowMillis() },
         failureStore = healthFailures,
         clock = wallNow,
         zone = ZoneId::systemDefault,
@@ -136,16 +138,18 @@ class AppContainer(context: Context) {
     )
 
     /**
-     * Starts the Health Connect writes — after each committed sync and on "Write to Health Connect
-     * now" — on the process scope, so neither a sync's pause nor a session's end cuts one.
-     */
-    val healthFlush: HealthFlush = HealthFlush(healthWriter::flush, appScope, log)
-
-    /**
      * The store's launch repairs (the 30-day prune, the purges, the night move, the backfill, the
      * heal, the cursor repair), once per process, off the main thread, after the store opened.
      */
     private val launchRepairs = LaunchHousekeeping({ database.await() }, wallNow, ZoneId::systemDefault, log).start(appScope)
+
+    /**
+     * Starts the Health Connect writes — after each committed sync and on "Write to Health Connect
+     * now" — on the process scope, so neither a sync's pause nor a session's end cuts one. Each
+     * write waits for the launch repairs: the night move re-keys the nights a write keeps its marks
+     * under.
+     */
+    val healthFlush: HealthFlush = HealthFlush({ launchRepairs.join(); healthWriter.flush() }, appScope, log)
 
     /** Whether Health Connect is there and which WRITE permissions are granted; read now, on each resume and after the permission screen. */
     val healthAccess: HealthAccess =

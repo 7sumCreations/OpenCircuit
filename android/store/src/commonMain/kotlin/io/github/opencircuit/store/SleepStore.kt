@@ -194,6 +194,19 @@ class SleepStore internal constructor(
         sleepDao.updateNap(row.copy(healthWritten = true, healthWrittenStart = row.editedStart ?: row.start, healthWrittenEnd = row.editedEnd ?: row.end))
     }
 
+    /**
+     * As [markNapWritten], for a writer that sent the nap showing `[shownStart, shownEnd]` with
+     * [segments]: marked only if the stored nap still shows exactly that. A nap a sync or an edit
+     * changed while its record was being sent stays pending, so the change is written too.
+     */
+    suspend fun markNapWritten(start: Instant, shownStart: Instant, shownEnd: Instant, segments: List<SleepSegment>?) = db.withWriteTransaction {
+        val row = sleepDao.napAt(start.toStoredMillis()) ?: return@withWriteTransaction
+        val unchanged = (row.editedStart ?: row.start) == shownStart.toStoredMillis() &&
+            (row.editedEnd ?: row.end) == shownEnd.toStoredMillis() &&
+            row.toStoredNapRecord().segments == segments
+        if (unchanged) sleepDao.updateNap(row.copy(healthWritten = true, healthWrittenStart = row.editedStart ?: row.start, healthWrittenEnd = row.editedEnd ?: row.end))
+    }
+
     /** What was last written for the nap at [start] together with the window it shows now; null when it was never written. */
     suspend fun staleNapHealthSpan(start: Instant): DateInterval? = db.withReadTransaction {
         val row = sleepDao.napAt(start.toStoredMillis()) ?: return@withReadTransaction null
@@ -631,8 +644,9 @@ class SleepStore internal constructor(
      * in place — its end, minutes, long-nap flag and [segments] (none stored as coarse) — and anything
      * else is inserted. Nothing is written when the nap shares time with a stored night (the night's
      * recorded window, or its edited window once edited), or when the nap stored at that start was
-     * added or edited by the wearer. An update leaves what was written to Health, the ring's kept
-     * staging and the edit as they were. Night keys within two days either side of the nap in [zone]
+     * added or edited by the wearer. An update leaves the ring's kept staging and the edit as they
+     * were, and what was written to Health too unless the end or the staging changed (Health
+     * Connect replaces the nap's record whole, so a changed nap is written again). Night keys within two days either side of the nap in [zone]
      * are looked at. Throws, writing nothing, when a lookup or the write fails.
      */
     suspend fun saveNap(
@@ -657,8 +671,13 @@ class SleepStore internal constructor(
                 )
                 // A nap the wearer added or edited is theirs; a detection never replaces it.
                 existing.isManuallyEdited || existing.isManuallyAdded -> Unit
+                // Health Connect holds the nap as one record, replaced whole: a detection that changes
+                // its end or its staging must be written again.
                 else -> sleepDao.updateNap(
-                    existing.copy(end = to, asleepMin = asleepMin, isLongNap = isLongNap, napSegmentsData = data, updatedAt = at),
+                    existing.copy(
+                        end = to, asleepMin = asleepMin, isLongNap = isLongNap, napSegmentsData = data, updatedAt = at,
+                        healthWritten = existing.healthWritten && existing.end == to && existing.napSegmentsData.contentEquals(data),
+                    ),
                 )
             }
         }
@@ -713,7 +732,10 @@ class SleepStore internal constructor(
             // other than the one written there must be written again, a widening too (upstream keeps a
             // widened nap written, for its append-only write; PORTING.md D-292). A written nap with no
             // known written window cannot be checked, so it is written again as well.
-            val stillAsWritten = row.healthWritten && row.healthWrittenStart == from && row.healthWrittenEnd == to
+            // The same window holds the same record only if it was already all asleep: an edit drops
+            // the ring's staging, which Health Connect would otherwise keep.
+            val alreadyCoarse = row.napSegmentsData == null || row.napSegmentsData.contentEquals(coarse)
+            val stillAsWritten = row.healthWritten && row.healthWrittenStart == from && row.healthWrittenEnd == to && alreadyCoarse
             sleepDao.updateNap(
                 row.copy(
                     recordedNapSegmentsData = if (keepRecording) row.napSegmentsData else row.recordedNapSegmentsData,

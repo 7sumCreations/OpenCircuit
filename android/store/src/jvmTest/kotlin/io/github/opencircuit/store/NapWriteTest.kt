@@ -91,7 +91,9 @@ class NapWriteTest {
 
     /**
      * A re-detection at the same start updates the end, minutes, long flag, segments and update time,
-     * and leaves the Health state, the kept ring staging and any edit columns as stored (:2877-2881).
+     * and leaves the kept ring staging and any edit columns as stored (:2877-2881). Unlike upstream it
+     * re-arms the Health write when the end or the staging changed: Health Connect replaces the nap's
+     * record whole (PORTING.md D-292), where HealthKit kept what was appended.
      */
     @Test
     fun aReDetectedNapUpdatesItsOwnFiguresAndLeavesWhatHealthAndTheEditHold() = runBlocking<Unit> {
@@ -109,7 +111,7 @@ class NapWriteTest {
 
             store.saveNap(start, end, asleepMin = 85, isLongNap = true, now = later, zone = utc)
 
-            assertEquals(before.copy(end = end, asleepMin = 85, isLongNap = true, segments = null, updatedAt = later), store.onlyNap())
+            assertEquals(before.copy(end = end, asleepMin = 85, isLongNap = true, segments = null, updatedAt = later, healthWritten = false), store.onlyNap())
         }
     }
 

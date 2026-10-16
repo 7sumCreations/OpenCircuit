@@ -55,6 +55,22 @@ internal interface SampleDao {
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start > :after AND value > 0 ORDER BY start, id")
     suspend fun positiveSamplesAfter(kindRaw: String, after: Instant): List<StoredSampleEntity>
 
+    /** Whether a positive sample of one kind with `after < start <= until` is stored. */
+    @Query("SELECT EXISTS(SELECT 1 FROM stored_sample WHERE kind_raw = :kindRaw AND start > :after AND start <= :until AND value > 0)")
+    suspend fun hasPositiveBetween(kindRaw: String, after: Instant, until: Instant): Boolean
+
+    /** Whether a positive sample of one kind with `start <= until` is stored. */
+    @Query("SELECT EXISTS(SELECT 1 FROM stored_sample WHERE kind_raw = :kindRaw AND start <= :until AND value > 0)")
+    suspend fun hasPositiveUpTo(kindRaw: String, until: Instant): Boolean
+
+    /** The highest row id stored so far, or null for an empty table. */
+    @Query("SELECT MAX(id) FROM stored_sample")
+    suspend fun maxSampleId(): Long?
+
+    /** The oldest positive sample of one kind stored after row [afterId] with `start <= until`, or null. */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND id > :afterId AND value > 0 AND start <= :until ORDER BY start, id LIMIT 1")
+    suspend fun oldestPositiveAddedAfter(kindRaw: String, afterId: Long, until: Instant): StoredSampleEntity?
+
     /** Every sample of one kind with a positive value, oldest first. */
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND value > 0 ORDER BY start, id")
     suspend fun positiveSamples(kindRaw: String): List<StoredSampleEntity>

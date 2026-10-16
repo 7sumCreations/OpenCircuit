@@ -17,6 +17,9 @@ interface HealthActivityStore {
     /** The step rows not yet written, every day, oldest first (ties in row order). */
     suspend fun pendingSteps(): List<StepRow>
 
+    /** Whether a step row not yet written starts at or before [upTo]: asked instead of reading them all when steps are not allowed. */
+    suspend fun hasPendingSteps(upTo: Instant): Boolean = pendingSteps().any { !it.start.isAfter(upTo) }
+
     /** Every step row with `from <= start < until`, written or not, oldest first (ties in row order). */
     suspend fun steps(from: Instant, until: Instant): List<StepRow>
 

@@ -74,6 +74,66 @@ class HealthWriterTest {
         assertEquals(2L, hours.single().meta.version)
     }
 
+    /**
+     * A type that is not allowed is only asked whether anything waits: its rows (held until written,
+     * however many) are not read on every sync.
+     */
+    @Test
+    fun aTypeNotAllowedIsNotReadOnlyAskedWhetherAnythingWaits() = runTest {
+        hc.revoke(*HealthPermission.entries.toTypedArray())
+        samples.add(hr(10, 60.0), QuantitySample(MetricKind.SPO2, h8, value = 0.97), QuantitySample(MetricKind.TEMPERATURE, h8, value = 34.0))
+        var rowReads = 0
+        val counting = object : HealthSampleStore by samples {
+            override suspend fun pendingSamples(kind: MetricKind) = samples.pendingSamples(kind).also { rowReads++ }
+            override suspend fun pendingRows(kind: MetricKind) = samples.pendingRows(kind).also { rowReads++ }
+        }
+
+        val result = HealthWriter(hc, counting, WriteGeneration(generations), InMemoryHealthFailures(), clock::now, { ZoneOffset.UTC }, { ring }).flush()
+
+        assertEquals(0, rowReads)
+        assertEquals(setOf(RecordType.HEART_RATE, RecordType.OXYGEN_SATURATION, RecordType.SKIN_TEMPERATURE), result.notGranted)
+    }
+
+    /** A sync stores an older sample while a write is sending: the write's mark does not pass it. */
+    @Test
+    fun aSampleStoredDuringAWriteIsWrittenByTheNextOne() = runTest {
+        samples.add(hr(10, 60.0))
+        writer().flush()
+        samples.add(hr(50, 64.0))
+        var synced = false
+        val syncDuringSend = object : HealthConnectPort by hc {
+            override suspend fun insert(type: RecordType, records: List<HealthRecord>): List<String> {
+                if (!synced) { synced = true; samples.add(hr(30, 62.0)) }
+                return hc.insert(type, records)
+            }
+        }
+
+        writer(syncDuringSend).flush()
+        writer().flush()
+
+        assertEquals(listOf(60L, 62L, 64L), hcHours().single().samples.map { it.beatsPerMinute })
+    }
+
+    /** A reinstall: Health Connect still holds an earlier install's hour, the new store has no generation. */
+    @Test
+    fun aReinstalledAppReplacesWhatAnEarlierInstallWrote() = runTest {
+        samples.add(hr(10, 60.0))
+        writer().flush()
+        // The earlier install flushed many times.
+        generations.value = 500L
+        samples.add(hr(20, 61.0))
+        writer().flush()
+        assertEquals(501L, hcHours().single().meta.version)
+
+        // Reinstalled: the store starts empty, Health Connect keeps the records.
+        val fresh = InMemoryHealthSamples()
+        fresh.add(hr(10, 60.0), hr(20, 61.0), hr(30, 63.0))
+        val reinstalled = HealthWriter(hc, fresh, WriteGeneration(MemoryGenerations()) { clock.now().toEpochMilli() }, InMemoryHealthFailures(), clock::now, { ZoneOffset.UTC }, { ring })
+        reinstalled.flush()
+
+        assertEquals(listOf(60L, 61L, 63L), hcHours().single().samples.map { it.beatsPerMinute }, "the new install's hour replaced the old one")
+    }
+
     @Test
     fun nothingPendingMakesNoCallAndSpendsNoGeneration() = runTest {
         val result = writer().flush()

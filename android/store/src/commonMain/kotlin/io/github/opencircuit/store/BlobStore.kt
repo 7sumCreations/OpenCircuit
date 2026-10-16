@@ -49,6 +49,9 @@ import java.util.Collections
 // trace codec is here), and `UnattributedPageBuffer` (in memory upstream, RingSession.swift:499;
 // the history journal's rows with no drain replace it).
 
+/** The value kept for an active-energy bucket written while it was still running ([BlobStore.saveHealthEnergyWritten]). */
+const val ENERGY_WRITTEN_RUNNING = -1.0
+
 /**
  * The stored values that are not sample rows: one key each, named as upstream names its
  * `UserDefaults` key. Each loads through its codec and fails closed as upstream does when the
@@ -296,7 +299,9 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
     suspend fun saveHealthDayMark(type: String, day: LocalDate, now: Instant) = put(dayMarkKey(type), day.toString(), now)
 
     // Health Connect active energy: per local day, the kilocalories written per bucket start
-    // (`epochMillis=kcal;…`), so a bucket that falls is written lower, down to zero.
+    // (`epochMillis=kcal;…`), so a bucket that falls is written lower, down to zero. A bucket
+    // written while it was still running is kept as [ENERGY_WRITTEN_RUNNING] (`-1`): it is written
+    // again over its whole span once it closes, whatever its total.
 
     /** The kilocalories written per bucket start of [day]; empty when none or unreadable. */
     suspend fun loadHealthEnergyWritten(day: LocalDate): Map<Instant, Double> {
@@ -304,9 +309,14 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
         val out = HashMap<Instant, Double>()
         for (pair in raw.split(';')) {
             val parts = pair.split('=')
-            if (parts.size != 2 || !ASCII_DIGITS.matches(parts[0]) || !DECIMAL.matches(parts[1])) return emptyMap()
+            if (parts.size != 2 || !ASCII_DIGITS.matches(parts[0])) return emptyMap()
+            val kcal = if (parts[1] == ENERGY_WRITTEN_RUNNING.toString()) {
+                ENERGY_WRITTEN_RUNNING
+            } else {
+                if (!DECIMAL.matches(parts[1])) return emptyMap()
+                parts[1].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return emptyMap()
+            }
             val millis = parts[0].toLongOrNull() ?: return emptyMap()
-            val kcal = parts[1].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return emptyMap()
             out[Instant.ofEpochMilli(millis)] = kcal
         }
         return out
@@ -316,7 +326,9 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
     suspend fun saveHealthEnergyWritten(day: LocalDate, written: Map<Instant, Double>, now: Instant) {
         written.forEach { (start, kcal) ->
             require(!start.isBefore(Instant.EPOCH)) { "a bucket start is at or after 1970, was $start" }
-            require(kcal.isFinite() && kcal >= 0) { "written kilocalories are a finite number at least 0, was $kcal" }
+            require(kcal == ENERGY_WRITTEN_RUNNING || (kcal.isFinite() && kcal >= 0)) {
+                "written kilocalories are a finite number at least 0 (or the running marker), was $kcal"
+            }
         }
         if (written.isEmpty()) {
             kv.delete(healthEnergyKey(day))

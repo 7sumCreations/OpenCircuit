@@ -50,8 +50,8 @@ import kotlin.reflect.KClass
  * must be filtered to its own package (measured on Android 16: an unfiltered read is refused as a
  * read of other apps' data), and comes in pages of at most [PAGE_SIZE].
  *
- * Heart rate, heart-rate variability (RMSSD), blood oxygen and breathing rate are written today;
- * the other types arrive with their mappers.
+ * Every [RecordType] has its mapping here, both ways: the twelve WRITE permissions' thirteen record
+ * types (menstruation covers flow and period).
  */
 class JetpackHealthConnect(context: Context) : HealthConnectPort {
     private val appContext: Context = context.applicationContext
@@ -171,7 +171,7 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
 
         private fun metadata(meta: RecordMeta): Metadata = when (meta.method) {
             RecordingMethod.AUTOMATICALLY_RECORDED ->
-                Metadata.autoRecorded(device(requireNotNull(meta.device) { "a ring record names its ring" }), meta.clientRecordId, meta.version)
+                Metadata.autoRecorded(device(meta.device ?: throw HealthCallFailedException("a ring record names no ring")), meta.clientRecordId, meta.version)
             RecordingMethod.MANUAL_ENTRY -> {
                 val ring = meta.device
                 if (ring == null) Metadata.manualEntry(meta.clientRecordId, meta.version) else Metadata.manualEntry(meta.clientRecordId, meta.version, device(ring))
@@ -179,7 +179,8 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
         }
 
         private fun toJetpack(type: RecordType, record: HealthRecord): Record {
-            if (record.type != type) throw HealthInvalidRecordException("a ${record.type} record in a $type call")
+            // Our own fault, not a platform rule: a failed call (shown on the card), never a refused record.
+            if (record.type != type) throw HealthCallFailedException("a ${record.type} record in a $type call")
             return when (record) {
                 is HeartRateSeries -> HeartRateRecord(
                     startTime = record.start,

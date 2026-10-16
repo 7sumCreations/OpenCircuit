@@ -64,6 +64,27 @@ class PeriodMirrorWriteTest {
         assertEquals(calls, hc.calls.size, "a finalized period that ended before today is not looked at again")
     }
 
+    /** The wearer lengthens the period while its records are sent: it is not finalized, and the next flush writes the new day. */
+    @Test
+    fun aPeriodEditedWhileItIsWrittenIsWrittenAgain() = runBlocking<Unit> {
+        log(day(10), day(11))
+        var edited = false
+        val editDuringSend = object : HealthConnectPort by hc {
+            override suspend fun insert(type: RecordType, records: List<HealthRecord>): List<String> =
+                hc.insert(type, records).also { if (!edited) { edited = true; edit(day(10), day(12)) } }
+        }
+
+        HealthWriter(
+            editDuringSend, InMemoryHealthSamples(), WriteGeneration(generations), failures, clock::now, { zone }, { RingDevice("Gen 2") },
+            periods = periods,
+        ).flush()
+        assertFalse(periods.get(day(10))!!.healthWritten, "the edit is still to be written")
+
+        writer().flush()
+        assertEquals(flowIds(10, 11, 12), flows().map { it.meta.clientRecordId })
+        assertTrue(periods.get(day(10))!!.healthWritten)
+    }
+
     @Test
     fun theIdsAreNamedInTheStoreBeforeTheFirstCall() = runBlocking<Unit> {
         log(day(10), day(11))

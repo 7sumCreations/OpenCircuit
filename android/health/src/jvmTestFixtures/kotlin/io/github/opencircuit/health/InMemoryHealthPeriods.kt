@@ -28,9 +28,11 @@ class InMemoryHealthPeriods : HealthPeriodStore {
         rows.values.filter { !it.healthWritten || it.end == null || it.end.atZone(zone).toLocalDate().isAfter(todayDay) }
     }
 
-    override suspend fun recordWrittenIds(start: Instant, ids: List<String>, finalized: Boolean): Unit = synchronized(lock) {
-        val row = rows[start] ?: return
-        rows[start] = row.copy(writtenIds = ids.toList(), healthWritten = finalized)
-        log += start to ids.toList()
+    /** As the store: finalized only while the period still has the end and flow that were written. */
+    override suspend fun recordWrittenIds(entry: PeriodToWrite, ids: List<String>, finalized: Boolean): Unit = synchronized(lock) {
+        val row = rows[entry.start] ?: return
+        val unchanged = row.end == entry.end && row.flowLevelRaw == entry.flowLevelRaw
+        rows[entry.start] = row.copy(writtenIds = ids.toList(), healthWritten = finalized && unchanged)
+        log += entry.start to ids.toList()
     }
 }

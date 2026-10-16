@@ -33,6 +33,27 @@ class NapReplaceTest {
     private val aId = "oc:nap:${a.toEpochMilli()}"
     private fun sessions() = hc.records(RecordType.SLEEP_SESSION).map { it as SleepSession }.sortedBy { it.start }
 
+    /** A sync lengthens the nap while its record is sent: it stays pending, and the next flush writes the longer one. */
+    @Test
+    fun aNapChangedWhileItsRecordIsSentIsWrittenAgain() = runBlocking<Unit> {
+        sleep.putNap(StoredNapToWrite(a, a, at("14:00"), null, manuallyAdded = false, healthWritten = false))
+        val longer = StoredNapToWrite(a, a, at("14:20"), null, manuallyAdded = false, healthWritten = false)
+        val syncDuringSend = object : HealthConnectPort by hc {
+            override suspend fun insert(type: RecordType, records: List<HealthRecord>): List<String> =
+                hc.insert(type, records).also { sleep.putNap(longer) }
+        }
+
+        HealthWriter(
+            syncDuringSend, InMemoryHealthSamples(), WriteGeneration(generations), InMemoryHealthFailures(), { now }, { zone }, { RingDevice("Gen 2") },
+            sleep = sleep,
+        ).flush()
+        assertEquals(listOf(longer), sleep.naps(), "not marked: the record holds the shorter nap")
+
+        writer().flush()
+        assertEquals(at("14:20"), sessions().single().end)
+        assertTrue(sleep.naps().single().healthWritten)
+    }
+
     @Test
     fun eachPendingNapIsOneSessionTitledNapAndMarkedAndASecondFlushWritesNothing() = runBlocking<Unit> {
         val staged = listOf(

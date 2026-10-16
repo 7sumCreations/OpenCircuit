@@ -30,7 +30,11 @@ class AppContainerHistoryWiringTest {
         // The hook only requests; the write runs on the process scope, never the session's, so a pause or a
         // session's end cannot cut it.
         assertEquals(1, Regex("""afterCommit = \{ healthFlush\.request\(\) \}""").findAll(source).count())
-        assertEquals(1, Regex("""HealthFlush\(healthWriter::flush, appScope, log\)""").findAll(source).count())
+        // Every write waits for the launch repairs (they move night keys the write's marks are kept under).
+        assertEquals(1, Regex("""HealthFlush\(\{ launchRepairs\.join\(\); healthWriter\.flush\(\) \}, appScope, log\)""").findAll(source).count())
+        assertTrue(source.indexOf("private val launchRepairs") in 0 until source.indexOf("val healthFlush"), "the repairs start before the first write can")
+        // A store with no generation yet (a reinstall) starts above what an earlier install left in Health Connect.
+        assertTrue("generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow)) { clock.nowMillis() }" in source)
         assertTrue("store = StoreHealthSamples { database.await() }" in source)
         // The writer's sleep defaults to none: the app must hand it the store's nights, edits and naps.
         assertTrue("sleep = StoreHealthSleep({ database.await() }, wallNow, ZoneId::systemDefault)" in source)

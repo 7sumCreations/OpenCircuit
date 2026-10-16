@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.util.Locale
 import kotlin.coroutines.cancellation.CancellationException
@@ -65,6 +67,12 @@ class HealthAccess(
 ) {
     private val stateFlow = MutableStateFlow(HealthAccessState())
 
+    /**
+     * One read at a time: a read started before the permission screen's answer was saved can
+     * never finish after (and over) the read that follows the answer.
+     */
+    private val reading = Mutex()
+
     /** The last state read. */
     val state: StateFlow<HealthAccessState> = stateFlow.asStateFlow()
 
@@ -86,7 +94,7 @@ class HealthAccess(
         read()
     }
 
-    private suspend fun read() {
+    private suspend fun read() = reading.withLock {
         try {
             val available = port.sdkStatus() == HealthSdkStatus.AVAILABLE
             stateFlow.value = HealthAccessState(
@@ -205,7 +213,10 @@ object HealthCardPresenter {
 
         // The last write's map is the newest; before this launch's first write, the stored one.
         val failed = (last?.failureMap ?: access.failures).keys
+        // A write that stopped before it could report names no type.
+        val stopped = input.flush.error != null
         val warnings = buildList {
+            if (stopped) add("Could not write to Health Connect. It will be retried on the next sync.")
             if (failed.isNotEmpty()) add("Could not write ${HealthShare.attentionNames(ShareState.Authorized, failed).joinToString()}. It will be retried on the next sync.")
             if (share is ShareState.Partial) add("Not allowed: ${HealthShare.names(share.denied).joinToString()}. The rest is being written.")
         }
@@ -219,7 +230,7 @@ object HealthCardPresenter {
             notes = notes,
             button = when {
                 running -> "Writing…"
-                failed.isNotEmpty() -> "Try again"
+                failed.isNotEmpty() || stopped -> "Try again"
                 else -> "Write to Health Connect now"
             },
             action = HealthCardAction.WRITE_NOW,

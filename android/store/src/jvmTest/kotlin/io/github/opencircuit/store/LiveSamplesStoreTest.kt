@@ -161,6 +161,29 @@ class LiveSamplesStoreTest {
         }
     }
 
+    /**
+     * A live reading stamped behind the mark (the phone's clock behind the ring's, whose drained
+     * samples the writer already marked) waits for Health Connect too, instead of being taken as
+     * written and pruned as such.
+     */
+    @Test
+    fun aLiveReadingBehindTheMarkPullsTheHealthMarkBack() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = LocalStore(db)
+            store.ingest(listOf(hr("13:00:00", 60.0), hr("14:30:00", 62.0)), now, utc)
+            store.markHealthWritten(store.pendingHealthSamples(MetricKind.HEART_RATE))
+            assertTrue(store.pendingHealthSamples(MetricKind.HEART_RATE).isEmpty())
+
+            store.insertLiveSamples(listOf(hr("14:00:00", 64.0)), now)
+
+            assertEquals(
+                listOf(64.0, 62.0),
+                store.pendingHealthSamples(MetricKind.HEART_RATE).map { it.value },
+                "the live reading waits for Health Connect (the later one is written again, under the same id)",
+            )
+        }
+    }
+
     @Test
     fun aKindNeverWrittenHasNoMarkToPullBack() = runBlocking<Unit> {
         withInMemoryStore { db ->

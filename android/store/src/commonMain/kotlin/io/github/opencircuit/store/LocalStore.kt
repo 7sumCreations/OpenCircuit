@@ -144,6 +144,20 @@ class LocalStore internal constructor(
         }
     }
 
+    /**
+     * As [recordPeriodEntryHealthIds], by a writer that wrote the entry with [writtenEnd] and
+     * [writtenFlowLevelRaw]: it is finalized only if it still has them. An entry the wearer edited
+     * while its records were sent keeps the ids named and stays to be written.
+     */
+    suspend fun recordPeriodEntryHealthIds(start: Instant, ids: List<String>, finalized: Boolean, writtenEnd: Instant?, writtenFlowLevelRaw: Int) {
+        val written = ids.toList()
+        db.withWriteTransaction {
+            val row = userEntryDao.periodAt(start.toStoredMillis()) ?: return@withWriteTransaction
+            val unchanged = row.end == writtenEnd?.toStoredMillis() && row.flowLevelRaw == writtenFlowLevelRaw
+            userEntryDao.updatePeriod(row.copy(hkSampleUUIDs = written, healthWritten = finalized && unchanged))
+        }
+    }
+
     // Headache log (ios/OpenCircuit/Store/HeadacheStore.swift :195-315).
 
     /**
@@ -409,14 +423,18 @@ class LocalStore internal constructor(
                 sampleDao.insertSamples(listOf(StoredSampleEntity.of(s)))
                 stored += s
             }
+            // A reading stamped behind its kind's mark (the phone's clock behind the ring's) is
+            // pending too, never taken as written.
+            pullHealthMarksBehind(stored)
             stored
         }
     }
 
     /**
-     * After an ingest stored [stored]: a kind's Health Connect mark at or after the oldest of them is
-     * pulled back to just before it, so the writer takes them. Only a live reading (stored outside
-     * the cursor, [insertLiveSamples]) can put the mark ahead of a drain; the samples written again
+     * After an ingest or a live insert stored [stored]: a kind's Health Connect mark at or after the
+     * oldest of them is pulled back to just before it, so the writer takes them. A live reading
+     * (stored outside the cursor, [insertLiveSamples]) can put the mark ahead of a drain, and a
+     * drain's marked samples ahead of a live reading stamped by a slower clock; the samples written again
      * carry the same ids, so Health Connect replaces them (PORTING.md D-294).
      */
     private suspend fun pullHealthMarksBehind(stored: List<QuantitySample>) {
@@ -484,6 +502,9 @@ class LocalStore internal constructor(
      */
     suspend fun pendingStepSampleRows(): List<StoredStepRow> =
         dailyDao.pendingStepSamples().map { StoredStepRow(it.id, it.toStepSample()) }
+
+    /** Whether a step delta not yet written starts at or before [upTo], without reading them. */
+    suspend fun hasPendingStepSamples(upTo: Instant): Boolean = dailyDao.hasPendingStepSamples(upTo)
 
     /** As [stepSamples], each with its row id: rows that share a start are told apart by it. */
     suspend fun stepSampleRows(from: Instant, to: Instant): List<StoredStepRow> =
@@ -615,11 +636,13 @@ class LocalStore internal constructor(
         HEALTH_MIRRORED_KINDS.flatMap { pendingHealthSamples(it) }.sortedBy { it.start }
 
     /** As [pendingHealthSamples], for one [kind]; empty for a kind that is not written from here. */
-    suspend fun pendingHealthSamples(kind: MetricKind): List<QuantitySample> {
-        if (kind !in HEALTH_MIRRORED_KINDS) return emptyList()
+    suspend fun pendingHealthSamples(kind: MetricKind): List<QuantitySample> = pendingHealthSampleRows(kind).map { it.sample }
+
+    /** Whether [pendingHealthSamples] of [kind] holds one starting at or before [upTo], without reading them. */
+    suspend fun hasPendingHealthSamples(kind: MetricKind, upTo: Instant): Boolean {
+        if (kind !in HEALTH_MIRRORED_KINDS) return false
         val mark = healthMarks().last(kind)
-        val rows = if (mark == null) sampleDao.positiveSamples(kind.rawValue) else sampleDao.positiveSamplesAfter(kind.rawValue, mark)
-        return rows.mapNotNull { it.toSample() }
+        return if (mark == null) sampleDao.hasPositiveUpTo(kind.rawValue, upTo) else sampleDao.hasPositiveBetween(kind.rawValue, mark, upTo)
     }
 
     /**
@@ -642,18 +665,34 @@ class LocalStore internal constructor(
      * forward only, never back — in one transaction. Pass only what Health Connect accepted. Kinds
      * that are not written from the store (steps, energy, sleep) move no mark.
      */
-    suspend fun markHealthWritten(samples: List<QuantitySample>) {
+    suspend fun markHealthWritten(samples: List<QuantitySample>) = markHealthWritten(samples, seenUpToRow = null)
+
+    /**
+     * The highest sample row id stored so far (0 for none). A writer reads it before it reads what
+     * is pending and hands it back to [markHealthWritten]: a row stored after it is one the writer
+     * cannot have sent.
+     */
+    suspend fun sampleRowWatermark(): Long = sampleDao.maxSampleId() ?: 0L
+
+    /**
+     * As [markHealthWritten], for a writer that read what is pending after [seenUpToRow]
+     * ([sampleRowWatermark]): a kind's mark never passes a positive sample stored after that row (a
+     * drain or a live reading that landed while the writer was sending), it stops just before the
+     * oldest such sample, which stays pending for the next write. Null checks nothing.
+     */
+    suspend fun markHealthWritten(samples: List<QuantitySample>, seenUpToRow: Long?) {
         val mirrored = samples.filter { it.kind in HEALTH_MIRRORED_KINDS }
         if (mirrored.isEmpty()) return
         db.withWriteTransaction {
             val marks = healthMarks()
-            val before = marks.copy()
-            marks.selectNew(mirrored.map { it.copy(start = it.start.toStoredMillis()) })
-            sampleDao.upsertCursors(
-                marks.advancedKinds(since = before).filter { it in HEALTH_MIRRORED_KINDS }.mapNotNull { kind ->
-                    marks.last(kind)?.let { StoredCursorEntity(kindRaw = HEALTH_CURSOR_PREFIX + kind.rawValue, last = it) }
-                },
-            )
+            val moved = mirrored.groupBy { it.kind }.mapNotNull { (kind, ofKind) ->
+                val newest = ofKind.maxOf { it.start.toStoredMillis() }
+                val unseen = seenUpToRow?.let { sampleDao.oldestPositiveAddedAfter(kind.rawValue, it, newest) }
+                val target = unseen?.let { minOf(newest, it.start.minusMillis(1)) } ?: newest
+                val current = marks.last(kind)
+                if (current != null && target <= current) null else StoredCursorEntity(kindRaw = HEALTH_CURSOR_PREFIX + kind.rawValue, last = target)
+            }
+            if (moved.isNotEmpty()) sampleDao.upsertCursors(moved)
         }
     }
 
