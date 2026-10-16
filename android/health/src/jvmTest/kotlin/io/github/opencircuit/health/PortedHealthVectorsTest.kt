@@ -31,6 +31,7 @@ class PortedHealthVectorsTest {
         Port("HealthKitShareTypesTests.swift", 239, "testFriendlyNamesMapAndDedupe", "health/src/jvmTest/kotlin/io/github/opencircuit/health/ShareStateTest.kt", "friendlyNamesMapAndDedupe"),
         Port("HealthKitShareTypesTests.swift", 254, "testWriteFailureMapPersistsAndClearsPerMetric", "health/src/jvmTest/kotlin/io/github/opencircuit/health/FailureMapTest.kt", "writeFailureMapPersistsAndClearsPerType"),
         Port("HealthKitShareTypesTests.swift", 279, "testFlushResultFailuresDefaultEmptyAndDoNotCountAsWrite", "health/src/jvmTest/kotlin/io/github/opencircuit/health/FailureMapTest.kt", "flushResultFailuresDefaultEmptyAndDoNotCountAsWrite"),
+        Port("HealthKitShareTypesTests.swift", 290, "testDistanceOnlyWritesWhenStepsSucceeded", "health/src/jvmTest/kotlin/io/github/opencircuit/health/StepsBeforeDistanceTest.kt", "distanceOnlyWritesWhenStepsSucceeded"),
     )
 
     private fun upstreamTestsOf(file: String): Map<Int, String> =
@@ -50,7 +51,7 @@ class PortedHealthVectorsTest {
 
     @Test
     fun everyClaimedPortIsAtItsUpstreamLineAndHasItsKotlinTest() {
-        assertEquals(10, ports.size)
+        assertEquals(11, ports.size)
         assertEquals(emptyList(), problems(ports))
     }
 

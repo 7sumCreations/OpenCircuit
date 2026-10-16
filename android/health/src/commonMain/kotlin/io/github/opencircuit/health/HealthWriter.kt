@@ -109,6 +109,7 @@ class HealthWriter(
     private val zone: () -> ZoneId,
     private val device: () -> RingDevice,
     private val sleep: HealthSleepStore = HealthSleepStore.NONE,
+    private val activity: HealthActivityStore = HealthActivityStore.NONE,
 ) {
     private val lock = Mutex()
 
@@ -133,6 +134,7 @@ class HealthWriter(
             for ((kind, type) in ScalarRecords.TYPES) writeScalar(kind, type, granted)
             writeSkinTemperature(granted)
             writeSleep(granted)
+            writeStepsThenDistance(granted)
             val finishedAt = clock()
             return FlushResult(
                 finishedAt = finishedAt,
@@ -362,6 +364,43 @@ class HealthWriter(
                 WriteItem(session, emptyList()) { sleep.markNapWritten(nap.start) }
             }
             writeItems(type, items)
+        }
+
+        /**
+         * Upstream's steps then distance (HKW:538-598): each pending step row (its start not ahead of
+         * the clock) is one steps record over its own window ([ActivityRecords.stepItems]); the rows
+         * are marked when Health Connect accepted their record. A record breaking a platform rule (a
+         * window with no length) is dropped, counted and its rows marked: it can never be written.
+         * Only then the distance of each accepted steps record, under the same version: distance has
+         * no mark of its own, so it is not written when its steps were not, and steps accepted while
+         * distance is not allowed are not caught up later (upstream's tradeoff).
+         */
+        private suspend fun writeStepsThenDistance(granted: Set<HealthPermission>) {
+            val type = RecordType.STEPS
+            val pending = activity.pendingSteps().filter { !it.start.isAfter(now) }
+            if (pending.isEmpty()) return
+            if (type.permission !in granted) {
+                notGranted += type
+                return
+            }
+            // Every stored row at the pending starts: rows that share a start are one record.
+            val atStarts = activity.steps(pending.first().start, pending.last().start.plusMillis(1))
+            val v = version()
+            val (broken, valid) = ActivityRecords.stepItems(pending, atStarts, zone(), device(), v)
+                .partition { HealthRanges.violation(it.record, now) != null }
+            if (broken.isNotEmpty()) {
+                reject(type, broken.size)
+                activity.markStepsWritten(broken.flatMap { it.rowIds })
+            }
+            val accepted = mutableListOf<Steps>()
+            writeItems(type, valid.map { item -> WriteItem(item.record, emptyList()) { activity.markStepsWritten(item.rowIds); accepted += item.record } })
+            if (accepted.isEmpty()) return
+            val distance = RecordType.DISTANCE
+            if (distance.permission !in granted) {
+                notGranted += distance
+                return
+            }
+            writeItems(distance, accepted.map { WriteItem(ActivityRecords.distanceOf(it, v), emptyList()) })
         }
 
         /**
