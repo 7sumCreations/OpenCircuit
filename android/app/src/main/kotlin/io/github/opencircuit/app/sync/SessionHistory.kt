@@ -1,6 +1,7 @@
 package io.github.opencircuit.app.sync
 
 import io.github.opencircuit.app.data.SyncMarks
+import io.github.opencircuit.app.live.LiveReadingStore
 import io.github.opencircuit.ringkit.NightWindow
 import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.StoreDatabase
@@ -24,6 +25,8 @@ class SessionHistory(
     val faults: SyncFaultInjector = SyncFaultInjector.NONE,
     /** After a sync's commit returned and its report is published: the Health Connect write ([HistoryDrainController]). */
     val afterCommit: (SyncReport) -> Unit = {},
+    /** Where the readings measured live are kept (steps, skin temperature, a measure's result); nothing by default. */
+    val live: LiveReadingStore = LiveReadingStore.NONE,
 ) {
     companion object {
         /**

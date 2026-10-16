@@ -22,6 +22,7 @@ import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreHealthSleep
 import io.github.opencircuit.app.health.StoreWriteGenerations
+import io.github.opencircuit.app.live.StoreLiveReadings
 import io.github.opencircuit.health.HealthWriter
 import io.github.opencircuit.health.JetpackHealthConnect
 import io.github.opencircuit.health.RingDevice
@@ -203,6 +204,8 @@ class AppContainer(context: Context) {
             faults = VariantLinks.syncFaults,
             // Each committed sync's data goes on to Health Connect.
             afterCommit = { healthFlush.request() },
+            // What the ring measures live while connected: steps, nightly skin temperature, a measure's result.
+            live = StoreLiveReadings({ database.await() }, wallNow, { ZoneId.systemDefault() }),
         )
     }
 
