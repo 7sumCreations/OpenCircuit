@@ -20,8 +20,11 @@ import java.time.ZoneId
 // - Days are compared in the zone given; upstream uses `Calendar.current`.
 // - Every write joins the caller's transaction.
 
-/** One edited night waiting for its Health write: the edit's times and the night's segments. */
-internal data class PendingSleepReconcile(
+/**
+ * One edited night waiting for its Health write: the edit's times and the night's segments. [night]
+ * is the stored row's key the edit was saved under.
+ */
+data class PendingSleepReconcile(
     val night: Instant,
     val inBedStart: Instant,
     val sleepOnset: Instant,
