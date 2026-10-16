@@ -108,6 +108,45 @@ class SleepStore internal constructor(
 
     private val pending = PendingSleepReconciles(kvDao)
 
+    private val health = SleepHealthBookkeeping(sleepDao, kvDao)
+
+    // Health Connect bookkeeping (SleepHealthBookkeeping). Every night here is a stored row's key.
+
+    /** The Health Connect record ids written for [night]: empty when none, null when the stored list cannot be read. */
+    suspend fun sleepHealthRecordIds(night: Instant): List<String>? = db.withReadTransaction { health.recordIds(night.toStoredMillis()) }
+
+    /** Keeps [ids] as the Health Connect record ids written for [night] (none clears the key). */
+    suspend fun setSleepHealthRecordIds(night: Instant, ids: List<String>, now: Instant) =
+        db.withWriteTransaction { health.setRecordIds(night.toStoredMillis(), ids, now.toStoredMillis()) }
+
+    /** What was last written to Health Connect for the unedited [night]; null when nothing was, or it cannot be read. */
+    suspend fun mirroredNight(night: Instant): MirroredNight? = db.withReadTransaction { health.mirroredNight(night.toStoredMillis()) }
+
+    suspend fun setMirroredNight(night: Instant, record: MirroredNight, now: Instant) =
+        db.withWriteTransaction { health.setMirroredNight(night.toStoredMillis(), record, now.toStoredMillis()) }
+
+    /**
+     * The edited nights' extensions Health Connect has not received (upstream
+     * `pendingSleepEditHealthWrites`): offered only once the sleep mark covers the night's recorded
+     * end. Moves nothing.
+     */
+    suspend fun pendingSleepEditHealthWrites(): List<PendingSleepEditHealthWrite> =
+        db.withReadTransaction { health.pendingEditWrites(sleepDao.allSummaries().map { value(it) }) }
+
+    /**
+     * After Health Connect accepted [segments] for the stored [night]: lowers its two leading
+     * watermarks to what was written before the recorded bedtime and onset, and moves the sleep mark
+     * to their end (never back). Pass only what was written. Nothing happens when no night is stored there.
+     */
+    suspend fun markSleepEditHealthWritten(night: Instant, segments: List<SleepSegment>) = db.withWriteTransaction {
+        val row = sleepDao.summaryAt(night.toStoredMillis()) ?: return@withWriteTransaction
+        health.markEditWritten(value(row), segments)
+    }
+
+    /** After a night write [segments] that already covers an edited night's leading extension: marks it covered. */
+    suspend fun markSleepEditHealthCovered(segments: List<SleepSegment>) =
+        db.withWriteTransaction { health.markEditCovered(sleepDao.allSummaries().map { value(it) }, segments) }
+
     /**
      * Stores a staged night under the start of [night]'s day in [zone], or deliberately keeps the
      * stored one, and returns which happened.
