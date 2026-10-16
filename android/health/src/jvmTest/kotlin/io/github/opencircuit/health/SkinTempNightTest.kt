@@ -28,7 +28,7 @@ class SkinTempNightTest {
 
     private val generations = MemoryGenerations()
 
-    private fun writer() = HealthWriter(hc, samples, WriteGeneration(generations), clock::now, { zone }, { RingDevice("Gen 2") })
+    private fun writer() = HealthWriter(hc, samples, WriteGeneration(generations), InMemoryHealthFailures(), clock::now, { zone }, { RingDevice("Gen 2") })
 
     private class MemoryGenerations(var value: Long? = null) : WriteGenerationStore {
         override suspend fun load(): Long? = value

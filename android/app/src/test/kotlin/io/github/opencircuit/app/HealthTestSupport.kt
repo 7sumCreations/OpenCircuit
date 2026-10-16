@@ -1,6 +1,7 @@
 package io.github.opencircuit.app
 
 import io.github.opencircuit.app.health.HealthFlush
+import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreWriteGenerations
 import io.github.opencircuit.health.FakeHealthConnect
@@ -66,6 +67,7 @@ internal suspend fun TestScope.healthWorld(wallStart: Instant = SYNC_TEST_EPOCH)
         port = gate,
         store = StoreHealthSamples { db },
         generation = WriteGeneration(StoreWriteGenerations({ db }, wall)),
+        failureStore = StoreHealthFailures({ db }, wall, log = {}),
         clock = wall,
         zone = { ZoneOffset.UTC },
         device = { RingDevice("Gen 2") },

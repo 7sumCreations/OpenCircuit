@@ -29,7 +29,7 @@ class HealthWriterTest {
     private val ring = RingDevice("Gen 2")
 
     private fun writer(port: HealthConnectPort = hc) =
-        HealthWriter(port, samples, WriteGeneration(generations), clock::now, { ZoneOffset.UTC }, { ring })
+        HealthWriter(port, samples, WriteGeneration(generations), InMemoryHealthFailures(), clock::now, { ZoneOffset.UTC }, { ring })
 
     private fun hr(minutes: Long, bpm: Double) = QuantitySample(MetricKind.HEART_RATE, h8.plusSeconds(minutes * 60), value = bpm)
 

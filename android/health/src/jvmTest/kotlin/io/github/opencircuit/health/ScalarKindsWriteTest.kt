@@ -27,7 +27,9 @@ class ScalarKindsWriteTest {
     private val generations = MemoryGenerations()
     private val zone = ZoneId.of("Europe/Berlin")
 
-    private fun writer() = HealthWriter(hc, samples, WriteGeneration(generations), clock::now, { zone }, { RingDevice("Gen 2") })
+    private val failures = InMemoryHealthFailures()
+
+    private fun writer() = HealthWriter(hc, samples, WriteGeneration(generations), failures, clock::now, { zone }, { RingDevice("Gen 2") })
 
     private fun hrv(min: Long, ms: Double) = QuantitySample(MetricKind.HRV_SDNN, t0.plusSeconds(min * 60), value = ms)
     private fun spo2(min: Long, fraction: Double) = QuantitySample(MetricKind.SPO2, t0.plusSeconds(min * 60), value = fraction)

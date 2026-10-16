@@ -17,6 +17,7 @@ import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.details.DetailsSources
 import io.github.opencircuit.app.health.HealthAccess
 import io.github.opencircuit.app.health.HealthFlush
+import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreWriteGenerations
 import io.github.opencircuit.health.HealthWriter
@@ -116,6 +117,7 @@ class AppContainer(context: Context) {
         port = healthConnect,
         store = StoreHealthSamples { database.await() },
         generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow)),
+        failureStore = StoreHealthFailures({ database.await() }, wallNow, log),
         clock = wallNow,
         zone = ZoneId::systemDefault,
         device = { RingDevice.ofFirmware(ringSessions.current.value?.let { it.link.info.value.firmware.version }) },

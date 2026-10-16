@@ -51,6 +51,8 @@ data class FlushResult(
     val failures: Map<RecordType, String> = emptyMap(),
     /** Health Connect asked to be called later (quota, a backup, another user in front): the rest waits for the next flush. */
     val catchingUp: Boolean = false,
+    /** The persisted failure map after this flush: each type whose last write failed, with when ([FailureMap]). */
+    val failureMap: Map<RecordType, Instant> = emptyMap(),
 ) {
     /** Every record accepted in this flush. */
     val recordsWritten: Int get() = written.values.sum()
@@ -88,6 +90,7 @@ class HealthWriter(
     private val port: HealthConnectPort,
     private val store: HealthSampleStore,
     private val generation: WriteGeneration,
+    private val failureStore: HealthFailureStore,
     private val clock: () -> Instant,
     private val zone: () -> ZoneId,
     private val device: () -> RingDevice,
@@ -109,20 +112,30 @@ class HealthWriter(
         private var calls = 0
 
         suspend fun run(): FlushResult {
-            if (port.sdkStatus() != HealthSdkStatus.AVAILABLE) return FlushResult(finishedAt = clock(), available = false)
+            if (port.sdkStatus() != HealthSdkStatus.AVAILABLE) return FlushResult(finishedAt = clock(), available = false, failureMap = failureStore.load())
             val granted = port.grantedWrites()
             writeHeartRate(granted)
             for ((kind, type) in ScalarRecords.TYPES) writeScalar(kind, type, granted)
             writeSkinTemperature(granted)
+            val finishedAt = clock()
             return FlushResult(
-                finishedAt = clock(),
+                finishedAt = finishedAt,
                 written = written.toMap(),
                 rejected = rejected.toMap(),
                 notGranted = notGranted.toSet(),
                 unsupported = unsupported.toSet(),
                 failures = failures.toMap(),
                 catchingUp = catchingUp,
+                failureMap = recordOutcome(finishedAt),
             )
+        }
+
+        /** Stamps this flush's failed types and clears the ones that wrote, in the shared failure map. */
+        private suspend fun recordOutcome(at: Instant): Map<RecordType, Instant> {
+            val before = failureStore.load()
+            val after = FailureMap.merge(before, written.keys, failures.keys, at)
+            if (after != before) failureStore.save(after)
+            return after
         }
 
         private suspend fun version(): Long = version ?: generation.next().also { version = it }

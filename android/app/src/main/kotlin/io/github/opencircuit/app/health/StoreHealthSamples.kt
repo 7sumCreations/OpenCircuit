@@ -1,6 +1,8 @@
 package io.github.opencircuit.app.health
 
+import io.github.opencircuit.health.HealthFailureStore
 import io.github.opencircuit.health.HealthSampleStore
+import io.github.opencircuit.health.RecordType
 import io.github.opencircuit.health.NightWindow
 import io.github.opencircuit.health.SampleRow
 import io.github.opencircuit.health.WriteGenerationStore
@@ -32,6 +34,30 @@ class StoreHealthSamples(private val database: suspend () -> StoreDatabase) : He
         SleepStore(database()).sleepSummaries(from, until).map { NightWindow(it.keyText, it.night, it.inBedStart, it.inBedEnd, it.skinTempC) }
 
     override suspend fun markWritten(samples: List<QuantitySample>) = store().markHealthWritten(samples)
+}
+
+/**
+ * The per-type write-failure map, kept in the store's key-value table by record type name. A
+ * stored map that cannot be read is logged and read as empty: it only drives the card's warning,
+ * and the next write's outcome replaces it. A name this version does not know is kept as it is
+ * only until the next save.
+ */
+class StoreHealthFailures(
+    private val database: suspend () -> StoreDatabase,
+    private val now: () -> Instant,
+    private val log: (String) -> Unit,
+) : HealthFailureStore {
+    override suspend fun load(): Map<RecordType, Instant> = when (val stored = BlobStore(database()).loadHealthWriteFailures()) {
+        null -> emptyMap()
+        is Decoded.Readable -> stored.value.mapNotNull { (name, at) -> RecordType.entries.firstOrNull { it.name == name }?.let { it to at } }.toMap()
+        is Decoded.Unreadable -> {
+            log("Health Connect: the stored write failures cannot be read (${stored.reason}); starting from none")
+            emptyMap()
+        }
+    }
+
+    override suspend fun save(failures: Map<RecordType, Instant>) =
+        BlobStore(database()).saveHealthWriteFailures(failures.mapKeys { it.key.name }, now())
 }
 
 /**

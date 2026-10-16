@@ -27,7 +27,7 @@ class WriteBudgetTest {
     private val generations = MemoryGenerations()
 
     private fun writer(port: HealthConnectPort = hc) =
-        HealthWriter(port, samples, WriteGeneration(generations), clock::now, { ZoneOffset.UTC }, { RingDevice("Gen 2") })
+        HealthWriter(port, samples, WriteGeneration(generations), InMemoryHealthFailures(), clock::now, { ZoneOffset.UTC }, { RingDevice("Gen 2") })
 
     private class MemoryGenerations(var value: Long? = null) : WriteGenerationStore {
         override suspend fun load(): Long? = value
