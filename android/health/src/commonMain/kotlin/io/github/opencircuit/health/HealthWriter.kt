@@ -69,10 +69,16 @@ data class FlushResult(
  * Every record of one flush carries one version, the next [WriteGeneration], taken just before
  * the flush's first call (a flush with nothing to send spends none).
  *
+ * A flush makes at most [MAX_CALLS_PER_FLUSH] write calls; reaching it ends the flush quietly as
+ * catching up, and the next flush goes on from the marks.
+ *
  * Failures: a type without its grant is skipped; a refusal that asks to be called later
- * ([HealthRetryLaterException]) ends the whole flush as catching up; any other failure ends that
- * type's writing for this flush and is reported in [FlushResult.failures]. Cancellation stops the
- * flush where it is; what was accepted and marked stays marked.
+ * ([HealthRetryLaterException]: the quota, a data sync, another user in front) ends the whole
+ * flush as catching up; a call refused for a bad record ([HealthInvalidRecordException], a rule our
+ * table missed) is sent again record by record, once, so only the bad record is dropped and
+ * counted; any other failure ends that type's writing for this flush and is reported in
+ * [FlushResult.failures]. Cancellation stops the flush where it is; what was accepted and marked
+ * stays marked.
  *
  * Written today, in this order: heart rate (one record per UTC hour, [HrHours]), then heart-rate
  * variability, blood oxygen and breathing rate (one record per stored reading, [ScalarRecords]).
@@ -100,6 +106,7 @@ class HealthWriter(
         private val unsupported = LinkedHashSet<RecordType>()
         private val failures = LinkedHashMap<RecordType, String>()
         private var catchingUp = false
+        private var calls = 0
 
         suspend fun run(): FlushResult {
             if (port.sdkStatus() != HealthSdkStatus.AVAILABLE) return FlushResult(finishedAt = clock(), available = false)
@@ -183,41 +190,85 @@ class HealthWriter(
          * [Chunker]'s size, marking each call's samples once Health Connect accepted it.
          */
         private suspend fun writeItems(type: RecordType, items: List<WriteItem>) {
+            if (catchingUp) return
             val kept = items.filter { HealthRanges.violation(it.record, now) == null }
-            if (kept.size < items.size) rejected[type] = (rejected[type] ?: 0) + items.size - kept.size
+            reject(type, items.size - kept.size)
             for (chunk in Chunker.chunks(kept) { RecordSize.estimateBytes(it.record) }) {
-                if (!send(type, chunk.map { it.record })) return
-                store.markWritten(chunk.flatMap { it.samples })
-                written[type] = (written[type] ?: 0) + chunk.size
+                when (send(type, chunk.map { it.record })) {
+                    Sent.ACCEPTED -> accepted(type, chunk)
+                    Sent.STOP -> return
+                    // The platform refused a record our table let through: try each record once on
+                    // its own, so only the bad one is dropped (each try is a call of the budget).
+                    Sent.REFUSED_RECORD -> if (chunk.size == 1) reject(type, 1) else if (!isolate(type, chunk)) return
+                }
             }
         }
 
+        /** Sends each item of a refused call on its own; false when this type is done for the flush. */
+        private suspend fun isolate(type: RecordType, chunk: List<WriteItem>): Boolean {
+            for (item in chunk) {
+                when (send(type, listOf(item.record))) {
+                    Sent.ACCEPTED -> accepted(type, listOf(item))
+                    Sent.REFUSED_RECORD -> reject(type, 1)
+                    Sent.STOP -> return false
+                }
+            }
+            return true
+        }
+
+        private suspend fun accepted(type: RecordType, items: List<WriteItem>) {
+            store.markWritten(items.flatMap { it.samples })
+            written[type] = (written[type] ?: 0) + items.size
+        }
+
+        private fun reject(type: RecordType, count: Int) {
+            if (count > 0) rejected[type] = (rejected[type] ?: 0) + count
+        }
+
         /**
-         * One call; true when Health Connect accepted it. On false this type is done for the flush
-         * (not granted, or failed), and with [catchingUp] set the whole flush is.
+         * One call, within the flush's budget of [MAX_CALLS_PER_FLUSH]. [Sent.STOP] ends this type's
+         * writing for the flush (not granted, or failed), and with [catchingUp] set the whole flush
+         * (the budget spent, or Health Connect asked to be called later).
          */
-        private suspend fun send(type: RecordType, records: List<HealthRecord>): Boolean {
-            if (catchingUp) return false
+        private suspend fun send(type: RecordType, records: List<HealthRecord>): Sent {
+            if (catchingUp) return Sent.STOP
+            if (calls >= MAX_CALLS_PER_FLUSH) {
+                catchingUp = true
+                return Sent.STOP
+            }
+            calls++
             try {
                 port.insert(type, records)
-                return true
+                return Sent.ACCEPTED
             } catch (e: CancellationException) {
                 throw e
             } catch (e: HealthNotGrantedException) {
                 notGranted += type
             } catch (e: HealthRetryLaterException) {
                 catchingUp = true
+            } catch (e: HealthInvalidRecordException) {
+                return Sent.REFUSED_RECORD
             } catch (e: Exception) {
                 // The failure's kind only: a message may carry an id or a value.
                 failures[type] = e::class.simpleName ?: "failure"
             }
-            return false
+            return Sent.STOP
         }
     }
 
-    private companion object {
-        const val SECONDS_PER_HOUR = 3_600L
-        const val SECONDS_PER_DAY = 86_400L
+    /** How one call ended, for the writer. */
+    private enum class Sent { ACCEPTED, REFUSED_RECORD, STOP }
+
+    companion object {
+        /**
+         * The most write calls one flush makes. Health Connect allows 1000 per 15 minutes and 8000
+         * per day for every write the app makes; a flush leaves the rest of the window to the next
+         * sync and to edits, and stops quietly as catching up when it reaches this.
+         */
+        const val MAX_CALLS_PER_FLUSH = 300
+
+        private const val SECONDS_PER_HOUR = 3_600L
+        private const val SECONDS_PER_DAY = 86_400L
     }
 }
 
