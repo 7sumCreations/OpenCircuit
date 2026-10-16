@@ -13,6 +13,7 @@ import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RespiratoryRateRecord
 import androidx.health.connect.client.records.SkinTemperatureRecord
+import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
@@ -146,6 +147,7 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
             RecordType.OXYGEN_SATURATION -> OxygenSaturationRecord::class
             RecordType.RESPIRATORY_RATE -> RespiratoryRateRecord::class
             RecordType.SKIN_TEMPERATURE -> SkinTemperatureRecord::class
+            RecordType.SLEEP_SESSION -> SleepSessionRecord::class
             else -> throw HealthCallFailedException("$type records are not written by this version")
         }
 
@@ -189,6 +191,17 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                         SkinTemperatureLocation.WRIST -> SkinTemperatureRecord.MEASUREMENT_LOCATION_WRIST
                     },
                 )
+                // Our stage kinds carry the platform's own numbers (SleepSessionRecord.STAGE_TYPE_*).
+                is SleepSession -> SleepSessionRecord(
+                    startTime = record.start,
+                    startZoneOffset = record.startZoneOffset,
+                    endTime = record.end,
+                    endZoneOffset = record.endZoneOffset,
+                    metadata = metadata(record.meta),
+                    title = record.title,
+                    notes = record.notes,
+                    stages = record.stages.map { SleepSessionRecord.Stage(startTime = it.start, endTime = it.end, stage = it.stage.platformCode) },
+                )
                 else -> throw HealthCallFailedException("${record.type} records are not written by this version")
             }
         }
@@ -217,6 +230,18 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                     SkinTemperatureRecord.MEASUREMENT_LOCATION_TOE -> SkinTemperatureLocation.TOE
                     SkinTemperatureRecord.MEASUREMENT_LOCATION_WRIST -> SkinTemperatureLocation.WRIST
                     else -> SkinTemperatureLocation.UNKNOWN
+                },
+                meta = metaOf(record.metadata),
+            )
+            is SleepSessionRecord -> SleepSession(
+                start = record.startTime,
+                startZoneOffset = offsetOf(record.startZoneOffset),
+                end = record.endTime,
+                endZoneOffset = offsetOf(record.endZoneOffset),
+                title = record.title,
+                notes = record.notes,
+                stages = record.stages.map { s ->
+                    SleepStage(s.startTime, s.endTime, SleepStageType.entries.firstOrNull { it.platformCode == s.stage } ?: SleepStageType.UNKNOWN)
                 },
                 meta = metaOf(record.metadata),
             )

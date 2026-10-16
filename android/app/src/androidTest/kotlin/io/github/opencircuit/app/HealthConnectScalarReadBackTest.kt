@@ -136,7 +136,7 @@ class HealthConnectScalarReadBackTest {
     fun eachSingleReadingTypeAndASkinNightReadBackAsWritten() = runBlocking {
         assertTrue("the emulator's Health Connect offers skin temperature", hc.featureAvailable(HealthFeature.SKIN_TEMPERATURE))
 
-        val result = HealthWriter(hc, Store(), WriteGeneration(Generations()), Failures(), Instant::now, ZoneId::systemDefault) { RingDevice("Gen 2") }.flush()
+        val result = HealthWriter(hc, Store(), WriteGeneration(Generations()), Failures(), Instant::now, ZoneId::systemDefault, device = { RingDevice("Gen 2") }).flush()
 
         assertEquals(emptyMap<RecordType, String>(), result.failures)
         assertEquals(ids.keys.associateWith { 1 }, result.written)

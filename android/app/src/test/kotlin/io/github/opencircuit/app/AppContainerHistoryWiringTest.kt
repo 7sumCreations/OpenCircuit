@@ -32,6 +32,8 @@ class AppContainerHistoryWiringTest {
         assertEquals(1, Regex("""afterCommit = \{ healthFlush\.request\(\) \}""").findAll(source).count())
         assertEquals(1, Regex("""HealthFlush\(healthWriter::flush, appScope, log\)""").findAll(source).count())
         assertTrue("store = StoreHealthSamples { database.await() }" in source)
+        // The writer's sleep defaults to none: the app must hand it the store's nights, edits and naps.
+        assertTrue("sleep = StoreHealthSleep({ database.await() }, wallNow, ZoneId::systemDefault)" in source)
         assertTrue("generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow))" in source)
         assertTrue("port = healthConnect" in source)
         assertEquals(1, Regex("""JetpackHealthConnect\(context\)""").findAll(source).count(), "one Health Connect client")

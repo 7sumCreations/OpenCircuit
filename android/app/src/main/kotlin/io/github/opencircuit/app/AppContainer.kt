@@ -20,6 +20,7 @@ import io.github.opencircuit.app.health.HealthFlush
 import io.github.opencircuit.app.health.StoreHealthAccessMemory
 import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.app.health.StoreHealthSamples
+import io.github.opencircuit.app.health.StoreHealthSleep
 import io.github.opencircuit.app.health.StoreWriteGenerations
 import io.github.opencircuit.health.HealthWriter
 import io.github.opencircuit.health.JetpackHealthConnect
@@ -125,6 +126,7 @@ class AppContainer(context: Context) {
         clock = wallNow,
         zone = ZoneId::systemDefault,
         device = { RingDevice.ofFirmware(ringSessions.current.value?.let { it.link.info.value.firmware.version }) },
+        sleep = StoreHealthSleep({ database.await() }, wallNow, ZoneId::systemDefault),
     )
 
     /**

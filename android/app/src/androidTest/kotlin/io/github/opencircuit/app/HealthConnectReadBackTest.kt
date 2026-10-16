@@ -115,7 +115,7 @@ class HealthConnectReadBackTest {
     }
 
     private fun writer(store: HealthSampleStore, generations: Generations) =
-        HealthWriter(hc, store, WriteGeneration(generations), Failures(), Instant::now, ZoneId::systemDefault) { RingDevice("Gen 2") }
+        HealthWriter(hc, store, WriteGeneration(generations), Failures(), Instant::now, ZoneId::systemDefault, device = { RingDevice("Gen 2") })
 
     private suspend fun ownHour(): List<HeartRateSeries> =
         hc.readOwn(RecordType.HEART_RATE, hourStart, hourEnd).map { it as HeartRateSeries }.filter { it.meta.clientRecordId == id }

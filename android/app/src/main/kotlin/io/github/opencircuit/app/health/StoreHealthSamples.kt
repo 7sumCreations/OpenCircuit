@@ -2,19 +2,32 @@ package io.github.opencircuit.app.health
 
 import io.github.opencircuit.health.HealthFailureStore
 import io.github.opencircuit.health.HealthSampleStore
-import io.github.opencircuit.health.RecordType
+import io.github.opencircuit.health.HealthSleepStore
+import io.github.opencircuit.health.NightMirror
 import io.github.opencircuit.health.NightWindow
+import io.github.opencircuit.health.QueuedNightEdit
+import io.github.opencircuit.health.RecordType
 import io.github.opencircuit.health.SampleRow
+import io.github.opencircuit.health.StoredNapToWrite
+import io.github.opencircuit.health.StoredSleepNight
+import io.github.opencircuit.health.UnreadableEditQueueException
 import io.github.opencircuit.health.WriteGenerationStore
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
+import io.github.opencircuit.ringkit.SleepEdit
+import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.store.BlobStore
 import io.github.opencircuit.store.LocalStore
+import io.github.opencircuit.store.MirroredNight
+import io.github.opencircuit.store.PendingSleepReconcile
 import io.github.opencircuit.store.SleepStore
-import io.github.opencircuit.store.keyText
+import io.github.opencircuit.store.SleepStoreException
 import io.github.opencircuit.store.StoreDatabase
+import io.github.opencircuit.store.StoredNapRecord
 import io.github.opencircuit.store.codec.Decoded
+import io.github.opencircuit.store.keyText
 import java.time.Instant
+import java.time.ZoneId
 
 /** The writer's view of the app's store: pending samples, the samples of an hour, the Health Connect marks. */
 class StoreHealthSamples(private val database: suspend () -> StoreDatabase) : HealthSampleStore {
@@ -34,6 +47,82 @@ class StoreHealthSamples(private val database: suspend () -> StoreDatabase) : He
         SleepStore(database()).sleepSummaries(from, until).map { NightWindow(it.keyText, it.night, it.inBedStart, it.inBedEnd, it.skinTempC) }
 
     override suspend fun markWritten(samples: List<QuantitySample>) = store().markHealthWritten(samples)
+}
+
+/**
+ * The writer's view of the store's sleep: the stored nights with their timelines, the queued edits,
+ * the naps, and the night marks (record ids, mirror, the sleep mark, the edit marks). An unreadable
+ * queue of edits is passed on as [UnreadableEditQueueException], never read as empty.
+ */
+class StoreHealthSleep(
+    private val database: suspend () -> StoreDatabase,
+    private val now: () -> Instant,
+    private val zone: () -> ZoneId,
+) : HealthSleepStore {
+    private suspend fun sleep() = SleepStore(database())
+
+    override suspend fun nights(): List<StoredSleepNight> =
+        sleep().sleepSummaries(SleepEdit.DISTANT_PAST, LAST_INSTANT).map {
+            StoredSleepNight(it.keyText, it.night, it.isManuallyEdited, it.hypnogram, it.inBedEnd)
+        }
+
+    override suspend fun mirror(night: Instant): NightMirror? =
+        sleep().mirroredNight(night)?.let { NightMirror(it.signature, it.spanStart, it.spanEnd) }
+
+    override suspend fun setMirror(night: Instant, mirror: NightMirror) =
+        sleep().setMirroredNight(night, MirroredNight(mirror.signature, mirror.spanStart, mirror.spanEnd), now())
+
+    override suspend fun recordIds(night: Instant): List<String>? = sleep().sleepHealthRecordIds(night)
+
+    override suspend fun setRecordIds(night: Instant, ids: List<String>) = sleep().setSleepHealthRecordIds(night, ids, now())
+
+    override suspend fun markNightWritten(segments: List<SleepSegment>) {
+        LocalStore(database()).markSleepWritten(segments)
+        sleep().markSleepEditHealthCovered(segments)
+    }
+
+    override suspend fun markEditWritten(night: Instant, segments: List<SleepSegment>, recordedEnd: Instant) {
+        LocalStore(database()).forceSleepCursorAtLeast(maxOf(recordedEnd, segments.maxOfOrNull { it.end } ?: recordedEnd))
+        sleep().markSleepEditHealthWritten(night, segments)
+        sleep().markSleepEditHealthCovered(segments)
+    }
+
+    override suspend fun queuedEdits(): List<QueuedNightEdit> = unreadableAsQueueError {
+        sleep().pendingSleepReconciles().map { QueuedNightEdit(it.night, it.inBedStart, it.sleepOnset, it.sleepWake, it.segments) }
+    }
+
+    override suspend fun clearQueuedEdit(edit: QueuedNightEdit): Boolean = unreadableAsQueueError {
+        sleep().clearPendingSleepReconcileIfUnchanged(
+            PendingSleepReconcile(edit.night, edit.inBedStart, edit.sleepOnset, edit.sleepWake, edit.segments), zone(), now(),
+        )
+    }
+
+    override suspend fun pendingNaps(): List<StoredNapToWrite> = sleep().pendingNaps().map { it.toWrite() }
+
+    override suspend fun markNapWritten(start: Instant) = sleep().markNapWritten(start)
+
+    override suspend fun autoNaps(from: Instant, to: Instant): List<StoredNapToWrite> = sleep().autoNaps(from, to).map { it.toWrite() }
+
+    override suspend fun deleteNaps(starts: List<Instant>) {
+        if (starts.isEmpty()) return
+        val store = sleep()
+        val naps = store.naps(starts.min(), starts.max().plusMillis(1)).filter { it.start in starts }
+        store.deleteNaps(naps)
+    }
+
+    private fun StoredNapRecord.toWrite() = StoredNapToWrite(start, effectiveStart, effectiveEnd, segments, isManuallyAdded, healthWritten)
+
+    private suspend fun <T> unreadableAsQueueError(block: suspend () -> T): T =
+        try {
+            block()
+        } catch (e: SleepStoreException.UnreadablePendingReconcile) {
+            throw UnreadableEditQueueException(e.message ?: "the queue of sleep edits waiting for Health cannot be read")
+        }
+
+    private companion object {
+        /** The latest instant the store can hold (whole epoch milliseconds). */
+        val LAST_INSTANT: Instant = Instant.ofEpochMilli(Long.MAX_VALUE)
+    }
 }
 
 /**
