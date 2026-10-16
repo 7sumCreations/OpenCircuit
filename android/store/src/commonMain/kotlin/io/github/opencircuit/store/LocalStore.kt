@@ -8,6 +8,7 @@ import io.github.opencircuit.ringkit.LiveHR
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.ringkit.SleepEdit
+import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SyncCursor
 import io.github.opencircuit.ringkit.isCumulativeCounter
 import java.time.Instant
@@ -29,7 +30,8 @@ import java.time.ZoneId
 // (`periodEntriesNeedingHealthMirror`, `recordPeriodEntryHK`, `pendingHeadacheEntries`,
 // `recordHeadacheEntryHK`), which belong to the health-store port; and the Health Connect
 // watermark (`healthMirroredKinds`, `pendingHealthSamples` :1215-1233, `markHealthWritten`,
-// `loadHealthCursor` :1358-1377).
+// `loadHealthCursor` :1358-1377) and the sleep mark (`pendingHealthSleep`, `markSleepWritten`,
+// `forceSleepCursorAtLeast` :1239-1279).
 //
 // Differences, each deliberate:
 // - `now` and `zone` are parameters. Upstream reads the wall clock and `Calendar.current`; the
@@ -546,6 +548,42 @@ class LocalStore internal constructor(
                     marks.last(kind)?.let { StoredCursorEntity(kindRaw = HEALTH_CURSOR_PREFIX + kind.rawValue, last = it) }
                 },
             )
+        }
+    }
+
+    // The sleep mark (upstream LocalStore.swift :1239-1279): the ingest-namespace `sleep` cursor row,
+    // NOT an `hk:` row, as upstream. Health Connect keeps a night as one record, so the writer never
+    // sends what [pendingHealthSleep] clips (that would replace the night with its tail); it moves the
+    // mark after a night it wrote whole, and the edit bookkeeping reads it.
+
+    /**
+     * The segments of a night still to be written, judged against the sleep mark: none when the
+     * night's latest end is not after the mark; with a mark inside the night, only what lies past
+     * it, a segment crossing it clipped to start there. Moves nothing.
+     */
+    suspend fun pendingHealthSleep(segments: List<SleepSegment>): List<SleepSegment> {
+        val latest = segments.maxOfOrNull { it.end.toStoredMillis() } ?: return emptyList()
+        val last = sampleDao.allCursors().firstOrNull { it.kindRaw == MetricKind.SLEEP.rawValue }?.last
+            ?: return segments
+        if (latest <= last) return emptyList()
+        return segments.mapNotNull { s ->
+            val start = maxOf(s.start, last)
+            if (s.end > start) SleepSegment(start, s.end, s.stage, s.provenance) else null
+        }
+    }
+
+    /** Moves the sleep mark to the latest end of [segments] (forward only). Only what Health Connect accepted. */
+    suspend fun markSleepWritten(segments: List<SleepSegment>) {
+        val latest = segments.maxOfOrNull { it.end } ?: return
+        forceSleepCursorAtLeast(latest)
+    }
+
+    /** Moves the sleep mark to [date] when it is later than the mark; never back. One transaction. */
+    suspend fun forceSleepCursorAtLeast(date: Instant) {
+        val at = date.toStoredMillis()
+        db.withWriteTransaction {
+            val last = sampleDao.allCursors().firstOrNull { it.kindRaw == MetricKind.SLEEP.rawValue }?.last
+            if (last == null || at > last) sampleDao.upsertCursors(listOf(StoredCursorEntity(MetricKind.SLEEP.rawValue, at)))
         }
     }
 
