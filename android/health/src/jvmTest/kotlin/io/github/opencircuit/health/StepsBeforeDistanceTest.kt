@@ -36,6 +36,11 @@ class StepsBeforeDistanceTest {
     private fun steps() = hc.records(RecordType.STEPS).map { it as Steps }.sortedBy { it.start }
     private fun distances() = hc.records(RecordType.DISTANCE).map { it as Distance }.sortedBy { it.start }
 
+    // The same flush also writes energy and the daily records; these tests look at steps and distance only.
+    private fun stepCalls() = hc.calls.filter { it.type == RecordType.STEPS || it.type == RecordType.DISTANCE }
+
+    private fun FlushResult.stepsAndDistance() = written.filterKeys { it == RecordType.STEPS || it == RecordType.DISTANCE }
+
     @Test
     fun eachRowIsOneStepsRecordOverItsWindowAndItsDistanceFollows() = runTest {
         val a = activity.addSteps(at("07:30:00"), at("07:31:00"), 25)
@@ -52,20 +57,20 @@ class StepsBeforeDistanceTest {
         assertEquals(listOf(25 * DistanceEstimate.METERS_PER_STEP, 40 * DistanceEstimate.METERS_PER_STEP), distances().map { it.meters })
         assertEquals(steps().map { it.start to it.end }, distances().map { it.start to it.end }, "each distance over its steps' window")
         assertTrue(activity.isWritten(a) && activity.isWritten(b))
-        assertEquals(listOf(RecordType.STEPS, RecordType.DISTANCE), hc.calls.map { it.type }, "steps first, then distance")
-        assertEquals(mapOf(RecordType.STEPS to 2, RecordType.DISTANCE to 2), result.written)
+        assertEquals(listOf(RecordType.STEPS, RecordType.DISTANCE), stepCalls().map { it.type }, "steps first, then distance")
+        assertEquals(mapOf(RecordType.STEPS to 2, RecordType.DISTANCE to 2), result.stepsAndDistance())
     }
 
     @Test
     fun aSecondFlushWritesNothingAgain() = runTest {
         activity.addSteps(at("07:30:00"), at("07:31:00"), 25)
         writer().flush()
-        val calls = hc.calls.size
+        val calls = stepCalls().size
 
         val again = writer().flush()
 
-        assertEquals(calls, hc.calls.size)
-        assertEquals(emptyMap(), again.written)
+        assertEquals(calls, stepCalls().size)
+        assertEquals(emptyMap(), again.stepsAndDistance())
     }
 
     @Test
@@ -80,7 +85,7 @@ class StepsBeforeDistanceTest {
         assertFalse(activity.isWritten(a))
 
         val retry = writer().flush()
-        assertEquals(mapOf(RecordType.STEPS to 1, RecordType.DISTANCE to 1), retry.written)
+        assertEquals(mapOf(RecordType.STEPS to 1, RecordType.DISTANCE to 1), retry.stepsAndDistance())
     }
 
     /** Upstream's tradeoff (HealthKitWriter.swift:579-588): the rows are marked, the distance is not caught up later. */
@@ -91,7 +96,7 @@ class StepsBeforeDistanceTest {
 
         val result = writer().flush()
 
-        assertEquals(mapOf(RecordType.STEPS to 1), result.written)
+        assertEquals(mapOf(RecordType.STEPS to 1), result.stepsAndDistance())
         assertEquals(setOf(RecordType.DISTANCE), result.notGranted)
         assertTrue(activity.isWritten(a))
 
@@ -108,7 +113,7 @@ class StepsBeforeDistanceTest {
         val result = writer().flush()
 
         assertEquals(setOf(RecordType.STEPS), result.notGranted)
-        assertEquals(emptyList(), hc.calls)
+        assertEquals(emptyList(), stepCalls())
         assertFalse(activity.isWritten(a))
     }
 

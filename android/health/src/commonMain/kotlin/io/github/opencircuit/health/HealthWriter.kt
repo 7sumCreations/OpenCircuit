@@ -1,15 +1,21 @@
 package io.github.opencircuit.health
 
+import io.github.opencircuit.ringkit.DateInterval
+import io.github.opencircuit.ringkit.HRSample
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
+import io.github.opencircuit.ringkit.RestingHR
 import io.github.opencircuit.ringkit.SleepHealthGate
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SleepStage
+import io.github.opencircuit.ringkit.StepWindow
+import io.github.opencircuit.ringkit.UserProfile
 import io.github.opencircuit.ringkit.containsAssertedTime
 import io.github.opencircuit.ringkit.healthPublishable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -110,6 +116,7 @@ class HealthWriter(
     private val device: () -> RingDevice,
     private val sleep: HealthSleepStore = HealthSleepStore.NONE,
     private val activity: HealthActivityStore = HealthActivityStore.NONE,
+    private val profile: () -> UserProfile = { EnergyProfile.DEFAULT },
 ) {
     private val lock = Mutex()
 
@@ -134,7 +141,13 @@ class HealthWriter(
             for ((kind, type) in ScalarRecords.TYPES) writeScalar(kind, type, granted)
             writeSkinTemperature(granted)
             writeSleep(granted)
-            writeStepsThenDistance(granted)
+            // Steps, the daily records and energy keep their marks in the activity store: none without one.
+            if (activity !== HealthActivityStore.NONE) {
+                writeStepsThenDistance(granted)
+                writeRestingHeartRate(granted)
+                writeBasalMetabolicRate(granted)
+                writeActiveEnergy(granted)
+            }
             val finishedAt = clock()
             return FlushResult(
                 finishedAt = finishedAt,
@@ -401,6 +414,115 @@ class HealthWriter(
                 return
             }
             writeItems(distance, accepted.map { WriteItem(ActivityRecords.distanceOf(it, v), emptyList()) })
+        }
+
+        /**
+         * Upstream `flushRestingHR` (HKW:1406-1439): one record per final day after the day mark
+         * ([DailyRecords.daysToWrite], 7 days back at most), valued by `RestingHR.dailyValues` over
+         * the stored heart rate and the stored nights' stages (the mean asleep heart rate where a
+         * night was staged, else the lowest sustained window). A day without readings gets none.
+         * The mark moves to each day Health Connect accepted.
+         */
+        private suspend fun writeRestingHeartRate(granted: Set<HealthPermission>) {
+            val type = RecordType.RESTING_HEART_RATE
+            val zone = zone()
+            val days = DailyRecords.daysToWrite(activity.dayMark(type), now, zone, firstRunFromToday = false)
+            if (days.isEmpty()) return
+            val from = days.first().atStartOfDay(zone).toInstant()
+            val heartRate = store.samples(MetricKind.HEART_RATE, from, now).map { HRSample(it.value.toInt(), it.start, it.end) }
+            if (heartRate.isEmpty()) return
+            val stages = sleep.nights().flatMap { it.timeline }.filter { it.end.isAfter(from) }
+            val starts = days.associateBy { it.atStartOfDay(zone).toInstant() }
+            val values = RestingHR.dailyValues(heartRate, stages, zone).mapNotNull { v -> starts[v.day]?.let { it to v.bpm } }
+            if (values.isEmpty()) return
+            if (type.permission !in granted) {
+                notGranted += type
+                return
+            }
+            val v = version()
+            val ring = device()
+            writeItems(type, values.map { (day, bpm) -> WriteItem(DailyRecords.restingHeartRate(day, zone, bpm, ring, v), emptyList()) { activity.setDayMark(type, day) } })
+        }
+
+        /**
+         * One basal-metabolic-rate record per final day after the day mark (PORTING.md D-296; upstream
+         * writes basal energy per hour, HKW:1453-1488): a first run writes today only, as upstream's
+         * meter starts at the current hour; each day valued [DailyRecords.basalKcalPerDay] with the
+         * resting heart rate of [DailyRecords.BASAL_LOOKBACK_DAYS] days of stored heart rate.
+         */
+        private suspend fun writeBasalMetabolicRate(granted: Set<HealthPermission>) {
+            val type = RecordType.BASAL_METABOLIC_RATE
+            val zone = zone()
+            val days = DailyRecords.daysToWrite(activity.dayMark(type), now, zone, firstRunFromToday = true)
+            if (days.isEmpty()) return
+            if (type.permission !in granted) {
+                notGranted += type
+                return
+            }
+            val from = days.first().minusDays(DailyRecords.BASAL_LOOKBACK_DAYS).atStartOfDay(zone).toInstant()
+            val heartRate = store.samples(MetricKind.HEART_RATE, from, now).map { HRSample(it.value.toInt(), it.start, it.end) }
+            val daily = RestingHR.dailyValues(heartRate, emptyList(), zone)
+            val v = version()
+            val ring = device()
+            val profile = profile()
+            writeItems(
+                type,
+                days.map { day ->
+                    val kcal = DailyRecords.basalKcalPerDay(day.atStartOfDay(zone).toInstant(), daily, profile)
+                    WriteItem(DailyRecords.basalMetabolicRate(day, zone, kcal, ring, v), emptyList()) { activity.setDayMark(type, day) }
+                },
+            )
+        }
+
+        /**
+         * Active energy as absolute per-bucket records ([ActiveEnergyDays], PORTING.md D-295): each of
+         * the last [ActiveEnergyDays.LOOKBACK_DAYS] local days is estimated again from what the store
+         * holds — its heart rate, its steps and their windows, the night that ended in it (its heart
+         * rate is not exercise) — and every bucket whose kilocalories changed is written under its id;
+         * what each accepted bucket carries is kept per day, so the next flush writes only changes and
+         * can lower a bucket to 0. What was kept for older days is forgotten.
+         */
+        private suspend fun writeActiveEnergy(granted: Set<HealthPermission>) {
+            val type = RecordType.ACTIVE_CALORIES_BURNED
+            val zone = zone()
+            val today = now.atZone(zone).toLocalDate()
+            val first = today.minusDays(ActiveEnergyDays.LOOKBACK_DAYS - 1)
+            activity.forgetEnergyBefore(first)
+            val nights = store.nights(first.minusDays(2).atStartOfDay(zone).toInstant(), today.plusDays(2).atStartOfDay(zone).toInstant())
+            val perDay = LinkedHashMap<LocalDate, Pair<Map<Instant, Double>, List<ActiveEnergyDays.Change>>>()
+            for (offset in 0 until ActiveEnergyDays.LOOKBACK_DAYS) {
+                val day = first.plusDays(offset)
+                val dayStart = day.atStartOfDay(zone).toInstant()
+                val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant()
+                val inputs = ActiveEnergyDays.DayInputs(
+                    heartRate = store.samples(MetricKind.HEART_RATE, dayStart, dayEnd).map { HRSample(it.value.toInt(), it.start, it.end) },
+                    steps = activity.daySteps(day),
+                    stepWindows = activity.steps(dayStart.minusSeconds(SECONDS_PER_DAY), dayEnd)
+                        .map { StepWindow(it.start, it.end, it.count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) },
+                    sleepWindow = nights.filter { it.inBedEnd.isAfter(it.inBedStart) && !it.inBedEnd.isBefore(dayStart) && it.inBedEnd.isBefore(dayEnd) }
+                        .maxByOrNull { it.inBedEnd }?.let { DateInterval(it.inBedStart, it.inBedEnd) },
+                )
+                val written = activity.energyWritten(day)
+                val changes = ActiveEnergyDays.changes(day, zone, ActiveEnergyDays.buckets(day, zone, inputs, profile()), written, now)
+                if (changes.isNotEmpty()) perDay[day] = written to changes
+            }
+            if (perDay.isEmpty()) return
+            if (type.permission !in granted) {
+                notGranted += type
+                return
+            }
+            val v = version()
+            val ring = device()
+            val items = perDay.flatMap { (day, writtenAndChanges) ->
+                val kept = writtenAndChanges.first.toMutableMap()
+                writtenAndChanges.second.map { change ->
+                    WriteItem(change.record(zone, ring, v), emptyList()) {
+                        kept[change.start] = change.kilocalories
+                        activity.setEnergyWritten(day, kept.toMap())
+                    }
+                }
+            }
+            writeItems(type, items)
         }
 
         /**
