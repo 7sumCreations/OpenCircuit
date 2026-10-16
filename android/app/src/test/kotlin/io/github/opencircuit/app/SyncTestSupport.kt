@@ -17,6 +17,7 @@ import io.github.opencircuit.app.sync.StoreHistory
 import io.github.opencircuit.app.sync.StoredData
 import io.github.opencircuit.app.sync.SyncEvidence
 import io.github.opencircuit.app.sync.SyncFaultInjector
+import io.github.opencircuit.app.sync.SyncReport
 import io.github.opencircuit.store.SyncLogEntry
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CommitPlanner
@@ -163,6 +164,8 @@ internal suspend fun TestScope.syncWorld(
     rawPagesKept: Int = RawHistoryPages.KEPT,
     /** The debug build's sync test action, as the debug app wires it; never cuts by default. */
     syncFaults: SyncFaultInjector = SyncFaultInjector.NONE,
+    /** What runs after each committed sync, as the app's Health Connect write does; nothing by default. */
+    afterCommit: (SyncReport) -> Unit = {},
     makeRing: (CoroutineScope, () -> Long) -> RingFake,
 ): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
@@ -190,7 +193,7 @@ internal suspend fun TestScope.syncWorld(
         backgroundScope,
         monotonicMillis = { testScheduler.currentTime },
         log = { logs += it; logHook.run(it) },
-        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources, zone = { zone }, faults = syncFaults),
+        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources, zone = { zone }, faults = syncFaults, afterCommit = afterCommit),
     )
     val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, prefs = prefs, wallClock = wall, zone = { zone })
     return SyncWorld(db, ring, store, prefs, session, viewModel, logs, nightsRead, logHook)

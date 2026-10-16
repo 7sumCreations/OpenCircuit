@@ -15,6 +15,13 @@ import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.details.DetailsSources
+import io.github.opencircuit.app.health.HealthFlush
+import io.github.opencircuit.app.health.StoreHealthSamples
+import io.github.opencircuit.app.health.StoreWriteGenerations
+import io.github.opencircuit.health.HealthWriter
+import io.github.opencircuit.health.JetpackHealthConnect
+import io.github.opencircuit.health.RingDevice
+import io.github.opencircuit.health.WriteGeneration
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.RingSessions
 import io.github.opencircuit.app.sync.SessionHistory
@@ -94,6 +101,31 @@ class AppContainer(context: Context) {
     /** The ring the app reconnects to. */
     val rememberedRings: RememberedRingStore = PrefsRememberedRingStore(keyValues)
 
+    /** The phone's wall clock as an instant. */
+    private val wallNow: () -> Instant = { Instant.ofEpochMilli(clock.nowMillis()) }
+
+    /** Health Connect on this phone (the platform's, Android 14 and later); the one client of the app. */
+    val healthConnect: JetpackHealthConnect = JetpackHealthConnect(context)
+
+    /**
+     * Writes what the store holds and Health Connect lacks. The ring's model comes from the current
+     * session's firmware revision, when one has been read.
+     */
+    private val healthWriter = HealthWriter(
+        port = healthConnect,
+        store = StoreHealthSamples { database.await() },
+        generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow)),
+        clock = wallNow,
+        zone = ZoneId::systemDefault,
+        device = { RingDevice.ofFirmware(ringSessions.current.value?.let { it.link.info.value.firmware.version }) },
+    )
+
+    /**
+     * Starts the Health Connect writes — after each committed sync and on "Write to Health Connect
+     * now" — on the process scope, so neither a sync's pause nor a session's end cuts one.
+     */
+    val healthFlush: HealthFlush = HealthFlush(healthWriter::flush, appScope, log)
+
     /** Android's companion-device manager: the pairing sheet before the first bond, and forgetting. */
     val companionPairing: CompanionPairing = CompanionPairing(AndroidCompanionPort(context), log)
 
@@ -156,6 +188,8 @@ class AppContainer(context: Context) {
             zone = { ZoneId.systemDefault() },
             // The debug build's sync test action; the release build's never cuts.
             faults = VariantLinks.syncFaults,
+            // Each committed sync's data goes on to Health Connect.
+            afterCommit = { healthFlush.request() },
         )
     }
 

@@ -100,6 +100,7 @@ class RingSessionController(
         nightWindow = { triggers?.nightWindow()?.window },
         record = syncRecords::record,
         faults = history.faults,
+        afterCommit = history.afterCommit,
     )
 
     /**

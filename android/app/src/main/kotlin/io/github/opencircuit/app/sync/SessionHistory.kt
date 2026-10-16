@@ -22,6 +22,8 @@ class SessionHistory(
     val zone: () -> ZoneId = { ZoneOffset.UTC },
     /** The debug build's sync test action ([SyncFaultInjector]); never cuts by default and in release. */
     val faults: SyncFaultInjector = SyncFaultInjector.NONE,
+    /** After a sync's commit returned and its report is published: the Health Connect write ([HistoryDrainController]). */
+    val afterCommit: (SyncReport) -> Unit = {},
 ) {
     companion object {
         /**

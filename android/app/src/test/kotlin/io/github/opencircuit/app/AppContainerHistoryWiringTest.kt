@@ -26,6 +26,18 @@ class AppContainerHistoryWiringTest {
     }
 
     @Test
+    fun everyCommittedSyncRequestsTheHealthConnectWriteOnTheAppsOwnScope() {
+        // The hook only requests; the write runs on the process scope, never the session's, so a pause or a
+        // session's end cannot cut it.
+        assertEquals(1, Regex("""afterCommit = \{ healthFlush\.request\(\) \}""").findAll(source).count())
+        assertEquals(1, Regex("""HealthFlush\(healthWriter::flush, appScope, log\)""").findAll(source).count())
+        assertTrue("store = StoreHealthSamples { database.await() }" in source)
+        assertTrue("generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow))" in source)
+        assertTrue("port = healthConnect" in source)
+        assertEquals(1, Regex("""JetpackHealthConnect\(context\)""").findAll(source).count(), "one Health Connect client")
+    }
+
+    @Test
     fun everySessionGetsTheAutomaticSyncsOverTheSameDatabaseZoneAndRing() {
         // Without these a session syncs only on Sync now: no link-up sync, no cadence, no catch-up.
         assertEquals(1, Regex("""triggers = SyncTriggerSources\(""").findAll(source).count())

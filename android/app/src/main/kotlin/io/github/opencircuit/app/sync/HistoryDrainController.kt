@@ -252,6 +252,13 @@ class HistoryDrainController(
      * and the sync ends as for any lost link, its report [SyncReport.cutByTest]. Never cuts by default.
      */
     private val faults: SyncFaultInjector = SyncFaultInjector.NONE,
+    /**
+     * Runs once a sync whose commit returned ([SyncReport.commit] not null) has been recorded and
+     * its report published, after the disconnect when the switch is on: the Health Connect write.
+     * It must only start work in a scope of its own and return; the sync never waits for it and a
+     * pause never reaches it. A failure is logged, never thrown.
+     */
+    private val afterCommit: (SyncReport) -> Unit = {},
 ) {
     private val stateFlow = MutableStateFlow(SyncState())
     private val syncingFlow = MutableStateFlow(false)
@@ -320,6 +327,15 @@ class HistoryDrainController(
             }
             stateFlow.update { SyncState(syncing = false, pagesThisSync = it.pagesThisSync, last = report) }
             syncingFlow.value = false
+            if (report.commit != null) {
+                try {
+                    afterCommit(report)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log("The Health Connect write could not be started: ${e::class.java.simpleName}")
+                }
+            }
             // The user came back while the pause was finishing.
             if (report.paused && resumeAfterPause.getAndSet(false)) syncNow()
         }
