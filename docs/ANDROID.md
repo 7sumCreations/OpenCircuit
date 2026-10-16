@@ -40,8 +40,10 @@ the phone.
 
 The store deletes only raw ring data on its own: samples, step samples and daytime readings older
 than 30 days, plus a one-time clean-up of raw samples that fail the import checks (heart rates
-outside 30–220 bpm, and times before the ring's clock epoch or more than a day ahead). Nothing a
-person entered is pruned. At launch the store also repairs sleep history: once, it moves nights
+outside 30–220 bpm, and times before the ring's clock epoch or more than a day ahead). From 0.3.0
+the 30-day prune keeps any reading or step sample Health Connect has not received yet (past the
+kind's Health Connect mark, or a step sample not yet written), and the repairs run at every app
+launch, off the main thread. Nothing a person entered is pruned. At launch the store also repairs sleep history: once, it moves nights
 an older build filed under the day they started onto the day they ended — with everything kept
 under the night's key, in one transaction (two nights that would land on one day stop the move and
 change nothing); it fills in the measured-versus-estimated breakdown of unedited nights that lack
@@ -196,8 +198,8 @@ The app (`:app`, package `io.github.opencircuit.android`) is published as a sign
 fork's GitHub Releases, as a **pre-release** while it is in early development. The first is
 `android-v0.1.0`: onboarding, finding and pairing the ring, the connection card (battery,
 charging, the ring's state) and a live heart-rate or SpO₂ reading. From `android-v0.2.0` the app
-also syncs the ring's history onto the phone (see "Syncing your ring"); it does not write to Health
-Connect yet. Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
+also syncs the ring's history onto the phone (see "Syncing your ring"), and from `android-v0.3.0`
+it writes it to Health Connect (see "Health Connect"). Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
 and its SHA-256 checksum file, and the release notes give the signing certificate's digest.
 
 > **Not affiliated with, authorized, or endorsed by RingConn or JZ_Tech. Not a medical device.**
@@ -232,9 +234,11 @@ README. At the APK's minimum Android version `apksigner` reports `v3 … true` a
 it checks only the strongest scheme needed there (add `--min-sdk-version 24` to see v2 checked
 too).
 
-**What it asks for.** Android 14 or later. The only permission is "Nearby devices"
+**What it asks for.** Android 14 or later. "Nearby devices"
 (`BLUETOOTH_SCAN`, declared never to be used for location, and `BLUETOOTH_CONNECT`), asked the
-first time you tap Scan & connect, never at install or during onboarding. The app declares no
+first time you tap Scan & connect, never at install or during onboarding. From 0.3.0, Health
+Connect's 12 write permissions (no read permission), asked only when you tap Connect Health
+Connect. The app declares no
 `INTERNET` permission, so it cannot reach any server. When it finds a ring, the app first explains
 Android's companion-device sheet ("Allow OpenCircuit to access …?"), whose wording is Android's
 generic text for any companion device. On the first real phone (GrapheneOS) the 0.1.0 sheet stayed
@@ -303,9 +307,25 @@ range, nights, last night's sleep) and the last sync's result.
   (Gen 3: 9), counted from the oldest record the ring may still hold — a sync that left a channel
   unfinished does not reset it.
 - **Steps and skin temperature are only recorded while the ring is connected.** They are not in
-  the ring's history (PROTOCOL.md §5.4), so a ring that syncs and disconnects has no steps or
-  skin temperature for the time it was disconnected. Turn **Disconnect after syncing** off to keep
-  them coming while the app is open.
+  the ring's history (PROTOCOL.md §5.4): the ring sends them only live, and the app stores them
+  (and writes them to Health Connect) only for the time it was connected. A ring that syncs and
+  disconnects has no steps or skin temperature for the time it was disconnected, and nothing
+  fills that gap later. Turning **Disconnect after syncing** off keeps the ring connected while
+  the app is running, so they are recorded for that time only.
+
+**Health Connect.** The **Health Connect** card, under the Ring data card, writes the ring's data
+to Health Connect on the phone — heart rate, resting heart rate, HRV, SpO₂, respiratory rate,
+skin temperature, steps, distance, active calories, basal metabolic rate and sleep (nights and
+naps). Nothing leaves the phone. Tap **Connect Health Connect** and choose what to allow; the app
+asks only for write permissions. After that it writes after every sync that stored something, and
+**Write to Health Connect now** writes at once. The card shows when it last wrote and how many
+records ("Written this sync"); amber names types you did not allow ("Not allowed: …", with
+**Change in Health Connect**) or whose write failed ("Could not write …", retried on the next
+sync); "Catching up" means Health Connect asked the app to slow down and the rest follows on the
+next sync. If you allowed nothing, the card offers **Open Health Connect settings**. "Health
+Connect is not available" means Android reports it missing or disabled, or the app is in a work
+profile or Private Space. Writing the same data again never makes duplicates. What goes where:
+[`HEALTH_CONNECT_MAPPING.md`](HEALTH_CONNECT_MAPPING.md).
 
 **Connection details.** Expand the card to see the ring's facts (firmware, address type, ATT MTU,
 whether it is history-safe) and **Link diagnostics**: the last steps of the connection with times,
@@ -342,6 +362,10 @@ clinician about any health concern.
 - **"This ring's firmware sends history this version can't read yet".** The ring is on older
   firmware (seen on FR02.013), which sends its history in a format this version can't read yet.
   The pages are kept on your phone. Update the ring's firmware in the RingConn app and sync again.
+
+- **Health Connect's step total is another app's, not the ring's.** Where several apps' steps
+  overlap, Health Connect counts the app highest in its priority list, not the sum. Change it in Health
+  Connect → Data and access → Steps → App priority.
 
 ## FAQ
 
