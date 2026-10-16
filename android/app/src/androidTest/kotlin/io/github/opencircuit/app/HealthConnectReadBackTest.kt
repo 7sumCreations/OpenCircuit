@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.github.opencircuit.health.HealthFailureStore
 import io.github.opencircuit.health.HealthPermission
 import io.github.opencircuit.health.HealthSampleStore
 import io.github.opencircuit.health.HealthSdkStatus
@@ -11,10 +12,12 @@ import io.github.opencircuit.health.HealthWriter
 import io.github.opencircuit.health.HeartRateSeries
 import io.github.opencircuit.health.HrHours
 import io.github.opencircuit.health.JetpackHealthConnect
+import io.github.opencircuit.health.NightWindow
 import io.github.opencircuit.health.RecordIds
 import io.github.opencircuit.health.RecordType
 import io.github.opencircuit.health.RecordingMethod
 import io.github.opencircuit.health.RingDevice
+import io.github.opencircuit.health.SampleRow
 import io.github.opencircuit.health.WriteGeneration
 import io.github.opencircuit.health.WriteGenerationStore
 import io.github.opencircuit.ringkit.MetricKind
@@ -79,9 +82,27 @@ class HealthConnectReadBackTest {
         override suspend fun samples(kind: MetricKind, from: Instant, until: Instant) =
             stored.filter { it.kind == kind && !it.start.isBefore(from) && it.start.isBefore(until) }
 
+        // Row ids are the readings' places in the list, as the store's autoincrement would give them.
+        override suspend fun pendingRows(kind: MetricKind) =
+            pendingSamples(kind).map { s -> SampleRow(stored.indexOf(s).toLong() + 1, s) }
+
+        override suspend fun rows(kind: MetricKind, from: Instant, until: Instant) =
+            samples(kind, from, until).map { s -> SampleRow(stored.indexOf(s).toLong() + 1, s) }
+
+        override suspend fun nights(from: Instant, until: Instant) = emptyList<NightWindow>()
+
         override suspend fun markWritten(samples: List<QuantitySample>) {
             val newest = samples.maxOf { it.start }
             if (mark.let { it == null || it.isBefore(newest) }) mark = newest
+        }
+    }
+
+    /** The write-failure map, in memory. */
+    private class Failures : HealthFailureStore {
+        var stored: Map<RecordType, Instant> = emptyMap()
+        override suspend fun load() = stored
+        override suspend fun save(failures: Map<RecordType, Instant>) {
+            stored = failures
         }
     }
 
@@ -94,7 +115,7 @@ class HealthConnectReadBackTest {
     }
 
     private fun writer(store: HealthSampleStore, generations: Generations) =
-        HealthWriter(hc, store, WriteGeneration(generations), Instant::now, ZoneId::systemDefault) { RingDevice("Gen 2") }
+        HealthWriter(hc, store, WriteGeneration(generations), Failures(), Instant::now, ZoneId::systemDefault) { RingDevice("Gen 2") }
 
     private suspend fun ownHour(): List<HeartRateSeries> =
         hc.readOwn(RecordType.HEART_RATE, hourStart, hourEnd).map { it as HeartRateSeries }.filter { it.meta.clientRecordId == id }
