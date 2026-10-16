@@ -1,6 +1,7 @@
 package io.github.opencircuit.app
 
 import io.github.opencircuit.app.health.HealthAccess
+import io.github.opencircuit.app.health.HealthAccessMemory
 import io.github.opencircuit.app.health.HealthAccessState
 import io.github.opencircuit.app.health.HealthCardAction
 import io.github.opencircuit.app.health.HealthCardInput
@@ -29,7 +30,7 @@ import kotlin.test.assertTrue
 /**
  * The Ring screen's Health Connect card, from what Health Connect says (available, which WRITE
  * permissions are granted) and what the writes did. Copy as in the mockup. The partial (amber)
- * and write-failed (amber) states arrive with the other record types.
+ * and write-failed (amber) states are `HealthCardAmberTest`'s.
  */
 class HealthCardStateTest {
 
@@ -97,16 +98,22 @@ class HealthCardStateTest {
         assertFalse(running.buttonEnabled)
     }
 
+    private object NoMemory : HealthAccessMemory {
+        override suspend fun asked(): Boolean = false
+        override suspend fun markAsked() = Unit
+        override suspend fun failures(): Map<RecordType, Instant> = emptyMap()
+    }
+
     @Test
     fun theAccessIsReadFromHealthConnectAndAFailedReadKeepsWhatWasKnown() = runTest {
         val hc = FakeHealthConnect({ now })
         val logs = mutableListOf<String>()
-        val access = HealthAccess(hc, backgroundScope, log = { logs += it })
+        val access = HealthAccess(hc, NoMemory, backgroundScope, log = { logs += it })
         assertEquals(HealthAccessState(available = null, granted = emptySet()), access.state.value)
 
         access.refresh()
         runCurrent()
-        assertEquals(HealthAccessState(available = true, granted = emptySet()), access.state.value)
+        assertEquals(HealthAccessState(available = true, granted = emptySet(), skinTemperatureSupported = true), access.state.value)
 
         hc.grant(HealthPermission.HEART_RATE, HealthPermission.SLEEP)
         access.refresh()
@@ -122,7 +129,7 @@ class HealthCardStateTest {
             override suspend fun grantedWrites(): Set<HealthPermission> = throw IllegalStateException("binder died")
         }
         hc.status = HealthSdkStatus.AVAILABLE
-        val failing = HealthAccess(broken, backgroundScope, log = { logs += it })
+        val failing = HealthAccess(broken, NoMemory, backgroundScope, log = { logs += it })
         failing.refresh()
         runCurrent()
         assertEquals(HealthAccessState(available = null, granted = emptySet()), failing.state.value)

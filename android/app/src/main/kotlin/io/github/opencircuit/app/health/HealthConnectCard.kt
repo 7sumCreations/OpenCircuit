@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -26,8 +28,9 @@ const val HEALTH_CONNECT_CARD_TAG = "health-connect-card"
 
 /**
  * The Ring screen's "Health Connect" card, under the Ring data card: whether the app may write to
- * Health Connect, when it last wrote and how much, and the one button the state calls for
- * (Connect Health Connect, or Write to Health Connect now). Drawn from [ui] alone.
+ * Health Connect, when it last wrote and how much, an amber warning when types are not allowed or
+ * their writes fail, and the buttons the state calls for (Connect Health Connect, or Write to
+ * Health Connect now / Try again, and Change in Health Connect). Drawn from [ui] alone.
  */
 @Composable
 fun HealthConnectCard(ui: HealthCardUi, onAction: (HealthCardAction) -> Unit, modifier: Modifier = Modifier) {
@@ -41,6 +44,7 @@ fun HealthConnectCard(ui: HealthCardUi, onAction: (HealthCardAction) -> Unit, mo
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
             ui.body?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            ui.warning?.let { AmberWarning(it) }
             ui.rows.forEach { (label, value) ->
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(label, style = MaterialTheme.typography.bodyMedium)
@@ -52,6 +56,24 @@ fun HealthConnectCard(ui: HealthCardUi, onAction: (HealthCardAction) -> Unit, mo
                     Text(label)
                 }
             }
+            ui.secondButton?.let { label ->
+                OutlinedButton(onClick = { ui.secondAction?.let(onAction) }, enabled = ui.secondAction != null) {
+                    Text(label)
+                }
+            }
         }
+    }
+}
+
+/** Types not allowed, or writes that failed: amber, read out once when it appears or changes. */
+@Composable
+private fun AmberWarning(text: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
     }
 }

@@ -96,7 +96,8 @@ fun RingScreen(
                     health,
                     onAction = { action ->
                         when (action) {
-                            HealthCardAction.CONNECT -> onAction(RingAction.ConnectHealth)
+                            // Changing what is allowed opens the same permission screen for now.
+                            HealthCardAction.CONNECT, HealthCardAction.MANAGE -> onAction(RingAction.ConnectHealth)
                             HealthCardAction.WRITE_NOW -> onAction(RingAction.WriteHealthNow)
                         }
                     },

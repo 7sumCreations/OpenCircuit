@@ -17,6 +17,7 @@ import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.details.DetailsSources
 import io.github.opencircuit.app.health.HealthAccess
 import io.github.opencircuit.app.health.HealthFlush
+import io.github.opencircuit.app.health.StoreHealthAccessMemory
 import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreWriteGenerations
@@ -113,11 +114,14 @@ class AppContainer(context: Context) {
      * Writes what the store holds and Health Connect lacks. The ring's model comes from the current
      * session's firmware revision, when one has been read.
      */
+    /** The Health Connect write-failure map in the store, shared by every write and the card. */
+    private val healthFailures = StoreHealthFailures({ database.await() }, wallNow, log)
+
     private val healthWriter = HealthWriter(
         port = healthConnect,
         store = StoreHealthSamples { database.await() },
         generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow)),
-        failureStore = StoreHealthFailures({ database.await() }, wallNow, log),
+        failureStore = healthFailures,
         clock = wallNow,
         zone = ZoneId::systemDefault,
         device = { RingDevice.ofFirmware(ringSessions.current.value?.let { it.link.info.value.firmware.version }) },
@@ -130,7 +134,8 @@ class AppContainer(context: Context) {
     val healthFlush: HealthFlush = HealthFlush(healthWriter::flush, appScope, log)
 
     /** Whether Health Connect is there and which WRITE permissions are granted; read now, on each resume and after the permission screen. */
-    val healthAccess: HealthAccess = HealthAccess(healthConnect, appScope, log).also { it.refresh() }
+    val healthAccess: HealthAccess =
+        HealthAccess(healthConnect, StoreHealthAccessMemory({ database.await() }, wallNow, healthFailures), appScope, log).also { it.refresh() }
 
     /** Android's companion-device manager: the pairing sheet before the first bond, and forgetting. */
     val companionPairing: CompanionPairing = CompanionPairing(AndroidCompanionPort(context), log)

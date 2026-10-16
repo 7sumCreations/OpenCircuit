@@ -97,7 +97,7 @@ class MainActivity : ComponentActivity() {
     // Health Connect's own permission screen. On Android 14 and later its request is handled only
     // through the activity result registry; whatever the user chose is read back from Health Connect.
     private val healthPermissionRequest = registerForActivityResult(JetpackHealthConnect.permissionRequestContract()) {
-        container.healthAccess.refresh()
+        container.healthAccess.permissionScreenAnswered()
     }
 
     // Android's companion-device sheet; its result code is the pairing's answer.
@@ -204,12 +204,13 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Health Connect's own permission screen for the app's twelve WRITE permissions, at the user's
-     * tap only (never at launch). If Health Connect cannot show it, the card stays as it is.
+     * Health Connect's own permission screen for the WRITE permissions the app asks for (the
+     * twelve, less skin temperature on a phone without it), at the user's tap only (never at
+     * launch). If Health Connect cannot show it, the card stays as it is.
      */
     private fun askForHealthConnect() {
         try {
-            healthPermissionRequest.launch(HealthPermission.ALL_STRINGS.toSet())
+            healthPermissionRequest.launch(container.healthAccess.requested().map(HealthPermission::permission).toSet())
         } catch (_: ActivityNotFoundException) {
             container.log("Health Connect's permission screen could not be shown")
             container.healthAccess.refresh()

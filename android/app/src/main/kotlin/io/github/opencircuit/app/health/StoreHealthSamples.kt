@@ -60,6 +60,19 @@ class StoreHealthFailures(
         BlobStore(database()).saveHealthWriteFailures(failures.mapKeys { it.key.name }, now())
 }
 
+/** What the card's access state keeps in the store: the "permission screen shown" flag and the failure map. */
+class StoreHealthAccessMemory(
+    private val database: suspend () -> StoreDatabase,
+    private val now: () -> Instant,
+    private val failureStore: HealthFailureStore,
+) : HealthAccessMemory {
+    override suspend fun asked(): Boolean = BlobStore(database()).loadHealthPermissionsRequested()
+
+    override suspend fun markAsked() = BlobStore(database()).saveHealthPermissionsRequested(now())
+
+    override suspend fun failures(): Map<RecordType, Instant> = failureStore.load()
+}
+
 /**
  * The write generation, kept in the store's key-value table. A stored value that cannot be read
  * fails the flush instead of starting again from 1: every record already in Health Connect carries

@@ -1,5 +1,6 @@
 package io.github.opencircuit.app
 
+import io.github.opencircuit.app.health.StoreHealthAccessMemory
 import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.health.RecordType
 import io.github.opencircuit.store.BlobStore
@@ -36,6 +37,25 @@ class StoreHealthFailuresTest {
 
             StoreHealthFailures({ db }, { now }, log = {}).save(emptyMap())
             assertEquals(emptyMap(), StoreHealthFailures({ db }, { now }, log = {}).load())
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun theAccessMemoryKeepsTheShownFlagAndReadsTheFailuresFromTheStore() = runTest {
+        val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
+        try {
+            val failures = StoreHealthFailures({ db }, { now }, log = {})
+            failures.save(mapOf(RecordType.SLEEP_SESSION to now))
+            val memory = StoreHealthAccessMemory({ db }, { now }, failures)
+            assertEquals(false, memory.asked())
+
+            memory.markAsked()
+
+            assertEquals(true, StoreHealthAccessMemory({ db }, { now }, failures).asked(), "kept across adapters (a relaunch)")
+            assertEquals(true, BlobStore(db).loadHealthPermissionsRequested())
+            assertEquals(mapOf(RecordType.SLEEP_SESSION to now), memory.failures())
         } finally {
             db.close()
         }
