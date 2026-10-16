@@ -8,6 +8,7 @@ import io.github.opencircuit.app.connect.AndroidCompanionPort
 import io.github.opencircuit.app.connect.CompanionPairing
 import io.github.opencircuit.app.connect.RingScannerFactory
 import io.github.opencircuit.app.data.AppPrefs
+import io.github.opencircuit.app.data.LaunchHousekeeping
 import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.data.PrefsRememberedRingStore
 import io.github.opencircuit.app.data.PrefsSyncMarks
@@ -139,6 +140,12 @@ class AppContainer(context: Context) {
      * now" — on the process scope, so neither a sync's pause nor a session's end cuts one.
      */
     val healthFlush: HealthFlush = HealthFlush(healthWriter::flush, appScope, log)
+
+    /**
+     * The store's launch repairs (the 30-day prune, the purges, the night move, the backfill, the
+     * heal, the cursor repair), once per process, off the main thread, after the store opened.
+     */
+    private val launchRepairs = LaunchHousekeeping({ database.await() }, wallNow, ZoneId::systemDefault, log).start(appScope)
 
     /** Whether Health Connect is there and which WRITE permissions are granted; read now, on each resume and after the permission screen. */
     val healthAccess: HealthAccess =
