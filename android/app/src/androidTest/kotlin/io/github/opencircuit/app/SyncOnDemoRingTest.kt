@@ -63,11 +63,11 @@ class SyncOnDemoRingTest {
         compose.onNodeWithText("Stored on this phone").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Nights").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Last night").performScrollTo().assertIsDisplayed()
-        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isEmpty() }
+        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isEmpty() }
 
         compose.onNodeWithText("Sync now").performScrollTo().performClick()
-        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isNotEmpty() }
-        compose.waitUntil(timeoutMillis = 30_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isEmpty() }
+        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(timeoutMillis = 30_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isEmpty() }
         // The link goes down inside the sync (after its commit); the card reads "Syncing…" until the
         // sync's log entry is kept and its report published, a moment later.
         compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Syncing…").fetchSemanticsNodes().isEmpty() }

@@ -37,11 +37,11 @@ class RingScreenTracerTest {
     @Test
     fun theDemoRingShowsConnectedWithItsBattery() {
         compose.waitUntil(timeoutMillis = 5_000) {
-            compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isNotEmpty()
         }
 
         compose.onNodeWithText("Ring · Demo ring").assertIsDisplayed()
-        compose.onNodeWithText("Connected").assertIsDisplayed()
+        compose.onNode(linkConnected()).assertIsDisplayed()
         compose.onNodeWithText("72%", substring = true).assertIsDisplayed()
     }
 }

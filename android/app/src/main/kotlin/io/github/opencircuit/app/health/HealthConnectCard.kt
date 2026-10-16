@@ -11,11 +11,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+
+/**
+ * The card's test tag. Its "Connected" means Health Connect access, not the ring's link (the
+ * connection card's own "Connected"); a test that reads the link's state leaves this card out.
+ */
+const val HEALTH_CONNECT_CARD_TAG = "health-connect-card"
 
 /**
  * The Ring screen's "Health Connect" card, under the Ring data card: whether the app may write to
@@ -24,7 +31,7 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun HealthConnectCard(ui: HealthCardUi, onAction: (HealthCardAction) -> Unit, modifier: Modifier = Modifier) {
-    Card(modifier = modifier.fillMaxWidth()) {
+    Card(modifier = modifier.fillMaxWidth().testTag(HEALTH_CONNECT_CARD_TAG)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Health Connect", style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
             Text(
