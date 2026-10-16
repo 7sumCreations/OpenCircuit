@@ -117,6 +117,17 @@ class HrHoursTest {
     }
 
     @Test
+    fun theRingModelOnEachRecordComesFromTheFirmwarePrefix() {
+        assertEquals(RingDevice("Gen 2"), RingDevice.ofFirmware("FR02.018"))
+        assertEquals(RingDevice("Gen 2 Air"), RingDevice.ofFirmware("FR04.002"))
+        assertEquals(RingDevice("Gen 3"), RingDevice.ofFirmware("FR05.011"))
+        // Not read yet, or a prefix no ring has: a ring all the same, never a guess.
+        assertEquals(RingDevice("Ring"), RingDevice.ofFirmware(null))
+        assertEquals(RingDevice("Ring"), RingDevice.ofFirmware(""))
+        assertEquals(RingDevice("Ring"), RingDevice.ofFirmware("fr02.018"))
+    }
+
+    @Test
     fun anHourStartIsTheStartOfAUtcHour() {
         assertEquals(h8, HrHours.hourStart(min(59).plusMillis(999)))
         assertEquals(min(60), HrHours.hourStart(min(60)))

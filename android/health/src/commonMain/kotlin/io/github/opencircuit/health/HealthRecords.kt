@@ -1,5 +1,7 @@
 package io.github.opencircuit.health
 
+import io.github.opencircuit.ringkit.FirmwareInfo
+import io.github.opencircuit.ringkit.RingGeneration
 import java.time.Instant
 import java.time.ZoneOffset
 
@@ -14,6 +16,18 @@ data class RingDevice(val model: String) {
 
     companion object {
         const val MANUFACTURER = "RingConn"
+
+        /** The model when the ring's firmware is not known, or names no known ring. */
+        const val UNKNOWN_MODEL = "Ring"
+
+        /**
+         * The ring's model from its firmware revision prefix (FR02 Gen 2, FR04 Gen 2 Air, FR05
+         * Gen 3, FR01 Gen 1 — `FirmwareInfo.generation`), or [UNKNOWN_MODEL].
+         */
+        fun ofFirmware(version: String?): RingDevice {
+            val generation = FirmwareInfo(version = version.orEmpty()).generation
+            return RingDevice(if (generation == RingGeneration.UNKNOWN) UNKNOWN_MODEL else generation.rawValue)
+        }
     }
 }
 
