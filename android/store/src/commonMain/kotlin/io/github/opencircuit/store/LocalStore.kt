@@ -518,14 +518,25 @@ class LocalStore internal constructor(
      * Deletes raw samples, step deltas and daytime readings older than [olderThanDays] calendar
      * days before [now] in [zone] (`time < cutoff`; a row exactly at the cutoff is kept), in one
      * transaction. Day totals and cursors are never pruned. Meant for once a launch, not per write.
+     *
+     * Nothing Health Connect has not received is pruned (PORTING D-300): a reading above zero of a
+     * [HEALTH_MIRRORED_KINDS] kind is deleted only at or before its kind's mark (with no mark, none
+     * is), and a step delta only once marked written; they age out once written. A zero reading,
+     * which is never written, and the daytime readings, which are not written to Health Connect,
+     * age out as before.
      */
     suspend fun pruneExpiredSamples(now: Instant, zone: ZoneId, olderThanDays: Long = SAMPLE_RETENTION_DAYS) {
         // Calendar days in the zone, as Foundation's `date(byAdding: .day, value: -days, to:)`.
         val cutoff = now.atZone(zone).minusDays(olderThanDays).toInstant()
         db.withWriteTransaction {
-            sampleDao.deleteSamplesBefore(cutoff)
+            sampleDao.deleteSamplesBefore(cutoff, HEALTH_MIRRORED_KINDS.map { it.rawValue })
+            val marks = healthMarks()
+            for (kind in HEALTH_MIRRORED_KINDS) {
+                val mark = marks.last(kind) ?: continue
+                sampleDao.deleteWrittenSamplesBefore(kind.rawValue, cutoff, mark)
+            }
             dailyDao.deleteDaytimeTempsBefore(cutoff)
-            dailyDao.deleteStepSamplesBefore(cutoff)
+            dailyDao.deleteWrittenStepSamplesBefore(cutoff)
         }
     }
 
