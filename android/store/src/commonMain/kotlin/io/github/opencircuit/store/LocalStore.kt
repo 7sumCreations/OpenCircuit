@@ -215,6 +215,15 @@ class LocalStore internal constructor(
     /** The health-store sample ids already imported as headaches, so a repeated import adds nothing. */
     suspend fun importedHeadacheHKUUIDs(): Set<String> = userEntryDao.importedHeadacheUUIDs().toSet()
 
+    /**
+     * The headaches not yet written to the health store, oldest onset first (upstream
+     * `pendingHeadacheEntries`, HeadacheStore.swift:303-309): written cleared, and not imported from
+     * the health store (writing one back would duplicate it). Bookkeeping only on Android: Health
+     * Connect has no headache type, so nothing writes a headache and nothing marks one written.
+     */
+    suspend fun pendingHeadacheEntries(): List<HeadacheEntry> =
+        userEntryDao.pendingHeadaches(HeadacheSource.HEALTH_IMPORT.rawValue).map { it.toHeadacheEntry() }
+
     // Frozen risk rows (ios/OpenCircuit/Store/HeadacheStore.swift :332-406).
 
     /**

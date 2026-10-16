@@ -48,6 +48,10 @@ internal interface UserEntryDao {
     @Query("SELECT * FROM stored_headache_entry WHERE onset >= :from AND onset < :to ORDER BY onset, id")
     suspend fun headaches(from: Instant, to: Instant): List<StoredHeadacheEntryEntity>
 
+    /** Entries not written to the health store and not imported from it ([importedRaw]), oldest first. */
+    @Query("SELECT * FROM stored_headache_entry WHERE health_written = 0 AND source_raw != :importedRaw ORDER BY onset, id")
+    suspend fun pendingHeadaches(importedRaw: String): List<StoredHeadacheEntryEntity>
+
     @Query("SELECT imported_hk_uuid FROM stored_headache_entry WHERE imported_hk_uuid IS NOT NULL")
     suspend fun importedHeadacheUUIDs(): List<String>
 

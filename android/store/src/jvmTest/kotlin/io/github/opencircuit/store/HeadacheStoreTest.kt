@@ -14,10 +14,11 @@ import kotlin.test.assertTrue
  * `:134`, `:153`, `:166`, `:186`, in upstream order, with upstream's fixtures (reference instant
  * 1 785 000 000 s, made-up sample ids).
  *
- * Two upstream calls belong to the health-write port, not the store's: `recordHeadacheEntryHK`
- * (store the written sample ids and set the watermark) is done here by [recordHealthWrite] on the
- * table directly, as fixture set-up; `pendingHeadacheEntries` (not yet written, not imported) is
- * asserted through the two stored facts it filters on, `healthWritten` and `source`.
+ * `pendingHeadacheEntries` (not yet written, not imported) is asserted through the store's own
+ * [LocalStore.pendingHeadacheEntries], as upstream asserts it. `recordHeadacheEntryHK` (store the
+ * written sample ids and set the watermark) is not ported: Health Connect has no headache type, so
+ * nothing ever writes one; [recordHealthWrite] sets the two columns on the table directly, as
+ * fixture set-up.
  */
 class HeadacheStoreTest {
 
@@ -66,8 +67,7 @@ class HeadacheStoreTest {
             "both stale Health samples must stay nameable so they can be deleted",
         )
         assertFalse(rows[0].healthWritten, "the entry must be re-written at its new time")
-        // Upstream: pendingHeadacheEntries() == [at(5)].
-        assertEquals(listOf(at(5.0)), rows.filter { !it.healthWritten && it.source != HeadacheSource.HEALTH_IMPORT }.map { it.onset })
+        assertEquals(listOf(at(5.0)), store.pendingHeadacheEntries().map { it.onset })
     }
 
     /** Upstream `testNotesOnlyEditDoesNotResetHealthWritten` (:101). */
@@ -84,6 +84,7 @@ class HeadacheStoreTest {
         val row = assertNotNull(store.allHeadacheEntries().firstOrNull())
         assertEquals("took ibuprofen at 09:20", row.notes)
         assertTrue(row.healthWritten, "notes are not clinical — Health must not be re-written")
+        assertTrue(store.pendingHeadacheEntries().isEmpty())
     }
 
     /** Upstream `testTriggerOnlyEditDoesNotResetHealthWritten` (:117). */
@@ -100,6 +101,7 @@ class HeadacheStoreTest {
         val row = assertNotNull(store.allHeadacheEntries().firstOrNull())
         assertEquals(listOf("poor sleep", "skipped a meal"), row.factors)
         assertTrue(row.healthWritten, "triggers have no HealthKit field — Health is unaffected")
+        assertTrue(store.pendingHeadacheEntries().isEmpty())
     }
 
     /** Upstream `testSeverityEditDoesResetHealthWritten` (:134). */
@@ -115,6 +117,7 @@ class HeadacheStoreTest {
         assertFalse(row.healthWritten, "a clinical change must be corrected in Apple Health")
         assertEquals(listOf("hk-1"), row.hkSampleUUIDs, "the superseded sample must still be deletable on the next flush")
         assertEquals(HeadacheSource.USER, row.source)
+        assertEquals(listOf(at(0.0)), store.pendingHeadacheEntries().map { it.onset })
     }
 
     /** Upstream `testDeleteReturnsStaleUUIDs` (:153). */
@@ -137,10 +140,12 @@ class HeadacheStoreTest {
             source = HeadacheSource.HEALTH_IMPORT, importedHKUUID = "hk-imported", now = now,
         )
 
-        // Upstream: pendingHeadacheEntries() == [at(0)] — the imported row is kept as imported.
         val rows = store.allHeadacheEntries()
         assertEquals(listOf(HeadacheSource.USER, HeadacheSource.HEALTH_IMPORT), rows.map { it.source })
-        assertEquals(listOf(at(0.0)), rows.filter { !it.healthWritten && it.source != HeadacheSource.HEALTH_IMPORT }.map { it.onset })
+        assertEquals(
+            listOf(at(0.0)), store.pendingHeadacheEntries().map { it.onset },
+            "an imported entry is already in Health — writing it back duplicates it",
+        )
         assertEquals(setOf("hk-imported"), store.importedHeadacheHKUUIDs(), "a repeated import must be idempotent")
     }
 

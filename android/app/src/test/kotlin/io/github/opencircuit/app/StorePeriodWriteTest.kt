@@ -57,4 +57,22 @@ class StorePeriodWriteTest {
             h.db.close()
         }
     }
+
+    @Test
+    fun aLoggedHeadacheIsNeverWrittenAndStaysPendingBookkeeping() = runTest {
+        val h = healthWorld(wallStart = wall)
+        try {
+            val store = LocalStore(h.db)
+            store.saveHeadacheEntry(onset = day(15), end = day(15).plusSeconds(3600), severityRaw = 3, symptoms = listOf("nausea"), now = wall)
+
+            h.flush.request()
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(emptyList(), h.hc.calls, "Health Connect has no headache type: nothing is sent")
+            assertEquals(listOf(day(15)), store.pendingHeadacheEntries().map { it.onset }, "and nothing marks it written")
+        } finally {
+            h.appScope.cancel()
+            h.db.close()
+        }
+    }
 }
