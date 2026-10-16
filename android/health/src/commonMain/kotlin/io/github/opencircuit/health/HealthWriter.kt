@@ -26,6 +26,9 @@ interface HealthSampleStore {
     /** Every stored sample of [kind] with `from <= start < until`, any value, with its row id, oldest first (ties in row order). */
     suspend fun rows(kind: MetricKind, from: Instant, until: Instant): List<SampleRow>
 
+    /** The stored nights keyed `from <= night < until`, oldest first. */
+    suspend fun nights(from: Instant, until: Instant): List<NightWindow>
+
     /** Moves each kind's mark to the newest of [samples] (forward only). Only what Health Connect accepted. */
     suspend fun markWritten(samples: List<QuantitySample>)
 }
@@ -42,6 +45,8 @@ data class FlushResult(
     val rejected: Map<RecordType, Int> = emptyMap(),
     /** Types with something to write whose WRITE permission the user has not granted: skipped, not failed. */
     val notGranted: Set<RecordType> = emptySet(),
+    /** Types with something to write that this phone's Health Connect does not offer (skin temperature): skipped, not failed, left pending. */
+    val unsupported: Set<RecordType> = emptySet(),
     /** Types whose write failed, with the kind of failure (never a value); retried on the next flush. */
     val failures: Map<RecordType, String> = emptyMap(),
     /** Health Connect asked to be called later (quota, a backup, another user in front): the rest waits for the next flush. */
@@ -92,6 +97,7 @@ class HealthWriter(
         private val written = LinkedHashMap<RecordType, Int>()
         private val rejected = LinkedHashMap<RecordType, Int>()
         private val notGranted = LinkedHashSet<RecordType>()
+        private val unsupported = LinkedHashSet<RecordType>()
         private val failures = LinkedHashMap<RecordType, String>()
         private var catchingUp = false
 
@@ -100,11 +106,13 @@ class HealthWriter(
             val granted = port.grantedWrites()
             writeHeartRate(granted)
             for ((kind, type) in ScalarRecords.TYPES) writeScalar(kind, type, granted)
+            writeSkinTemperature(granted)
             return FlushResult(
                 finishedAt = clock(),
                 written = written.toMap(),
                 rejected = rejected.toMap(),
                 notGranted = notGranted.toSet(),
+                unsupported = unsupported.toSet(),
                 failures = failures.toMap(),
                 catchingUp = catchingUp,
             )
@@ -139,6 +147,35 @@ class HealthWriter(
             // Every stored row at the pending starts, so each id's ordinal counts them all.
             val atStarts = store.rows(kind, pending.first().sample.start, pending.last().sample.start.plusMillis(1))
             writeItems(type, ScalarRecords.items(kind, pending, atStarts, now, zone(), device(), version()))
+        }
+
+        /**
+         * Skin temperature, one record per night holding a pending reading ([SkinTempNights]). On a
+         * phone whose Health Connect has no skin-temperature feature nothing is tried and nothing
+         * marked: the readings wait in case the platform gains it.
+         */
+        private suspend fun writeSkinTemperature(granted: Set<HealthPermission>) {
+            val type = RecordType.SKIN_TEMPERATURE
+            val pending = store.pendingSamples(MetricKind.TEMPERATURE).filter { !it.start.isAfter(now) }
+            if (pending.isEmpty()) return
+            if (!port.featureAvailable(HealthFeature.SKIN_TEMPERATURE)) {
+                unsupported += type
+                return
+            }
+            if (type.permission !in granted) {
+                notGranted += type
+                return
+            }
+            // Every night up to the last pending reading: the baseline reads the prior nights' means.
+            val nights = store.nights(Instant.EPOCH, pending.last().start.plusSeconds(SECONDS_PER_DAY))
+            val toRebuild = SkinTempNights.nightsToRebuild(pending, nights, now)
+            if (toRebuild.isEmpty()) return
+            val v = version()
+            val items = toRebuild.mapNotNull { night ->
+                val stored = store.samples(MetricKind.TEMPERATURE, night.inBedStart, night.inBedEnd.plusMillis(1))
+                SkinTempNights.item(night, stored, nights, now, zone(), device(), v)
+            }
+            writeItems(type, items)
         }
 
         /**
@@ -180,6 +217,7 @@ class HealthWriter(
 
     private companion object {
         const val SECONDS_PER_HOUR = 3_600L
+        const val SECONDS_PER_DAY = 86_400L
     }
 }
 

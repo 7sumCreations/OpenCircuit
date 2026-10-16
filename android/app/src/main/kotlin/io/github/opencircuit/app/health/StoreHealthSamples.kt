@@ -1,12 +1,15 @@
 package io.github.opencircuit.app.health
 
 import io.github.opencircuit.health.HealthSampleStore
+import io.github.opencircuit.health.NightWindow
 import io.github.opencircuit.health.SampleRow
 import io.github.opencircuit.health.WriteGenerationStore
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.store.BlobStore
 import io.github.opencircuit.store.LocalStore
+import io.github.opencircuit.store.SleepStore
+import io.github.opencircuit.store.keyText
 import io.github.opencircuit.store.StoreDatabase
 import io.github.opencircuit.store.codec.Decoded
 import java.time.Instant
@@ -24,6 +27,9 @@ class StoreHealthSamples(private val database: suspend () -> StoreDatabase) : He
 
     override suspend fun rows(kind: MetricKind, from: Instant, until: Instant): List<SampleRow> =
         store().sampleRows(kind, from, until).map { SampleRow(it.id, it.sample) }
+
+    override suspend fun nights(from: Instant, until: Instant): List<NightWindow> =
+        SleepStore(database()).sleepSummaries(from, until).map { NightWindow(it.keyText, it.night, it.inBedStart, it.inBedEnd, it.skinTempC) }
 
     override suspend fun markWritten(samples: List<QuantitySample>) = store().markHealthWritten(samples)
 }

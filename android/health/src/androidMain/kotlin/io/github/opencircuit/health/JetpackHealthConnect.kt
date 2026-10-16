@@ -12,12 +12,15 @@ import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RespiratoryRateRecord
+import androidx.health.connect.client.records.SkinTemperatureRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.Percentage
+import androidx.health.connect.client.units.Temperature
+import androidx.health.connect.client.units.TemperatureDelta
 import java.time.Instant
 import java.time.ZoneOffset
 import kotlin.coroutines.cancellation.CancellationException
@@ -142,6 +145,7 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
             RecordType.HEART_RATE_VARIABILITY_RMSSD -> HeartRateVariabilityRmssdRecord::class
             RecordType.OXYGEN_SATURATION -> OxygenSaturationRecord::class
             RecordType.RESPIRATORY_RATE -> RespiratoryRateRecord::class
+            RecordType.SKIN_TEMPERATURE -> SkinTemperatureRecord::class
             else -> throw HealthCallFailedException("$type records are not written by this version")
         }
 
@@ -170,6 +174,21 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                 is HeartRateVariabilityRmssd -> HeartRateVariabilityRmssdRecord(record.time, record.zoneOffset, record.millis, metadata(record.meta))
                 is OxygenSaturation -> OxygenSaturationRecord(record.time, record.zoneOffset, Percentage(record.percent), metadata(record.meta))
                 is RespiratoryRate -> RespiratoryRateRecord(record.time, record.zoneOffset, record.breathsPerMinute, metadata(record.meta))
+                is SkinTemperature -> SkinTemperatureRecord(
+                    startTime = record.start,
+                    startZoneOffset = record.startZoneOffset,
+                    endTime = record.end,
+                    endZoneOffset = record.endZoneOffset,
+                    metadata = metadata(record.meta),
+                    deltas = record.deltas.map { SkinTemperatureRecord.Delta(it.time, TemperatureDelta.celsius(it.deltaCelsius)) },
+                    baseline = record.baselineCelsius?.let { Temperature.celsius(it) },
+                    measurementLocation = when (record.location) {
+                        SkinTemperatureLocation.UNKNOWN -> SkinTemperatureRecord.MEASUREMENT_LOCATION_UNKNOWN
+                        SkinTemperatureLocation.FINGER -> SkinTemperatureRecord.MEASUREMENT_LOCATION_FINGER
+                        SkinTemperatureLocation.TOE -> SkinTemperatureRecord.MEASUREMENT_LOCATION_TOE
+                        SkinTemperatureLocation.WRIST -> SkinTemperatureRecord.MEASUREMENT_LOCATION_WRIST
+                    },
+                )
                 else -> throw HealthCallFailedException("${record.type} records are not written by this version")
             }
         }
@@ -186,6 +205,21 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
             is HeartRateVariabilityRmssdRecord -> HeartRateVariabilityRmssd(record.time, offsetOf(record.zoneOffset), record.heartRateVariabilityMillis, metaOf(record.metadata))
             is OxygenSaturationRecord -> OxygenSaturation(record.time, offsetOf(record.zoneOffset), record.percentage.value, metaOf(record.metadata))
             is RespiratoryRateRecord -> RespiratoryRate(record.time, offsetOf(record.zoneOffset), record.rate, metaOf(record.metadata))
+            is SkinTemperatureRecord -> SkinTemperature(
+                start = record.startTime,
+                startZoneOffset = offsetOf(record.startZoneOffset),
+                end = record.endTime,
+                endZoneOffset = offsetOf(record.endZoneOffset),
+                baselineCelsius = record.baseline?.inCelsius,
+                deltas = record.deltas.map { SkinTemperatureDelta(it.time, it.delta.inCelsius) },
+                location = when (record.measurementLocation) {
+                    SkinTemperatureRecord.MEASUREMENT_LOCATION_FINGER -> SkinTemperatureLocation.FINGER
+                    SkinTemperatureRecord.MEASUREMENT_LOCATION_TOE -> SkinTemperatureLocation.TOE
+                    SkinTemperatureRecord.MEASUREMENT_LOCATION_WRIST -> SkinTemperatureLocation.WRIST
+                    else -> SkinTemperatureLocation.UNKNOWN
+                },
+                meta = metaOf(record.metadata),
+            )
             else -> throw HealthCallFailedException("$type records are not read back by this version")
         }
 

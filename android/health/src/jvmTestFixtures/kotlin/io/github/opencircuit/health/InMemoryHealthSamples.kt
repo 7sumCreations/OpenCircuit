@@ -17,10 +17,18 @@ class InMemoryHealthSamples : HealthSampleStore {
     private val stored = mutableListOf<SampleRow>()
     private val marks = mutableMapOf<MetricKind, Instant>()
     private var nextId = 1L
+    private val nightList = mutableListOf<NightWindow>()
 
     fun add(vararg samples: QuantitySample) = synchronized(lock) { samples.forEach { stored += SampleRow(nextId++, it) } }
 
     fun mark(kind: MetricKind): Instant? = synchronized(lock) { marks[kind] }
+
+    /** Stores nights (the app's sleep summaries), keyed by [NightWindow.night]. */
+    fun addNights(vararg added: NightWindow) = synchronized(lock) { nightList += added }
+
+    override suspend fun nights(from: Instant, until: Instant): List<NightWindow> = synchronized(lock) {
+        nightList.filter { !it.night.isBefore(from) && it.night.isBefore(until) }.sortedBy { it.night }
+    }
 
     override suspend fun pendingSamples(kind: MetricKind): List<QuantitySample> = pendingRows(kind).map { it.sample }
 
