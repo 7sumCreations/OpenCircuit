@@ -3,6 +3,7 @@ package io.github.opencircuit.app
 import io.github.opencircuit.app.health.HealthFlush
 import io.github.opencircuit.app.health.StoreHealthActivity
 import io.github.opencircuit.app.health.StoreHealthFailures
+import io.github.opencircuit.app.health.StoreHealthPeriods
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreHealthSleep
 import io.github.opencircuit.app.health.StoreWriteGenerations
@@ -82,6 +83,7 @@ internal suspend fun TestScope.healthWorld(
         device = { RingDevice("Gen 2") },
         sleep = StoreHealthSleep({ db }, wall, { ZoneOffset.UTC }),
         activity = if (activity) StoreHealthActivity({ db }, wall, { ZoneOffset.UTC }) else HealthActivityStore.NONE,
+        periods = StoreHealthPeriods { db },
     )
     return HealthWorld(db, hc, gate, appScope, HealthFlush(writer::flush, appScope, log = {}))
 }

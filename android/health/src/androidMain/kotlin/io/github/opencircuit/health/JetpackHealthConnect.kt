@@ -12,6 +12,8 @@ import androidx.health.connect.client.records.BasalMetabolicRateRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
+import androidx.health.connect.client.records.MenstruationFlowRecord
+import androidx.health.connect.client.records.MenstruationPeriodRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RespiratoryRateRecord
@@ -161,7 +163,8 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
             RecordType.ACTIVE_CALORIES_BURNED -> ActiveCaloriesBurnedRecord::class
             RecordType.BASAL_METABOLIC_RATE -> BasalMetabolicRateRecord::class
             RecordType.RESTING_HEART_RATE -> RestingHeartRateRecord::class
-            else -> throw HealthCallFailedException("$type records are not written by this version")
+            RecordType.MENSTRUATION_FLOW -> MenstruationFlowRecord::class
+            RecordType.MENSTRUATION_PERIOD -> MenstruationPeriodRecord::class
         }
 
         private fun device(ring: RingDevice): Device = Device(type = Device.TYPE_RING, manufacturer = RingDevice.MANUFACTURER, model = ring.model)
@@ -241,7 +244,15 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                 )
                 is BasalMetabolicRate -> BasalMetabolicRateRecord(record.time, record.zoneOffset, Power.kilocaloriesPerDay(record.kilocaloriesPerDay), metadata(record.meta))
                 is RestingHeartRate -> RestingHeartRateRecord(record.time, record.zoneOffset, record.beatsPerMinute, metadata(record.meta))
-                else -> throw HealthCallFailedException("${record.type} records are not written by this version")
+                // Our flow levels carry the platform's own numbers (MenstruationFlowRecord.FLOW_*).
+                is MenstruationFlow -> MenstruationFlowRecord(time = record.time, zoneOffset = record.zoneOffset, metadata = metadata(record.meta), flow = record.flow.platformCode)
+                is MenstruationPeriod -> MenstruationPeriodRecord(
+                    startTime = record.start,
+                    startZoneOffset = record.startZoneOffset,
+                    endTime = record.end,
+                    endZoneOffset = record.endZoneOffset,
+                    metadata = metadata(record.meta),
+                )
             }
         }
 
@@ -290,6 +301,13 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                 ActiveCaloriesBurned(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), record.energy.inKilocalories, metaOf(record.metadata))
             is BasalMetabolicRateRecord -> BasalMetabolicRate(record.time, offsetOf(record.zoneOffset), record.basalMetabolicRate.inKilocaloriesPerDay, metaOf(record.metadata))
             is RestingHeartRateRecord -> RestingHeartRate(record.time, offsetOf(record.zoneOffset), record.beatsPerMinute, metaOf(record.metadata))
+            is MenstruationFlowRecord -> MenstruationFlow(
+                record.time,
+                offsetOf(record.zoneOffset),
+                MenstruationFlowLevel.entries.firstOrNull { it.platformCode == record.flow } ?: MenstruationFlowLevel.UNKNOWN,
+                metaOf(record.metadata),
+            )
+            is MenstruationPeriodRecord -> MenstruationPeriod(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), metaOf(record.metadata))
             else -> throw HealthCallFailedException("$type records are not read back by this version")
         }
 

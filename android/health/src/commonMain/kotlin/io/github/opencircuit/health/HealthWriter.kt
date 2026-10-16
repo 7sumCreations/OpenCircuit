@@ -96,8 +96,9 @@ data class FlushResult(
  * Written today, in this order: heart rate (one record per UTC hour, [HrHours]), then heart-rate
  * variability, blood oxygen and breathing rate (one record per stored reading, [ScalarRecords]),
  * skin temperature (one record per night, [SkinTempNights]), then sleep ([sleep]): the settled
- * nights, the queued edits of edited nights, the naps (one session each, [SleepMapping]). The other
- * types follow the same steps.
+ * nights, the queued edits of edited nights, the naps (one session each, [SleepMapping]); with an
+ * activity store, steps then distance, resting heart rate, basal metabolic rate and active energy;
+ * last, the logged periods ([writePeriods], [PeriodRecords]). The other types follow the same steps.
  *
  * Sleep replaces by id: a night is one record `oc:sleep:<night key>`, a nap `oc:nap:<start>`, so a
  * changed night is written whole again under its id and Health Connect replaces it. An id is deleted
@@ -117,11 +118,34 @@ class HealthWriter(
     private val sleep: HealthSleepStore = HealthSleepStore.NONE,
     private val activity: HealthActivityStore = HealthActivityStore.NONE,
     private val profile: () -> UserProfile = { EnergyProfile.DEFAULT },
+    private val periods: HealthPeriodStore = HealthPeriodStore.NONE,
 ) {
     private val lock = Mutex()
 
     /** Writes everything pending; a flush that starts while another runs waits for it, then runs. */
     suspend fun flush(): FlushResult = lock.withLock { Pass(clock()).run() }
+
+    /**
+     * Deletes the records a deleted logged period named (`LocalStore.deletePeriodEntry` returns
+     * them; upstream `deleteMenstrualFlowSamples`, HKW:848-853), by clientRecordId, each under its
+     * own type, between flushes. False when a call failed: the caller keeps the ids to try again.
+     */
+    suspend fun deletePeriodRecords(ids: List<String>): Boolean = lock.withLock {
+        val (flows, others) = ids.partition(PeriodRecords::isFlowId)
+        listOf(RecordType.MENSTRUATION_FLOW to flows, RecordType.MENSTRUATION_PERIOD to others)
+            .filter { it.second.isNotEmpty() }
+            .map { (type, named) ->
+                try {
+                    port.deleteByClientIds(type, named)
+                    true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            .all { it }
+    }
 
     /** One flush's state. */
     private inner class Pass(private val now: Instant) {
@@ -148,6 +172,7 @@ class HealthWriter(
                 writeBasalMetabolicRate(granted)
                 writeActiveEnergy(granted)
             }
+            writePeriods(granted)
             val finishedAt = clock()
             return FlushResult(
                 finishedAt = finishedAt,
@@ -526,6 +551,44 @@ class HealthWriter(
         }
 
         /**
+         * Upstream `flushMenstrualFlow` (HKW:727-791) over ids, for every period the store asks for
+         * that is not up to date ([PeriodRecords.isUpToDate]) and covers a day: its records
+         * ([PeriodRecords.build]) are named in the store next to what it named before, BEFORE the
+         * calls, so a kill after a call leaves only named records; then its flow days, then its
+         * period record(s); then, once both were accepted, the ids it no longer has (days an edit
+         * removed) are deleted by id; it is finalized when nothing is left to delete, else it stays
+         * pending with those ids named and the delete is tried again. A call that fails ends the
+         * step (upstream's break), every id still named (upstream rolls its list back to the old
+         * UUIDs, which a lost reply would strand; ids here repeat, so the list cannot grow).
+         */
+        private suspend fun writePeriods(granted: Set<HealthPermission>) {
+            val zone = zone()
+            val due = periods.periodsNeedingMirror(now, zone)
+                .filter { !PeriodRecords.isUpToDate(it, now, zone) && PeriodRecords.daysToCover(it, now, zone) > 0 }
+            if (due.isEmpty()) return
+            if (HealthPermission.MENSTRUATION !in granted) {
+                notGranted += RecordType.MENSTRUATION_FLOW
+                notGranted += RecordType.MENSTRUATION_PERIOD
+                return
+            }
+            val v = version()
+            for (entry in due) {
+                if (catchingUp) return
+                val built = PeriodRecords.build(entry, now, zone, v)
+                val fresh = built.ids
+                periods.recordWrittenIds(entry.start, (entry.writtenIds + fresh).distinct(), finalized = false)
+                if (!writeItems(RecordType.MENSTRUATION_FLOW, built.flows.map { WriteItem(it, emptyList()) })) return
+                if (!writeItems(RecordType.MENSTRUATION_PERIOD, built.periods.map { WriteItem(it, emptyList()) })) return
+                val (goneFlows, goneOthers) = entry.writtenIds.filter { it !in fresh }.distinct().partition(PeriodRecords::isFlowId)
+                val undeleted = buildList {
+                    if (goneFlows.isNotEmpty() && !delete(RecordType.MENSTRUATION_FLOW, goneFlows)) addAll(goneFlows)
+                    if (goneOthers.isNotEmpty() && !delete(RecordType.MENSTRUATION_PERIOD, goneOthers)) addAll(goneOthers)
+                }
+                periods.recordWrittenIds(entry.start, fresh + undeleted, finalized = undeleted.isEmpty())
+            }
+        }
+
+        /**
          * After [id] was accepted for [night]: every id the night named before stays named next to
          * [id] until its delete succeeds; then the night names [id] and what could not be deleted.
          * An unreadable stored list is read as none (it can only name an older id of this night).
@@ -568,21 +631,24 @@ class HealthWriter(
 
         /**
          * Drops (and counts) the items breaking a platform rule, then sends the rest in calls of
-         * [Chunker]'s size, marking each call's samples once Health Connect accepted it.
+         * [Chunker]'s size, marking each call's samples once Health Connect accepted it. False when
+         * the type's writing stopped before the end (not granted, failed, or the flush catching up);
+         * true when every item was accepted or dropped for good.
          */
-        private suspend fun writeItems(type: RecordType, items: List<WriteItem>) {
-            if (catchingUp) return
+        private suspend fun writeItems(type: RecordType, items: List<WriteItem>): Boolean {
+            if (catchingUp) return false
             val kept = items.filter { HealthRanges.violation(it.record, now) == null }
             reject(type, items.size - kept.size)
             for (chunk in Chunker.chunks(kept) { RecordSize.estimateBytes(it.record) }) {
                 when (send(type, chunk.map { it.record })) {
                     Sent.ACCEPTED -> accepted(type, chunk)
-                    Sent.STOP -> return
+                    Sent.STOP -> return false
                     // The platform refused a record our table let through: try each record once on
                     // its own, so only the bad one is dropped (each try is a call of the budget).
-                    Sent.REFUSED_RECORD -> if (chunk.size == 1) reject(type, 1) else if (!isolate(type, chunk)) return
+                    Sent.REFUSED_RECORD -> if (chunk.size == 1) reject(type, 1) else if (!isolate(type, chunk)) return false
                 }
             }
+            return true
         }
 
         /** Sends each item of a refused call on its own; false when this type is done for the flush. */

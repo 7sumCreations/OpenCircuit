@@ -117,6 +117,33 @@ class LocalStore internal constructor(
     /** Every logged period, oldest start first. */
     suspend fun allPeriodEntries(): List<PeriodEntry> = userEntryDao.allPeriods().map { it.toPeriodEntry() }
 
+    /**
+     * The logged periods the Health Connect writer has to look at, oldest start first (upstream
+     * `periodEntriesNeedingHealthMirror`, CycleStore.swift:173-194): one never written or edited
+     * since; one still open (a further day may have elapsed since its last write); or one whose
+     * end day, in [zone], is after [today]'s (written up to today so far, its later days still to
+     * come). Being here is not a decision to write: the writer decides, against the same clock.
+     */
+    suspend fun periodEntriesNeedingHealthMirror(today: Instant, zone: ZoneId): List<PeriodEntry> {
+        val todayDay = startOfDay(today, zone)
+        return userEntryDao.allPeriods().filter { row ->
+            !row.healthWritten || row.end == null || startOfDay(row.end, zone) > todayDay
+        }.map { it.toPeriodEntry() }
+    }
+
+    /**
+     * Records what the Health Connect writer wrote for the period starting at [start] (upstream
+     * `recordPeriodEntryHK`, CycleStore.swift:204-211): the record [ids] it names, and whether the
+     * entry is now written up to date ([finalized]). Nothing happens when no period starts there.
+     */
+    suspend fun recordPeriodEntryHealthIds(start: Instant, ids: List<String>, finalized: Boolean) {
+        val written = ids.toList()
+        db.withWriteTransaction {
+            val row = userEntryDao.periodAt(start.toStoredMillis()) ?: return@withWriteTransaction
+            userEntryDao.updatePeriod(row.copy(hkSampleUUIDs = written, healthWritten = finalized))
+        }
+    }
+
     // Headache log (ios/OpenCircuit/Store/HeadacheStore.swift :195-315).
 
     /**
