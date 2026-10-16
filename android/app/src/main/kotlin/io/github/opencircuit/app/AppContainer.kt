@@ -15,6 +15,7 @@ import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.details.DetailsSources
+import io.github.opencircuit.app.health.HealthAccess
 import io.github.opencircuit.app.health.HealthFlush
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreWriteGenerations
@@ -125,6 +126,9 @@ class AppContainer(context: Context) {
      * now" — on the process scope, so neither a sync's pause nor a session's end cuts one.
      */
     val healthFlush: HealthFlush = HealthFlush(healthWriter::flush, appScope, log)
+
+    /** Whether Health Connect is there and which WRITE permissions are granted; read now, on each resume and after the permission screen. */
+    val healthAccess: HealthAccess = HealthAccess(healthConnect, appScope, log).also { it.refresh() }
 
     /** Android's companion-device manager: the pairing sheet before the first bond, and forgetting. */
     val companionPairing: CompanionPairing = CompanionPairing(AndroidCompanionPort(context), log)
