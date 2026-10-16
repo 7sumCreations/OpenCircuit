@@ -78,6 +78,10 @@ internal interface SampleDao {
     @Query("DELETE FROM stored_cursor WHERE kind_raw = :kindRaw")
     suspend fun deleteCursor(kindRaw: String)
 
+    /** How many samples of one kind are stored exactly at [start] (the live insert's dedupe). */
+    @Query("SELECT COUNT(*) FROM stored_sample WHERE kind_raw = :kindRaw AND start = :start")
+    suspend fun countAt(kindRaw: String, start: Instant): Int
+
     /** The newest sample of one kind with `from <= start < to` and `start < before`. */
     @Query(
         "SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start >= :from AND start < :to " +

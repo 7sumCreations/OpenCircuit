@@ -40,6 +40,14 @@ internal interface DailyDao {
     @Query("SELECT * FROM stored_step_sample WHERE start >= :from AND start < :to ORDER BY start, id")
     suspend fun stepSamples(from: Instant, to: Instant): List<StoredStepSampleEntity>
 
+    /** Step deltas not yet written to Health Connect, oldest first (upstream `pendingStepSamples`). */
+    @Query("SELECT * FROM stored_step_sample WHERE health_written = 0 ORDER BY start, id")
+    suspend fun pendingStepSamples(): List<StoredStepSampleEntity>
+
+    /** Marks the step deltas with these row ids written to Health Connect. */
+    @Query("UPDATE stored_step_sample SET health_written = 1 WHERE id IN (:ids)")
+    suspend fun markStepSamplesWritten(ids: List<Long>)
+
     /** Deletes every step delta with `start < cutoff` (the retention prune). */
     @Query("DELETE FROM stored_step_sample WHERE start < :cutoff")
     suspend fun deleteStepSamplesBefore(cutoff: Instant): Int

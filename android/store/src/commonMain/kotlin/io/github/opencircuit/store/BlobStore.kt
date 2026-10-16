@@ -28,6 +28,7 @@ import io.github.opencircuit.store.codec.StrandedCountersCodec
 import io.github.opencircuit.store.codec.WorkoutSessionSnapshotCodec
 import java.time.Instant
 import java.time.LocalDate
+import java.time.format.DateTimeParseException
 import java.util.Collections
 
 // Typed access to the values upstream keeps in `UserDefaults`, here in the `store_kv` table of the
@@ -257,6 +258,80 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
     /** Records that the permission screen was shown and answered. */
     suspend fun saveHealthPermissionsRequested(now: Instant) = put(HEALTH_PERMISSIONS_REQUESTED, "1", now)
 
+    // The live step fold's baseline (upstream keeps it in UserDefaults, RingSession.swift :2239-2253):
+    // `raw;dayStartMillis;sampleAtMillis`. Unreadable is none: the next reading is then credited whole.
+
+    /** The last raw step counter folded, its local day and when it arrived; null when none or unreadable. */
+    suspend fun loadStepBaseline(): StepBaseline? {
+        val parts = kv.get(STEP_BASELINE)?.value?.split(';') ?: return null
+        if (parts.size != 3 || parts.any { !ASCII_DIGITS.matches(it) }) return null
+        val raw = parts[0].toIntOrNull()?.takeIf { it in 0..StepBaseline.MAX_RAW } ?: return null
+        val day = parts[1].toLongOrNull() ?: return null
+        val at = parts[2].toLongOrNull() ?: return null
+        return StepBaseline(raw, Instant.ofEpochMilli(day), Instant.ofEpochMilli(at))
+    }
+
+    /** Saves the step fold's baseline, replacing the last one. */
+    suspend fun saveStepBaseline(baseline: StepBaseline, now: Instant) {
+        require(baseline.raw in 0..StepBaseline.MAX_RAW) { "a raw step counter is 0..${StepBaseline.MAX_RAW}, was ${baseline.raw}" }
+        require(!baseline.day.isBefore(Instant.EPOCH) && !baseline.sampleAt.isBefore(Instant.EPOCH)) { "a step baseline is dated at or after 1970" }
+        put(STEP_BASELINE, "${baseline.raw};${baseline.day.toEpochMilli()};${baseline.sampleAt.toEpochMilli()}", now)
+    }
+
+    // Health Connect day marks (upstream `hk.restingHR.lastDay`): per record type name, the last local
+    // day written. Unreadable is none: the writer then rewrites its lookback, under the same ids.
+
+    /** The last local day written for [type] (a record type's name), or null when none or unreadable. */
+    suspend fun loadHealthDayMark(type: String): LocalDate? {
+        val raw = kv.get(dayMarkKey(type))?.value ?: return null
+        if (!ISO_DATE.matches(raw)) return null
+        return try {
+            LocalDate.parse(raw)
+        } catch (e: DateTimeParseException) {
+            null
+        }
+    }
+
+    /** Saves [day] as the last local day written for [type]. */
+    suspend fun saveHealthDayMark(type: String, day: LocalDate, now: Instant) = put(dayMarkKey(type), day.toString(), now)
+
+    // Health Connect active energy: per local day, the kilocalories written per bucket start
+    // (`epochMillis=kcal;…`), so a bucket that falls is written lower, down to zero.
+
+    /** The kilocalories written per bucket start of [day]; empty when none or unreadable. */
+    suspend fun loadHealthEnergyWritten(day: LocalDate): Map<Instant, Double> {
+        val raw = kv.get(healthEnergyKey(day))?.value ?: return emptyMap()
+        val out = HashMap<Instant, Double>()
+        for (pair in raw.split(';')) {
+            val parts = pair.split('=')
+            if (parts.size != 2 || !ASCII_DIGITS.matches(parts[0]) || !DECIMAL.matches(parts[1])) return emptyMap()
+            val millis = parts[0].toLongOrNull() ?: return emptyMap()
+            val kcal = parts[1].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return emptyMap()
+            out[Instant.ofEpochMilli(millis)] = kcal
+        }
+        return out
+    }
+
+    /** Saves the kilocalories written per bucket start of [day], replacing what was stored; an empty map removes it. */
+    suspend fun saveHealthEnergyWritten(day: LocalDate, written: Map<Instant, Double>, now: Instant) {
+        written.forEach { (start, kcal) ->
+            require(!start.isBefore(Instant.EPOCH)) { "a bucket start is at or after 1970, was $start" }
+            require(kcal.isFinite() && kcal >= 0) { "written kilocalories are a finite number at least 0, was $kcal" }
+        }
+        if (written.isEmpty()) {
+            kv.delete(healthEnergyKey(day))
+            return
+        }
+        put(healthEnergyKey(day), written.toSortedMap().entries.joinToString(";") { (start, kcal) -> "${start.toEpochMilli()}=$kcal" }, now)
+    }
+
+    /** Forgets the energy written for every day before [day], in one transaction. */
+    suspend fun forgetHealthEnergyWrittenBefore(day: LocalDate) {
+        db.withWriteTransaction {
+            kv.range("$HEALTH_ENERGY/", healthEnergyKey(day)).forEach { kv.delete(it.key) }
+        }
+    }
+
     // Epoch archive: records only through the bounded merge.
 
     /** The stored archive and its drain facts; [StoredEpochArchive.EMPTY] when none or unreadable. */
@@ -375,7 +450,22 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
         const val HEALTH_WRITE_GENERATION = "hc.writeGeneration"
         const val HEALTH_WRITE_FAILURES = "hc.writeFailures"
         const val HEALTH_PERMISSIONS_REQUESTED = "hc.permissionsRequested"
+        const val STEP_BASELINE = "steps.baseline"
+        const val HEALTH_DAY_MARK = "hc.lastDay"
+        const val HEALTH_ENERGY = "hc.activeEnergy"
         val ASCII_DIGITS = Regex("[0-9]+")
+        val ISO_DATE = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+        /** A plain decimal as Kotlin prints a Double (`12.5`, `0.0`, `1.0E-4`); no sign, no NaN. */
+        val DECIMAL = Regex("[0-9]+(\\.[0-9]+)?(E-?[0-9]+)?")
+
+        fun dayMarkKey(type: String): String {
+            require(FAILURE_NAME.matches(type)) { "a record type's name is an upper-case constant, was \"$type\"" }
+            return "$HEALTH_DAY_MARK/$type"
+        }
+
+        /** `hc.activeEnergy/2026-10-16`: ISO digits whatever the locale. */
+        fun healthEnergyKey(day: LocalDate): String = "$HEALTH_ENERGY/$day"
         val FAILURE_NAME = Regex("[A-Z][A-Z0-9_]*")
 
         fun perRing(name: String, ringId: String): String {

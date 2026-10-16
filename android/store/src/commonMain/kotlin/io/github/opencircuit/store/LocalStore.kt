@@ -341,6 +341,7 @@ class LocalStore internal constructor(
                 ingested += delta
             }
             sampleDao.insertSamples(toInsert)
+            pullHealthMarksBehind(ingested)
 
             // Only the kinds whose cursor moved.
             val advanced = staged.advanced
@@ -351,6 +352,46 @@ class LocalStore internal constructor(
             )
             ingested
         }
+
+    /**
+     * Keeps readings measured live — a settled heart rate, the last blood oxygen, a nightly skin
+     * temperature — OUTSIDE the sync cursor, in one transaction, and returns what was stored. The
+     * cursor is forward-only: a reading taken now would make the next drain drop every older sample
+     * the ring still holds (upstream's fix after the pin; PORTING.md D-293). Instead a reading is
+     * skipped when a sample of its kind is already stored at its start (to the stored millisecond),
+     * so a re-sent reading is kept once; the first reading at a start wins. Implausible readings are
+     * dropped by the same check as [ingest]. Only [LIVE_KINDS] are taken; anything else throws
+     * [IllegalArgumentException], writing nothing.
+     */
+    suspend fun insertLiveSamples(samples: List<QuantitySample>, now: Instant): List<QuantitySample> {
+        samples.firstOrNull { it.kind !in LIVE_KINDS }?.let { throw IllegalArgumentException("${it.kind} is not a live reading kind") }
+        return db.withWriteTransaction {
+            val stored = ArrayList<QuantitySample>(samples.size)
+            for (s in samples.map(::toStoredPrecision)) {
+                if (plausibility(s, now) != Plausibility.PLAUSIBLE) continue
+                if (sampleDao.countAt(s.kind.rawValue, s.start) > 0) continue
+                sampleDao.insertSamples(listOf(StoredSampleEntity.of(s)))
+                stored += s
+            }
+            stored
+        }
+    }
+
+    /**
+     * After an ingest stored [stored]: a kind's Health Connect mark at or after the oldest of them is
+     * pulled back to just before it, so the writer takes them. Only a live reading (stored outside
+     * the cursor, [insertLiveSamples]) can put the mark ahead of a drain; the samples written again
+     * carry the same ids, so Health Connect replaces them (PORTING.md D-294).
+     */
+    private suspend fun pullHealthMarksBehind(stored: List<QuantitySample>) {
+        val marks = healthMarks()
+        val pulled = stored.filter { it.kind in HEALTH_MIRRORED_KINDS }.groupBy { it.kind }.mapNotNull { (kind, rows) ->
+            val oldest = rows.minOf { it.start }
+            val mark = marks.last(kind) ?: return@mapNotNull null
+            if (oldest > mark) null else StoredCursorEntity(kindRaw = HEALTH_CURSOR_PREFIX + kind.rawValue, last = oldest.minusMillis(1))
+        }
+        if (pulled.isNotEmpty()) sampleDao.upsertCursors(pulled)
+    }
 
     /** Stored samples of [kind] with `from <= start < to`, oldest first. */
     suspend fun samples(kind: MetricKind, from: Instant, to: Instant): List<QuantitySample> =
@@ -399,6 +440,20 @@ class LocalStore internal constructor(
 
     /** Step deltas with `from <= start < to`, oldest first. */
     suspend fun stepSamples(from: Instant, to: Instant): List<StepSample> = dailyDao.stepSamples(from, to).map { it.toStepSample() }
+
+    /**
+     * The step deltas not yet written to Health Connect, every day, oldest first (ties in row order),
+     * each with its row id (upstream `pendingStepSamples`, LocalStore.swift:3083-3088). Moves
+     * nothing: call [markStepSamplesWritten] with the rows Health Connect accepted.
+     */
+    suspend fun pendingStepSampleRows(): List<StoredStepRow> =
+        dailyDao.pendingStepSamples().map { StoredStepRow(it.id, it.toStepSample()) }
+
+    /** Marks the step deltas with these row ids written to Health Connect, in one statement; unknown ids are ignored. */
+    suspend fun markStepSamplesWritten(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        db.withWriteTransaction { ids.chunked(MAX_IDS_PER_STATEMENT).forEach { dailyDao.markStepSamplesWritten(it) } }
+    }
 
     /** The newest day's step total, or null. */
     suspend fun latestDaily(): DailySteps? = dailyDao.recentDailies(limit = 1).firstOrNull()?.toDailySteps()
@@ -650,6 +705,12 @@ class LocalStore internal constructor(
          */
         val HEALTH_MIRRORED_KINDS: List<MetricKind> =
             listOf(MetricKind.HEART_RATE, MetricKind.HRV_SDNN, MetricKind.SPO2, MetricKind.RESPIRATORY_RATE, MetricKind.TEMPERATURE)
+
+        /** The kinds [insertLiveSamples] takes: what the app measures live and keeps (upstream persists these three). */
+        val LIVE_KINDS: Set<MetricKind> = setOf(MetricKind.HEART_RATE, MetricKind.SPO2, MetricKind.TEMPERATURE)
+
+        /** Row ids bound in one statement: well under SQLite's 999 host parameters. */
+        private const val MAX_IDS_PER_STATEMENT = 500
 
         /** Cursor rows of the health-store writer share the table; they are not the ingest cursor. */
         private const val HEALTH_CURSOR_PREFIX = "hk:"
