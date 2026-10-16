@@ -20,6 +20,12 @@ interface HealthSampleStore {
     /** Every stored sample of [kind] with `from <= start < until`, oldest first. */
     suspend fun samples(kind: MetricKind, from: Instant, until: Instant): List<QuantitySample>
 
+    /** As [pendingSamples], each with its row id, oldest first (ties in row order). */
+    suspend fun pendingRows(kind: MetricKind): List<SampleRow>
+
+    /** Every stored sample of [kind] with `from <= start < until`, any value, with its row id, oldest first (ties in row order). */
+    suspend fun rows(kind: MetricKind, from: Instant, until: Instant): List<SampleRow>
+
     /** Moves each kind's mark to the newest of [samples] (forward only). Only what Health Connect accepted. */
     suspend fun markWritten(samples: List<QuantitySample>)
 }
@@ -63,8 +69,9 @@ data class FlushResult(
  * type's writing for this flush and is reported in [FlushResult.failures]. Cancellation stops the
  * flush where it is; what was accepted and marked stays marked.
  *
- * Heart rate is written today (one record per UTC hour, [HrHours]); the other types follow the
- * same steps.
+ * Written today, in this order: heart rate (one record per UTC hour, [HrHours]), then heart-rate
+ * variability, blood oxygen and breathing rate (one record per stored reading, [ScalarRecords]).
+ * The other types follow the same steps.
  */
 class HealthWriter(
     private val port: HealthConnectPort,
@@ -92,6 +99,7 @@ class HealthWriter(
             if (port.sdkStatus() != HealthSdkStatus.AVAILABLE) return FlushResult(finishedAt = clock(), available = false)
             val granted = port.grantedWrites()
             writeHeartRate(granted)
+            for ((kind, type) in ScalarRecords.TYPES) writeScalar(kind, type, granted)
             return FlushResult(
                 finishedAt = clock(),
                 written = written.toMap(),
@@ -117,8 +125,29 @@ class HealthWriter(
                 .groupBy { HrHours.hourStart(it.start) }
             val v = version()
             val hours = hourStarts.mapNotNull { h -> HrHours.hour(h, stored[h].orEmpty(), now, zone(), device(), v) }
-            val kept = hours.filter { HealthRanges.violation(it.record, now) == null }
-            if (kept.size < hours.size) rejected[type] = hours.size - kept.size
+            writeItems(type, hours.map { WriteItem(it.record, it.samples) })
+        }
+
+        /** Heart-rate variability, blood oxygen or breathing rate: one record per pending stored sample. */
+        private suspend fun writeScalar(kind: MetricKind, type: RecordType, granted: Set<HealthPermission>) {
+            val pending = store.pendingRows(kind).filter { !it.sample.start.isAfter(now) }
+            if (pending.isEmpty()) return
+            if (type.permission !in granted) {
+                notGranted += type
+                return
+            }
+            // Every stored row at the pending starts, so each id's ordinal counts them all.
+            val atStarts = store.rows(kind, pending.first().sample.start, pending.last().sample.start.plusMillis(1))
+            writeItems(type, ScalarRecords.items(kind, pending, atStarts, now, zone(), device(), version()))
+        }
+
+        /**
+         * Drops (and counts) the items breaking a platform rule, then sends the rest in calls of
+         * [Chunker]'s size, marking each call's samples once Health Connect accepted it.
+         */
+        private suspend fun writeItems(type: RecordType, items: List<WriteItem>) {
+            val kept = items.filter { HealthRanges.violation(it.record, now) == null }
+            if (kept.size < items.size) rejected[type] = (rejected[type] ?: 0) + items.size - kept.size
             for (chunk in Chunker.chunks(kept) { RecordSize.estimateBytes(it.record) }) {
                 if (!send(type, chunk.map { it.record })) return
                 store.markWritten(chunk.flatMap { it.samples })

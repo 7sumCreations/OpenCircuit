@@ -8,13 +8,18 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
+import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
+import androidx.health.connect.client.records.RespiratoryRateRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.health.connect.client.units.Percentage
 import java.time.Instant
+import java.time.ZoneOffset
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.reflect.KClass
 
@@ -31,7 +36,8 @@ import kotlin.reflect.KClass
  * must be filtered to its own package (measured on Android 16: an unfiltered read is refused as a
  * read of other apps' data), and comes in pages of at most [PAGE_SIZE].
  *
- * Heart rate is the record type written today; the other types arrive with their mappers.
+ * Heart rate, heart-rate variability (RMSSD), blood oxygen and breathing rate are written today;
+ * the other types arrive with their mappers.
  */
 class JetpackHealthConnect(context: Context) : HealthConnectPort {
     private val appContext: Context = context.applicationContext
@@ -133,6 +139,9 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
 
         private fun recordClass(type: RecordType): KClass<out Record> = when (type) {
             RecordType.HEART_RATE -> HeartRateRecord::class
+            RecordType.HEART_RATE_VARIABILITY_RMSSD -> HeartRateVariabilityRmssdRecord::class
+            RecordType.OXYGEN_SATURATION -> OxygenSaturationRecord::class
+            RecordType.RESPIRATORY_RATE -> RespiratoryRateRecord::class
             else -> throw HealthCallFailedException("$type records are not written by this version")
         }
 
@@ -158,6 +167,9 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                     samples = record.samples.map { HeartRateRecord.Sample(time = it.time, beatsPerMinute = it.beatsPerMinute) },
                     metadata = metadata(record.meta),
                 )
+                is HeartRateVariabilityRmssd -> HeartRateVariabilityRmssdRecord(record.time, record.zoneOffset, record.millis, metadata(record.meta))
+                is OxygenSaturation -> OxygenSaturationRecord(record.time, record.zoneOffset, Percentage(record.percent), metadata(record.meta))
+                is RespiratoryRate -> RespiratoryRateRecord(record.time, record.zoneOffset, record.breathsPerMinute, metadata(record.meta))
                 else -> throw HealthCallFailedException("${record.type} records are not written by this version")
             }
         }
@@ -171,8 +183,13 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                 samples = record.samples.map { HeartRateSample(it.time, it.beatsPerMinute) },
                 meta = metaOf(record.metadata),
             )
+            is HeartRateVariabilityRmssdRecord -> HeartRateVariabilityRmssd(record.time, offsetOf(record.zoneOffset), record.heartRateVariabilityMillis, metaOf(record.metadata))
+            is OxygenSaturationRecord -> OxygenSaturation(record.time, offsetOf(record.zoneOffset), record.percentage.value, metaOf(record.metadata))
+            is RespiratoryRateRecord -> RespiratoryRate(record.time, offsetOf(record.zoneOffset), record.rate, metaOf(record.metadata))
             else -> throw HealthCallFailedException("$type records are not read back by this version")
         }
+
+        private fun offsetOf(offset: ZoneOffset?): ZoneOffset = requireNotNull(offset) { "every record the app writes carries its zone offsets" }
 
         private fun metaOf(m: Metadata): RecordMeta = RecordMeta(
             clientRecordId = requireNotNull(m.clientRecordId) { "every record the app writes carries its id" },

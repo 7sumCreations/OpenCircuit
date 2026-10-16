@@ -6,26 +6,33 @@ import java.time.Instant
 
 /**
  * The store side of the writer, in memory, with the store's own rules (`:store` `LocalStore`
- * `pendingHealthSamples` / `markHealthWritten`): pending is every sample of the kind above zero and
- * newer than the kind's mark, oldest first (ties in insertion order); a mark only moves forward.
- * The app's tests use the real store; this one keeps `:health`'s tests free of `:store`.
+ * `pendingHealthSamples` / `pendingHealthSampleRows` / `sampleRows` / `markHealthWritten`): pending
+ * is every sample of the kind above zero and newer than the kind's mark, oldest first (ties in row
+ * order); a mark only moves forward; each added sample gets the next row id, as the store's
+ * autoincrement does. The app's tests use the real store; this one keeps `:health`'s tests free of
+ * `:store`.
  */
 class InMemoryHealthSamples : HealthSampleStore {
     private val lock = Any()
-    private val stored = mutableListOf<QuantitySample>()
+    private val stored = mutableListOf<SampleRow>()
     private val marks = mutableMapOf<MetricKind, Instant>()
+    private var nextId = 1L
 
-    fun add(vararg samples: QuantitySample) = synchronized(lock) { stored += samples }
+    fun add(vararg samples: QuantitySample) = synchronized(lock) { samples.forEach { stored += SampleRow(nextId++, it) } }
 
     fun mark(kind: MetricKind): Instant? = synchronized(lock) { marks[kind] }
 
-    override suspend fun pendingSamples(kind: MetricKind): List<QuantitySample> = synchronized(lock) {
+    override suspend fun pendingSamples(kind: MetricKind): List<QuantitySample> = pendingRows(kind).map { it.sample }
+
+    override suspend fun samples(kind: MetricKind, from: Instant, until: Instant): List<QuantitySample> = rows(kind, from, until).map { it.sample }
+
+    override suspend fun pendingRows(kind: MetricKind): List<SampleRow> = synchronized(lock) {
         val mark = marks[kind]
-        stored.filter { it.kind == kind && it.value > 0 && (mark == null || it.start.isAfter(mark)) }.sortedBy { it.start }
+        stored.filter { it.sample.kind == kind && it.sample.value > 0 && (mark == null || it.sample.start.isAfter(mark)) }.sortedBy { it.sample.start }
     }
 
-    override suspend fun samples(kind: MetricKind, from: Instant, until: Instant): List<QuantitySample> = synchronized(lock) {
-        stored.filter { it.kind == kind && !it.start.isBefore(from) && it.start.isBefore(until) }.sortedBy { it.start }
+    override suspend fun rows(kind: MetricKind, from: Instant, until: Instant): List<SampleRow> = synchronized(lock) {
+        stored.filter { it.sample.kind == kind && !it.sample.start.isBefore(from) && it.sample.start.isBefore(until) }.sortedBy { it.sample.start }
     }
 
     override suspend fun markWritten(samples: List<QuantitySample>): Unit = synchronized(lock) {

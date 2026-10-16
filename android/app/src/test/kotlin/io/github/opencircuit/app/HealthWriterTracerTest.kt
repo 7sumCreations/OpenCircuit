@@ -3,7 +3,9 @@ package io.github.opencircuit.app
 import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.health.HeartRateSeries
 import io.github.opencircuit.health.HrHours
+import io.github.opencircuit.health.InstantHealthRecord
 import io.github.opencircuit.health.RecordType
+import io.github.opencircuit.health.ScalarRecords
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.store.BlobStore
 import io.github.opencircuit.store.LocalStore
@@ -49,7 +51,19 @@ class HealthWriterTracerTest {
             assertEquals(emptyList(), LocalStore(h.db).pendingHealthSamples(MetricKind.HEART_RATE), "every written sample is marked")
             assertEquals(Decoded.Readable(1L), BlobStore(h.db).loadHealthWriteGeneration())
             val callsAfterFirst = h.hc.calls.size
-            assertEquals(written.size, h.hc.calls.sumOf { it.count })
+            assertEquals(written.size, h.hc.calls.filter { it.type == RecordType.HEART_RATE }.sumOf { it.count })
+
+            // Heart-rate variability, blood oxygen and breathing rate: one record per stored reading
+            // above zero, from the real store's rows, each kind marked. The captured page carries
+            // the kinds it carries (no HRV in it); every stored kind, and only those, reaches Health Connect.
+            val storedKinds = ScalarRecords.TYPES.keys.filter { kind -> LocalStore(h.db).samples(kind, june, july).any { it.value > 0 } }
+            assertTrue(storedKinds.isNotEmpty(), "the sync stored single readings")
+            assertEquals(storedKinds.map { ScalarRecords.TYPES.getValue(it) }.toSet(), ScalarRecords.TYPES.values.filter { h.hc.records(it).isNotEmpty() }.toSet())
+            for ((kind, type) in ScalarRecords.TYPES) {
+                val readings = LocalStore(h.db).samples(kind, june, july).filter { it.value > 0 }
+                assertEquals(readings.map { it.start }, h.hc.records(type).map { (it as InstantHealthRecord).time }, "$kind")
+                assertEquals(emptyList(), LocalStore(h.db).pendingHealthSamples(kind), "every written $kind reading is marked")
+            }
 
             // The link was closed after the sync; the next one finds nothing new on the ring.
             w.viewModel.onAction(RingAction.SyncNow)

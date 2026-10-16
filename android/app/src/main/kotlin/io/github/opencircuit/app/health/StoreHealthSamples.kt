@@ -1,6 +1,7 @@
 package io.github.opencircuit.app.health
 
 import io.github.opencircuit.health.HealthSampleStore
+import io.github.opencircuit.health.SampleRow
 import io.github.opencircuit.health.WriteGenerationStore
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
@@ -17,6 +18,12 @@ class StoreHealthSamples(private val database: suspend () -> StoreDatabase) : He
     override suspend fun pendingSamples(kind: MetricKind): List<QuantitySample> = store().pendingHealthSamples(kind)
 
     override suspend fun samples(kind: MetricKind, from: Instant, until: Instant): List<QuantitySample> = store().samples(kind, from, until)
+
+    override suspend fun pendingRows(kind: MetricKind): List<SampleRow> =
+        store().pendingHealthSampleRows(kind).map { SampleRow(it.id, it.sample) }
+
+    override suspend fun rows(kind: MetricKind, from: Instant, until: Instant): List<SampleRow> =
+        store().sampleRows(kind, from, until).map { SampleRow(it.id, it.sample) }
 
     override suspend fun markWritten(samples: List<QuantitySample>) = store().markHealthWritten(samples)
 }
