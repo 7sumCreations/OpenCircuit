@@ -61,6 +61,8 @@ fun HealthConnectCard(ui: HealthCardUi, onAction: (HealthCardAction) -> Unit, mo
                     Text(label)
                 }
             }
+            // "Catching up…" and the live-only line, under the buttons as in the mockup.
+            ui.notes.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
     }
 }

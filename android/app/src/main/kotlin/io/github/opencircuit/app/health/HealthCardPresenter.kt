@@ -126,6 +126,8 @@ data class HealthCardUi(
     val warning: String? = null,
     /** Label and value pairs ("Last written" · "just now"). */
     val rows: List<Pair<String, String>> = emptyList(),
+    /** Plain lines under the rows ("Catching up…", the live-only line); never amber. */
+    val notes: List<String> = emptyList(),
     /** The button's label, or null for no button. */
     val button: String? = null,
     /** What the button does; null when it does nothing. */
@@ -150,10 +152,12 @@ data class HealthCardInput(val access: HealthAccessState, val flush: HealthFlush
 
 /**
  * The card's states (copy from the Ring screen mockup): not available; not connected (nothing of
- * what the app asks for granted, or not read yet) with Connect Health Connect; connected with the
+ * what the app asks for granted, or not read yet) with Connect Health Connect, or — once the
+ * permission screen was answered — Open Health Connect settings; connected with the
  * last write and Write to Health Connect now — amber when some types are not allowed ("Not
  * allowed: …", with Change in Health Connect) or a type's writes failed ("Could not write …",
- * with Try again). Skin temperature on a phone without it is a plain line.
+ * with Try again). Skin temperature on a phone without it, "catching up" after Health Connect's
+ * rate limit stopped a write, and the live-only line are plain lines.
  */
 object HealthCardPresenter {
     fun present(input: HealthCardInput): HealthCardUi {
@@ -169,6 +173,18 @@ object HealthCardPresenter {
         }
         val share = HealthShare.resolve(access.granted, access.requested)
         if (share == ShareState.Unauthorized) {
+            // Once the permission screen was answered with nothing allowed, asking again may be
+            // refused without showing anything (the user chose "don't ask again"): Health
+            // Connect's own settings for this app are the way back.
+            if (access.asked) {
+                return HealthCardUi(
+                    headline = "Not connected",
+                    body = "Nothing is allowed yet. Choose what OpenCircuit may write in Health Connect's settings.",
+                    button = "Open Health Connect settings",
+                    action = HealthCardAction.MANAGE,
+                    buttonEnabled = true,
+                )
+            }
             return HealthCardUi(
                 headline = "Not connected",
                 body = "Writes your ring data to Health Connect on this phone. Nothing leaves the phone.",
@@ -194,10 +210,13 @@ object HealthCardPresenter {
             if (share is ShareState.Partial) add("Not allowed: ${HealthShare.names(share.denied).joinToString()}. The rest is being written.")
         }
         val running = input.flush.running
+        // Health Connect's rate limit stopped the last write: not a failure, nothing is lost.
+        val notes = listOfNotNull(CATCHING_UP.takeIf { last?.catchingUp == true }, LIVE_ONLY)
         return HealthCardUi(
             headline = "Connected",
             warning = warnings.takeIf { it.isNotEmpty() }?.joinToString(" "),
             rows = rows,
+            notes = notes,
             button = when {
                 running -> "Writing…"
                 failed.isNotEmpty() -> "Try again"
@@ -211,6 +230,10 @@ object HealthCardPresenter {
     }
 
     private const val CONNECT = "Connect Health Connect"
+    private const val CATCHING_UP = "Catching up: Health Connect paused the writes. The rest is written on the next sync."
+
+    /** Steps and skin temperature come from the ring's live readings, stored only while it is connected. */
+    private const val LIVE_ONLY = "Steps and skin temperature are recorded only while the ring is connected."
 
     private fun records(n: Int): String = "${String.format(Locale.ROOT, "%,d", n)} ${if (n == 1) "record" else "records"}"
 }
