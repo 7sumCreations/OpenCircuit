@@ -2,6 +2,11 @@ package io.github.opencircuit.health
 
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
+import io.github.opencircuit.ringkit.SleepHealthGate
+import io.github.opencircuit.ringkit.SleepSegment
+import io.github.opencircuit.ringkit.SleepStage
+import io.github.opencircuit.ringkit.containsAssertedTime
+import io.github.opencircuit.ringkit.healthPublishable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.Instant
@@ -83,8 +88,17 @@ data class FlushResult(
  * stays marked.
  *
  * Written today, in this order: heart rate (one record per UTC hour, [HrHours]), then heart-rate
- * variability, blood oxygen and breathing rate (one record per stored reading, [ScalarRecords]).
- * The other types follow the same steps.
+ * variability, blood oxygen and breathing rate (one record per stored reading, [ScalarRecords]),
+ * skin temperature (one record per night, [SkinTempNights]), then sleep ([sleep]): the settled
+ * nights, the queued edits of edited nights, the naps (one session each, [SleepMapping]). The other
+ * types follow the same steps.
+ *
+ * Sleep replaces by id: a night is one record `oc:sleep:<night key>`, a nap `oc:nap:<start>`, so a
+ * changed night is written whole again under its id and Health Connect replaces it. An id is deleted
+ * only when the night no longer has it (it moved to another key) or the nap is gone (an edit
+ * absorbed it), always after the replacing write was accepted and by its clientRecordId alone; the
+ * id is kept named in the store until its delete succeeds, so a failed delete never leaves Health
+ * Connect emptier and is retried.
  */
 class HealthWriter(
     private val port: HealthConnectPort,
@@ -94,6 +108,7 @@ class HealthWriter(
     private val clock: () -> Instant,
     private val zone: () -> ZoneId,
     private val device: () -> RingDevice,
+    private val sleep: HealthSleepStore = HealthSleepStore.NONE,
 ) {
     private val lock = Mutex()
 
@@ -117,6 +132,7 @@ class HealthWriter(
             writeHeartRate(granted)
             for ((kind, type) in ScalarRecords.TYPES) writeScalar(kind, type, granted)
             writeSkinTemperature(granted)
+            writeSleep(granted)
             val finishedAt = clock()
             return FlushResult(
                 finishedAt = finishedAt,
@@ -198,6 +214,197 @@ class HealthWriter(
             writeItems(type, items)
         }
 
+        /** The settled nights, then the queued edits, then the naps: three independent steps. */
+        private suspend fun writeSleep(granted: Set<HealthPermission>) {
+            val nights = sleep.nights()
+            writeSettledNights(nights, granted)
+            writeQueuedEdits(nights, granted)
+            writeNaps(granted)
+        }
+
+        /**
+         * Upstream `mirrorSettledNight` (HKW:2260-2343) over ids. Every stored night that is not
+         * edited (an edit owns its night), carries none of the wearer's own time (that is an edit's
+         * too), and settled ([SleepHealthGate]: its last segment ended the margin ago) is written
+         * whole as `oc:sleep:<key>` — unless Health Connect already holds it as staged now: the
+         * signature of what was last written is the night's, and the night's only id is its own.
+         * Upstream mirrors only the newest night a sync published; every stored night is a night a
+         * sync staged (PORTING D-269), so each one is written here.
+         */
+        private suspend fun writeSettledNights(nights: List<StoredSleepNight>, granted: Set<HealthPermission>) {
+            val type = RecordType.SLEEP_SESSION
+            class Settled(val night: StoredSleepNight, val published: List<SleepSegment>, val id: String, val signature: String)
+            val toWrite = nights.mapNotNull { n ->
+                if (n.edited) return@mapNotNull null
+                val published = n.timeline.healthPublishable
+                if (published.isEmpty() || published.containsAssertedTime) return@mapNotNull null
+                if (!SleepHealthGate.isReadyToWrite(published.maxOf { it.end }, now, finalized = false)) return@mapNotNull null
+                val id = RecordIds.sleepNight(n.key)
+                val signature = SleepSignature.of(n.timeline)
+                if (sleep.mirror(n.night)?.signature == signature && sleep.recordIds(n.night) == listOf(id)) return@mapNotNull null
+                Settled(n, published, id, signature)
+            }
+            if (toWrite.isEmpty()) return
+            if (type.permission !in granted) {
+                notGranted += type
+                return
+            }
+            val v = version()
+            val items = toWrite.mapNotNull { s ->
+                val meta = RecordMeta(s.id, v, RecordingMethod.AUTOMATICALLY_RECORDED, device())
+                val session = SleepMapping.session(s.published, SleepMapping.pathOf(s.published), meta, zone(), null) ?: return@mapNotNull null
+                WriteItem(session, emptyList()) {
+                    sleep.setMirror(s.night.night, NightMirror(s.signature, session.start, session.end))
+                    replaceIds(type, s.night.night, s.id)
+                    sleep.markNightWritten(s.published)
+                }
+            }
+            writeItems(type, items)
+        }
+
+        /**
+         * Upstream `reconcileEditedNightSleepLocked` (HKW:1981-2091) for each queued edit, oldest
+         * night first: the edited picture is written as the night's record (the wearer's save is the
+         * night's end, so no settle margin); then the ids the night no longer has are deleted and the
+         * naps the edited window absorbed are removed; the edit marks move from what was written; the
+         * item is cleared only if it is still the one written. An edit of a night no longer stored,
+         * or with nothing in it, is dropped. Without the sleep grant the queue waits (upstream drops
+         * it when sleep is denied). A queue this build cannot read is a failure of the type, and the
+         * rest of the flush goes on.
+         */
+        private suspend fun writeQueuedEdits(nights: List<StoredSleepNight>, granted: Set<HealthPermission>) {
+            val type = RecordType.SLEEP_SESSION
+            val edits = try {
+                sleep.queuedEdits()
+            } catch (e: UnreadableEditQueueException) {
+                failures[type] = e::class.simpleName ?: "unreadable"
+                return
+            }
+            for (edit in edits) {
+                if (catchingUp) return
+                val night = nights.firstOrNull { it.night == edit.night }
+                val published = edit.segments.healthPublishable
+                if (night == null || published.isEmpty()) {
+                    sleep.clearQueuedEdit(edit)
+                    continue
+                }
+                if (type.permission !in granted) {
+                    notGranted += type
+                    return
+                }
+                val id = RecordIds.sleepNight(night.key)
+                val meta = RecordMeta(id, version(), RecordingMethod.AUTOMATICALLY_RECORDED, device())
+                val session = SleepMapping.session(published, SleepMapping.pathOf(published), meta, zone(), null)
+                if (session == null) {
+                    sleep.clearQueuedEdit(edit)
+                    continue
+                }
+                if (HealthRanges.violation(session, now) != null) {
+                    // Kept queued: a night ending ahead of the clock is written once it is past.
+                    reject(type, 1)
+                    continue
+                }
+                when (send(type, listOf(session))) {
+                    Sent.ACCEPTED -> {
+                        written[type] = (written[type] ?: 0) + 1
+                        replaceIds(type, night.night, id)
+                        sweepAbsorbedNaps(type, edit)
+                        sleep.markEditWritten(night.night, published, night.recordedEnd)
+                        sleep.clearQueuedEdit(edit)
+                    }
+                    Sent.REFUSED_RECORD -> reject(type, 1)
+                    Sent.STOP -> return
+                }
+            }
+        }
+
+        /**
+         * Upstream's sweep of the automatic naps an edit absorbed (HKW:2056-2072): a nap Health
+         * Connect holds loses its record first, by its id, and only then its row; a nap never
+         * written loses its row; a nap whose record cannot be deleted keeps its row, which still
+         * names the record, for the next edit of the night.
+         */
+        private suspend fun sweepAbsorbedNaps(type: RecordType, edit: QueuedNightEdit) {
+            val gone = sleep.autoNaps(edit.inBedStart, edit.sleepWake).filter { nap ->
+                !nap.healthWritten || delete(type, listOf(RecordIds.nap(nap.start)))
+            }
+            if (gone.isNotEmpty()) sleep.deleteNaps(gone.map { it.start })
+        }
+
+        /**
+         * Upstream `flushNaps` (HKW:633-667) over ids: each nap not yet written is one session
+         * `oc:nap:<stored start>` titled "Nap" — its staging, or asleep over the window it shows —
+         * and is marked once accepted. An edit keeps the stored start, so an edited nap replaces its
+         * record under the same id and nothing is deleted. A nap the wearer added is a manual entry.
+         */
+        private suspend fun writeNaps(granted: Set<HealthPermission>) {
+            val type = RecordType.SLEEP_SESSION
+            val naps = sleep.pendingNaps()
+            if (naps.isEmpty()) return
+            if (type.permission !in granted) {
+                notGranted += type
+                return
+            }
+            val v = version()
+            val items = naps.mapNotNull { nap ->
+                val segments = (
+                    nap.segments ?: listOf(
+                        SleepSegment(nap.shownStart, nap.shownEnd, SleepStage.IN_BED),
+                        SleepSegment(nap.shownStart, nap.shownEnd, SleepStage.ASLEEP_CORE),
+                    )
+                    ).healthPublishable
+                val meta = if (nap.manuallyAdded) {
+                    RecordMeta(RecordIds.nap(nap.start), v, RecordingMethod.MANUAL_ENTRY, null)
+                } else {
+                    RecordMeta(RecordIds.nap(nap.start), v, RecordingMethod.AUTOMATICALLY_RECORDED, device())
+                }
+                val session = SleepMapping.session(segments, SleepMapping.pathOf(segments), meta, zone(), NAP_TITLE) ?: return@mapNotNull null
+                WriteItem(session, emptyList()) { sleep.markNapWritten(nap.start) }
+            }
+            writeItems(type, items)
+        }
+
+        /**
+         * After [id] was accepted for [night]: every id the night named before stays named next to
+         * [id] until its delete succeeds; then the night names [id] and what could not be deleted.
+         * An unreadable stored list is read as none (it can only name an older id of this night).
+         */
+        private suspend fun replaceIds(type: RecordType, night: Instant, id: String) {
+            val before = sleep.recordIds(night).orEmpty()
+            val old = before.filter { it != id }
+            if (old.isEmpty()) {
+                if (before != listOf(id)) sleep.setRecordIds(night, listOf(id))
+                return
+            }
+            sleep.setRecordIds(night, listOf(id) + old)
+            if (delete(type, old)) sleep.setRecordIds(night, listOf(id))
+        }
+
+        /**
+         * One delete call by clientRecordId, within the budget. A failed delete is not a write
+         * failure: what it would remove stays named and is deleted on a later flush. Health
+         * Connect asking to be called later ends the flush as catching up.
+         */
+        private suspend fun delete(type: RecordType, ids: List<String>): Boolean {
+            if (catchingUp) return false
+            if (calls >= MAX_CALLS_PER_FLUSH) {
+                catchingUp = true
+                return false
+            }
+            calls++
+            return try {
+                port.deleteByClientIds(type, ids)
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: HealthRetryLaterException) {
+                catchingUp = true
+                false
+            } catch (e: Exception) {
+                false
+            }
+        }
+
         /**
          * Drops (and counts) the items breaking a platform rule, then sends the rest in calls of
          * [Chunker]'s size, marking each call's samples once Health Connect accepted it.
@@ -232,6 +439,7 @@ class HealthWriter(
         private suspend fun accepted(type: RecordType, items: List<WriteItem>) {
             store.markWritten(items.flatMap { it.samples })
             written[type] = (written[type] ?: 0) + items.size
+            for (item in items) item.afterAccepted?.invoke()
         }
 
         private fun reject(type: RecordType, count: Int) {
@@ -282,6 +490,9 @@ class HealthWriter(
 
         private const val SECONDS_PER_HOUR = 3_600L
         private const val SECONDS_PER_DAY = 86_400L
+
+        /** A nap's session title (research Q11). */
+        const val NAP_TITLE = "Nap"
     }
 }
 

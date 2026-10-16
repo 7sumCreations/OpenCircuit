@@ -303,9 +303,9 @@ class FakeHealthConnectRulesTest {
         hc.deleteByClientIds(RecordType.STEPS, listOf("a"))
         assertEquals(
             listOf(
-                FakeHealthConnect.Call(FakeHealthConnect.Call.Kind.INSERT, RecordType.STEPS, 2, FakeHealthConnect.Call.Outcome.OK),
-                FakeHealthConnect.Call(FakeHealthConnect.Call.Kind.INSERT, RecordType.SLEEP_SESSION, 1, FakeHealthConnect.Call.Outcome.NOT_GRANTED),
-                FakeHealthConnect.Call(FakeHealthConnect.Call.Kind.DELETE, RecordType.STEPS, 1, FakeHealthConnect.Call.Outcome.OK),
+                FakeHealthConnect.Call(FakeHealthConnect.Call.Kind.INSERT, RecordType.STEPS, 2, FakeHealthConnect.Call.Outcome.OK, listOf("a", "b")),
+                FakeHealthConnect.Call(FakeHealthConnect.Call.Kind.INSERT, RecordType.SLEEP_SESSION, 1, FakeHealthConnect.Call.Outcome.NOT_GRANTED, listOf(TestRecords.sleep().meta.clientRecordId)),
+                FakeHealthConnect.Call(FakeHealthConnect.Call.Kind.DELETE, RecordType.STEPS, 1, FakeHealthConnect.Call.Outcome.OK, listOf("a")),
             ),
             hc.calls,
         )

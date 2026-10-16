@@ -36,7 +36,7 @@ class FakeHealthConnect(
 ) : HealthConnectPort {
 
     /** One write call and how it ended. */
-    data class Call(val kind: Kind, val type: RecordType, val count: Int, val outcome: Outcome) {
+    data class Call(val kind: Kind, val type: RecordType, val count: Int, val outcome: Outcome, val ids: List<String> = emptyList()) {
         enum class Kind { INSERT, DELETE }
         enum class Outcome { OK, NOT_GRANTED, INVALID, RETRY_LATER, FAILED }
     }
@@ -54,6 +54,7 @@ class FakeHealthConnect(
     private val callTimes = ArrayDeque<Instant>()
     private val callLog = mutableListOf<Call>()
     private val failOnce = mutableMapOf<RecordType, ArrayDeque<Throwable>>()
+    private val failOnceByKind = mutableMapOf<Pair<Call.Kind, RecordType>, ArrayDeque<Throwable>>()
     private val failPersistent = mutableMapOf<RecordType, Throwable>()
     private val crashAfter = mutableSetOf<RecordType>()
 
@@ -72,10 +73,14 @@ class FakeHealthConnect(
     fun records(type: RecordType): List<HealthRecord> = synchronized(lock) { stored.filterKeys { it.first == type }.values.toList() }
 
     fun failNext(type: RecordType, error: Throwable) = synchronized(lock) { failOnce.getOrPut(type) { ArrayDeque() }.addLast(error) }
+
+    /** As [failNext], for the next call of [kind] only (a delete that fails after its insert went through). */
+    fun failNext(kind: Call.Kind, type: RecordType, error: Throwable) = synchronized(lock) { failOnceByKind.getOrPut(kind to type) { ArrayDeque() }.addLast(error) }
     fun failAlways(type: RecordType, error: Throwable) = synchronized(lock) { failPersistent[type] = error }
     fun crashAfterAccept(type: RecordType) = synchronized(lock) { crashAfter += type }
     fun clearFailures() = synchronized(lock) {
         failOnce.clear()
+        failOnceByKind.clear()
         failPersistent.clear()
         crashAfter.clear()
     }
@@ -84,7 +89,7 @@ class FakeHealthConnect(
     override suspend fun grantedWrites(): Set<HealthPermission> = synchronized(lock) { granted.toSet() }
     override suspend fun featureAvailable(feature: HealthFeature): Boolean = feature in features
 
-    override suspend fun insert(type: RecordType, records: List<HealthRecord>): List<String> = writeCall(Call.Kind.INSERT, type, records.size) {
+    override suspend fun insert(type: RecordType, records: List<HealthRecord>): List<String> = writeCall(Call.Kind.INSERT, type, records.map { it.meta.clientRecordId }) {
         records.firstOrNull { it.type != type }?.let { throw HealthInvalidRecordException("a ${it.type} record in a $type call") }
         val now = clock()
         for (r in records) {
@@ -102,7 +107,7 @@ class FakeHealthConnect(
         records.map { platformId(type, it.meta.clientRecordId) }
     }
 
-    override suspend fun deleteByClientIds(type: RecordType, clientRecordIds: List<String>): Unit = writeCall(Call.Kind.DELETE, type, clientRecordIds.size) {
+    override suspend fun deleteByClientIds(type: RecordType, clientRecordIds: List<String>): Unit = writeCall(Call.Kind.DELETE, type, clientRecordIds) {
         clientRecordIds.forEach { stored.remove(type to it) }
     }
 
@@ -114,19 +119,19 @@ class FakeHealthConnect(
     }
 
     /** One write call: busy, quota, grant, injected failure, then [body]; logged with its outcome. */
-    private fun <T> writeCall(kind: Call.Kind, type: RecordType, count: Int, body: () -> T): T = synchronized(lock) {
+    private fun <T> writeCall(kind: Call.Kind, type: RecordType, ids: List<String>, body: () -> T): T = synchronized(lock) {
         val result = try {
             busy?.let { throw HealthRetryLaterException(it, "Health Connect is busy: $it") }
             spendQuota()
             requireGrant(type)
-            failOnce[type]?.removeFirstOrNull()?.let { throw it }
+            (failOnceByKind[kind to type]?.removeFirstOrNull() ?: failOnce[type]?.removeFirstOrNull())?.let { throw it }
             failPersistent[type]?.let { throw it }
             body()
         } catch (e: Throwable) {
-            callLog += Call(kind, type, count, outcomeOf(e))
+            callLog += Call(kind, type, ids.size, outcomeOf(e), ids)
             throw e
         }
-        callLog += Call(kind, type, count, Call.Outcome.OK)
+        callLog += Call(kind, type, ids.size, Call.Outcome.OK, ids)
         result
     }
 

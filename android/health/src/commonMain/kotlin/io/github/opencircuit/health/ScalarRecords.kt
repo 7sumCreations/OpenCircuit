@@ -10,8 +10,11 @@ import kotlin.math.roundToLong
 /** A stored sample and its row id in the app's store (rows of one kind may share a start). */
 data class SampleRow(val rowId: Long, val sample: QuantitySample)
 
-/** A record and the stored samples it carries: once Health Connect accepts the record, they are marked written. */
-class WriteItem(val record: HealthRecord, val samples: List<QuantitySample>)
+/**
+ * A record and the stored samples it carries: once Health Connect accepts the record, they are
+ * marked written, then [afterAccepted] runs (the marks a record that carries no sample moves).
+ */
+class WriteItem(val record: HealthRecord, val samples: List<QuantitySample>, val afterAccepted: (suspend () -> Unit)? = null)
 
 /**
  * Heart-rate variability, blood oxygen and breathing rate: one instant record per stored sample,
