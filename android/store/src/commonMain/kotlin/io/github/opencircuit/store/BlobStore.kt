@@ -188,6 +188,27 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
     suspend fun saveEnergyLedgerDay(day: EnergyLedgerDay, now: Instant): Boolean =
         putIfEncoded(energyKey(day.localDate), EnergyLedgerDayCodec.encode(day), now)
 
+    // Health Connect write generation: one number; an unreadable value is reported, never read as absent.
+
+    /**
+     * The last Health Connect write generation handed out: null when none ever was,
+     * [Decoded.Unreadable] when what is stored is not a whole number of at least 1. A caller must
+     * not start again from 1 over an unreadable value: every record already written carries a
+     * higher version, so each later write would be ignored.
+     */
+    suspend fun loadHealthWriteGeneration(): Decoded<Long>? {
+        val raw = kv.get(HEALTH_WRITE_GENERATION)?.value ?: return null
+        // ASCII digits only: Kotlin's toLongOrNull also reads other scripts' digits ("９").
+        val value = if (ASCII_DIGITS.matches(raw)) raw.toLongOrNull() else null
+        return if (value != null && value >= 1) Decoded.Readable(value) else Decoded.Unreadable(raw, "not a whole number of at least 1")
+    }
+
+    /** Saves [generation] (at least 1) as the last write generation handed out. */
+    suspend fun saveHealthWriteGeneration(generation: Long, now: Instant) {
+        require(generation >= 1) { "a write generation is at least 1, was $generation" }
+        put(HEALTH_WRITE_GENERATION, generation.toString(), now)
+    }
+
     // Epoch archive: records only through the bounded merge.
 
     /** The stored archive and its drain facts; [StoredEpochArchive.EMPTY] when none or unreadable. */
@@ -303,6 +324,8 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
         const val PENDING_COARSE = "sleep.pendingCoarseSegments"
         const val PENDING_STAGED = "sleep.pendingStagedSegments"
         const val ENERGY_LEDGER = "hk.activeEnergy"
+        const val HEALTH_WRITE_GENERATION = "hc.writeGeneration"
+        val ASCII_DIGITS = Regex("[0-9]+")
 
         fun perRing(name: String, ringId: String): String {
             require(ringId.isNotEmpty() && '/' !in ringId) { "a ring id must be non-empty and contain no '/': \"$ringId\"" }
