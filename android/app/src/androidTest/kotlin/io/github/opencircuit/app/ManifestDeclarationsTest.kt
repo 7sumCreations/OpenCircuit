@@ -16,8 +16,8 @@ import org.junit.runner.RunWith
  * What the installed app declares, read back from the package manager (the merged manifest as
  * Android sees it, not the source file).
  *
- * Exactly the two Nearby-devices permissions, scan flagged never-for-location; no network,
- * notification, legacy Bluetooth or location permission. The companion-device feature is
+ * The two Nearby-devices permissions, scan flagged never-for-location, and the twelve Health
+ * Connect WRITE permissions; no network, notification, legacy Bluetooth or location permission. The companion-device feature is
  * declared not required, so a phone without it can still install the app (pairing then falls
  * back to the plain bond), and it is still in the package's requested features, which is the
  * list the companion device manager checks before it accepts an association request.
@@ -61,10 +61,12 @@ class ManifestDeclarationsTest {
 
     @Test
     fun everyRequestedPermissionIsAccountedFor() {
-        // Besides the two above, the only one is androidx.core's guard for receivers registered
-        // not-exported on older releases, named after the package.
-        val others = requested - setOf(SCAN, CONNECT)
+        // Besides the two above: the twelve Health Connect WRITE permissions (no READ one), and
+        // androidx.core's guard for receivers registered not-exported on older releases, named
+        // after the package.
+        val others = requested - setOf(SCAN, CONNECT) - HEALTH_WRITES.toSet()
         assertEquals(listOf("${info.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"), others)
+        assertTrue(requested.toString(), requested.containsAll(HEALTH_WRITES))
     }
 
     @Test
@@ -78,5 +80,19 @@ class ManifestDeclarationsTest {
         const val SCAN = "android.permission.BLUETOOTH_SCAN"
         const val CONNECT = "android.permission.BLUETOOTH_CONNECT"
         const val COMPANION_SETUP = "android.software.companion_device_setup"
+        val HEALTH_WRITES = listOf(
+            "android.permission.health.WRITE_HEART_RATE",
+            "android.permission.health.WRITE_RESTING_HEART_RATE",
+            "android.permission.health.WRITE_HEART_RATE_VARIABILITY",
+            "android.permission.health.WRITE_OXYGEN_SATURATION",
+            "android.permission.health.WRITE_RESPIRATORY_RATE",
+            "android.permission.health.WRITE_SKIN_TEMPERATURE",
+            "android.permission.health.WRITE_STEPS",
+            "android.permission.health.WRITE_DISTANCE",
+            "android.permission.health.WRITE_ACTIVE_CALORIES_BURNED",
+            "android.permission.health.WRITE_BASAL_METABOLIC_RATE",
+            "android.permission.health.WRITE_SLEEP",
+            "android.permission.health.WRITE_MENSTRUATION",
+        )
     }
 }
