@@ -27,7 +27,9 @@ import java.time.ZoneId
 // (ios/OpenCircuit/CycleStore.swift :73-156), the headache log and the frozen headache-risk rows
 // (ios/OpenCircuit/Store/HeadacheStore.swift :195-315, :332-406), without their health-write calls
 // (`periodEntriesNeedingHealthMirror`, `recordPeriodEntryHK`, `pendingHeadacheEntries`,
-// `recordHeadacheEntryHK`), which belong to the health-store port.
+// `recordHeadacheEntryHK`), which belong to the health-store port; and the Health Connect
+// watermark (`healthMirroredKinds`, `pendingHealthSamples` :1215-1233, `markHealthWritten`,
+// `loadHealthCursor` :1358-1377).
 //
 // Differences, each deliberate:
 // - `now` and `zone` are parameters. Upstream reads the wall clock and `Calendar.current`; the
@@ -492,6 +494,54 @@ class LocalStore internal constructor(
             purged
         }
 
+    // The Health Connect watermark (upstream LocalStore.swift :1215-1233, :1358-1377): its own
+    // `hk:<kind>` rows in the cursor table, apart from the ingest cursor, so storing a sample never
+    // counts as writing it to Health Connect. Only the writer moves it, after a write was accepted.
+
+    /**
+     * Stored samples of every [HEALTH_MIRRORED_KINDS] kind newer than that kind's Health Connect
+     * mark and above zero, oldest first (ties in row order). Moves nothing: call [markHealthWritten]
+     * once Health Connect has accepted them.
+     */
+    suspend fun pendingHealthSamples(): List<QuantitySample> =
+        HEALTH_MIRRORED_KINDS.flatMap { pendingHealthSamples(it) }.sortedBy { it.start }
+
+    /** As [pendingHealthSamples], for one [kind]; empty for a kind that is not written from here. */
+    suspend fun pendingHealthSamples(kind: MetricKind): List<QuantitySample> {
+        if (kind !in HEALTH_MIRRORED_KINDS) return emptyList()
+        val mark = healthMarks().last(kind)
+        val rows = if (mark == null) sampleDao.positiveSamples(kind.rawValue) else sampleDao.positiveSamplesAfter(kind.rawValue, mark)
+        return rows.mapNotNull { it.toSample() }
+    }
+
+    /**
+     * Moves each kind's Health Connect mark to the newest start among [samples] of that kind —
+     * forward only, never back — in one transaction. Pass only what Health Connect accepted. Kinds
+     * that are not written from the store (steps, energy, sleep) move no mark.
+     */
+    suspend fun markHealthWritten(samples: List<QuantitySample>) {
+        val mirrored = samples.filter { it.kind in HEALTH_MIRRORED_KINDS }
+        if (mirrored.isEmpty()) return
+        db.withWriteTransaction {
+            val marks = healthMarks()
+            val before = marks.copy()
+            marks.selectNew(mirrored.map { it.copy(start = it.start.toStoredMillis()) })
+            sampleDao.upsertCursors(
+                marks.advancedKinds(since = before).filter { it in HEALTH_MIRRORED_KINDS }.mapNotNull { kind ->
+                    marks.last(kind)?.let { StoredCursorEntity(kindRaw = HEALTH_CURSOR_PREFIX + kind.rawValue, last = it) }
+                },
+            )
+        }
+    }
+
+    /** The Health Connect marks, from the `hk:` rows, keyed by bare kind. */
+    private suspend fun healthMarks(): SyncCursor =
+        SyncCursor(
+            sampleDao.allCursors()
+                .filter { it.kindRaw.startsWith(HEALTH_CURSOR_PREFIX) }
+                .associate { it.kindRaw.removePrefix(HEALTH_CURSOR_PREFIX) to it.last },
+        )
+
     /** Daytime readings with `from <= time < to`, oldest first. */
     suspend fun daytimeTemperatures(from: Instant, to: Instant): List<DaytimeTemperature> =
         dailyDao.daytimeTemps(from, to).map { it.toDaytimeTemperature() }
@@ -540,6 +590,13 @@ class LocalStore internal constructor(
     companion object {
         /** Days of raw samples, step deltas and daytime readings kept on the phone (upstream `sampleRetentionDays`). */
         const val SAMPLE_RETENTION_DAYS = 30L
+
+        /**
+         * The kinds written to Health Connect straight from the stored samples (upstream
+         * `healthMirroredKinds`). Steps, active energy and sleep take their own paths.
+         */
+        val HEALTH_MIRRORED_KINDS: List<MetricKind> =
+            listOf(MetricKind.HEART_RATE, MetricKind.HRV_SDNN, MetricKind.SPO2, MetricKind.RESPIRATORY_RATE, MetricKind.TEMPERATURE)
 
         /** Cursor rows of the health-store writer share the table; they are not the ingest cursor. */
         private const val HEALTH_CURSOR_PREFIX = "hk:"

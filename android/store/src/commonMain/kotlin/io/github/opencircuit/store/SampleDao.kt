@@ -51,6 +51,14 @@ internal interface SampleDao {
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start >= :since AND value > 0 ORDER BY start, id")
     suspend fun recentSamples(kindRaw: String, since: Instant): List<StoredSampleEntity>
 
+    /** Samples of one kind with `start > after` and a positive value, oldest first (upstream `pendingHealthSamples`). */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start > :after AND value > 0 ORDER BY start, id")
+    suspend fun positiveSamplesAfter(kindRaw: String, after: Instant): List<StoredSampleEntity>
+
+    /** Every sample of one kind with a positive value, oldest first. */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND value > 0 ORDER BY start, id")
+    suspend fun positiveSamples(kindRaw: String): List<StoredSampleEntity>
+
     /** The newest sample of one kind at or before [notAfter] (the cursor repair's reset target). */
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start <= :notAfter ORDER BY start DESC, id DESC LIMIT 1")
     suspend fun latestSampleAtOrBefore(kindRaw: String, notAfter: Instant): StoredSampleEntity?
