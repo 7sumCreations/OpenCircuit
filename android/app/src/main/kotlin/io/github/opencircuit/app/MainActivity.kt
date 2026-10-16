@@ -30,6 +30,7 @@ import io.github.opencircuit.app.connect.IntentSenderSheet
 import io.github.opencircuit.app.connect.PairingSheet
 import io.github.opencircuit.app.connect.ScanStep
 import io.github.opencircuit.app.health.HealthCardSources
+import io.github.opencircuit.app.health.HealthSettingsLink
 import io.github.opencircuit.health.HealthPermission
 import io.github.opencircuit.health.JetpackHealthConnect
 import io.github.opencircuit.app.onboarding.Destination
@@ -157,6 +158,10 @@ class MainActivity : ComponentActivity() {
                 askForHealthConnect()
                 return
             }
+            RingAction.OpenHealthSettings -> {
+                openHealthConnectSettings()
+                return
+            }
             else -> Unit
         }
         if (action !is RingAction.Link) {
@@ -213,6 +218,20 @@ class MainActivity : ComponentActivity() {
             healthPermissionRequest.launch(container.healthAccess.requested().map(HealthPermission::permission).toSet())
         } catch (_: ActivityNotFoundException) {
             container.log("Health Connect's permission screen could not be shown")
+            container.healthAccess.refresh()
+        }
+    }
+
+    /**
+     * Health Connect's own permission page for this app, at the user's tap only. What changed there
+     * is read back when the screen resumes. If nothing on the phone takes the link, the card stays
+     * as it is.
+     */
+    private fun openHealthConnectSettings() {
+        try {
+            startActivity(HealthSettingsLink.intent(packageName))
+        } catch (_: ActivityNotFoundException) {
+            container.log("Health Connect's settings could not be opened")
             container.healthAccess.refresh()
         }
     }

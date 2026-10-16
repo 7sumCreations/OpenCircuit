@@ -214,7 +214,7 @@ class RingViewModel(
             RingAction.SyncNow -> controller?.sync?.syncNow()
             RingAction.WriteHealthNow -> health?.writeNow?.invoke()
             // Health Connect's permission screen is the activity's (the activity result registry).
-            RingAction.ConnectHealth -> Unit
+            RingAction.ConnectHealth, RingAction.OpenHealthSettings -> Unit
             is RingAction.SetDisconnectAfterSync -> {
                 if (prefs?.setDisconnectAfterSync(action.on) == false) {
                     // Not saved: the switch shows what is kept, so the user sees it did not change.

@@ -49,6 +49,9 @@ sealed interface RingAction {
     /** Tapped Connect Health Connect: Health Connect's own permission screen (the activity's). */
     data object ConnectHealth : RingAction
 
+    /** Tapped Open Health Connect settings or Change in Health Connect: Health Connect's page for this app (the activity's). */
+    data object OpenHealthSettings : RingAction
+
     /** Tapped Write to Health Connect now. */
     data object WriteHealthNow : RingAction
 }
@@ -96,8 +99,9 @@ fun RingScreen(
                     health,
                     onAction = { action ->
                         when (action) {
-                            // Changing what is allowed opens the same permission screen for now.
-                            HealthCardAction.CONNECT, HealthCardAction.MANAGE -> onAction(RingAction.ConnectHealth)
+                            HealthCardAction.CONNECT -> onAction(RingAction.ConnectHealth)
+                            // Changing what is allowed happens on Health Connect's own page for the app.
+                            HealthCardAction.MANAGE -> onAction(RingAction.OpenHealthSettings)
                             HealthCardAction.WRITE_NOW -> onAction(RingAction.WriteHealthNow)
                         }
                     },
