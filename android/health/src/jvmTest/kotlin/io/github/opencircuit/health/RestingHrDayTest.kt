@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
 
 /**
  * Resting heart rate, one record per finalized local day (upstream `flushRestingHR`,
- * HealthKitWriter.swift:1389-1439 @ b1c2fdd): a day is final once its start is 12 hours past
+ * HealthKitWriter.swift:1389-1437 @ b1c2fdd): a day is final once its start is 12 hours past
  * (so last night's value lands by midday), each day after the last one written within a 7-day
  * lookback gets `oc:rhr:<date>` at the day's start, and the day mark moves only past what Health
  * Connect accepted. The day's value is `RestingHR.dailyValues`: the mean asleep heart rate when the

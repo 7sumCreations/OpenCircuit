@@ -1,5 +1,6 @@
 package io.github.opencircuit.app.health
 
+import io.github.opencircuit.health.HealthActivityStore
 import io.github.opencircuit.health.HealthFailureStore
 import io.github.opencircuit.health.HealthSampleStore
 import io.github.opencircuit.health.HealthSleepStore
@@ -8,6 +9,7 @@ import io.github.opencircuit.health.NightWindow
 import io.github.opencircuit.health.QueuedNightEdit
 import io.github.opencircuit.health.RecordType
 import io.github.opencircuit.health.SampleRow
+import io.github.opencircuit.health.StepRow
 import io.github.opencircuit.health.StoredNapToWrite
 import io.github.opencircuit.health.StoredSleepNight
 import io.github.opencircuit.health.UnreadableEditQueueException
@@ -24,9 +26,11 @@ import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.SleepStoreException
 import io.github.opencircuit.store.StoreDatabase
 import io.github.opencircuit.store.StoredNapRecord
+import io.github.opencircuit.store.StoredStepRow
 import io.github.opencircuit.store.codec.Decoded
 import io.github.opencircuit.store.keyText
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 
 /** The writer's view of the app's store: pending samples, the samples of an hour, the Health Connect marks. */
@@ -47,6 +51,43 @@ class StoreHealthSamples(private val database: suspend () -> StoreDatabase) : He
         SleepStore(database()).sleepSummaries(from, until).map { NightWindow(it.keyText, it.night, it.inBedStart, it.inBedEnd, it.skinTempC) }
 
     override suspend fun markWritten(samples: List<QuantitySample>) = store().markHealthWritten(samples)
+}
+
+/**
+ * The writer's view of the store's step rows and of the marks it keeps for steps, energy and the
+ * daily records (resting heart rate, basal metabolic rate) in the store's key-value table.
+ */
+class StoreHealthActivity(
+    private val database: suspend () -> StoreDatabase,
+    private val now: () -> Instant,
+    private val zone: () -> ZoneId,
+) : HealthActivityStore {
+    private suspend fun store() = LocalStore(database())
+
+    private suspend fun blobs() = BlobStore(database())
+
+    override suspend fun pendingSteps(): List<StepRow> = store().pendingStepSampleRows().map { it.toStepRow() }
+
+    override suspend fun steps(from: Instant, until: Instant): List<StepRow> = store().stepSampleRows(from, until).map { it.toStepRow() }
+
+    override suspend fun markStepsWritten(ids: List<Long>) = store().markStepSamplesWritten(ids)
+
+    override suspend fun daySteps(day: LocalDate): Long {
+        val zone = zone()
+        return store().todaySteps(day.atStartOfDay(zone).toInstant(), zone)
+    }
+
+    override suspend fun dayMark(type: RecordType): LocalDate? = blobs().loadHealthDayMark(type.name)
+
+    override suspend fun setDayMark(type: RecordType, day: LocalDate) = blobs().saveHealthDayMark(type.name, day, now())
+
+    override suspend fun energyWritten(day: LocalDate): Map<Instant, Double> = blobs().loadHealthEnergyWritten(day)
+
+    override suspend fun setEnergyWritten(day: LocalDate, written: Map<Instant, Double>) = blobs().saveHealthEnergyWritten(day, written, now())
+
+    override suspend fun forgetEnergyBefore(day: LocalDate) = blobs().forgetHealthEnergyWrittenBefore(day)
+
+    private fun StoredStepRow.toStepRow() = StepRow(id, sample.start, sample.end, sample.delta)
 }
 
 /**

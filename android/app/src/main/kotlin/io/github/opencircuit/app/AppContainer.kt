@@ -18,6 +18,7 @@ import io.github.opencircuit.app.details.DetailsSources
 import io.github.opencircuit.app.health.HealthAccess
 import io.github.opencircuit.app.health.HealthFlush
 import io.github.opencircuit.app.health.StoreHealthAccessMemory
+import io.github.opencircuit.app.health.StoreHealthActivity
 import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreHealthSleep
@@ -128,6 +129,7 @@ class AppContainer(context: Context) {
         zone = ZoneId::systemDefault,
         device = { RingDevice.ofFirmware(ringSessions.current.value?.let { it.link.info.value.firmware.version }) },
         sleep = StoreHealthSleep({ database.await() }, wallNow, ZoneId::systemDefault),
+        activity = StoreHealthActivity({ database.await() }, wallNow, ZoneId::systemDefault),
     )
 
     /**

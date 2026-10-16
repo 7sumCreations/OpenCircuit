@@ -7,19 +7,27 @@ import androidx.activity.result.contract.ActivityResultContract
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.BasalMetabolicRateRecord
+import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RespiratoryRateRecord
+import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SkinTemperatureRecord
 import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.health.connect.client.units.Energy
+import androidx.health.connect.client.units.Length
 import androidx.health.connect.client.units.Percentage
+import androidx.health.connect.client.units.Power
 import androidx.health.connect.client.units.Temperature
 import androidx.health.connect.client.units.TemperatureDelta
 import java.time.Instant
@@ -148,6 +156,11 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
             RecordType.RESPIRATORY_RATE -> RespiratoryRateRecord::class
             RecordType.SKIN_TEMPERATURE -> SkinTemperatureRecord::class
             RecordType.SLEEP_SESSION -> SleepSessionRecord::class
+            RecordType.STEPS -> StepsRecord::class
+            RecordType.DISTANCE -> DistanceRecord::class
+            RecordType.ACTIVE_CALORIES_BURNED -> ActiveCaloriesBurnedRecord::class
+            RecordType.BASAL_METABOLIC_RATE -> BasalMetabolicRateRecord::class
+            RecordType.RESTING_HEART_RATE -> RestingHeartRateRecord::class
             else -> throw HealthCallFailedException("$type records are not written by this version")
         }
 
@@ -202,6 +215,32 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                     notes = record.notes,
                     stages = record.stages.map { SleepSessionRecord.Stage(startTime = it.start, endTime = it.end, stage = it.stage.platformCode) },
                 )
+                is Steps -> StepsRecord(
+                    startTime = record.start,
+                    startZoneOffset = record.startZoneOffset,
+                    endTime = record.end,
+                    endZoneOffset = record.endZoneOffset,
+                    count = record.count,
+                    metadata = metadata(record.meta),
+                )
+                is Distance -> DistanceRecord(
+                    startTime = record.start,
+                    startZoneOffset = record.startZoneOffset,
+                    endTime = record.end,
+                    endZoneOffset = record.endZoneOffset,
+                    distance = Length.meters(record.meters),
+                    metadata = metadata(record.meta),
+                )
+                is ActiveCaloriesBurned -> ActiveCaloriesBurnedRecord(
+                    startTime = record.start,
+                    startZoneOffset = record.startZoneOffset,
+                    endTime = record.end,
+                    endZoneOffset = record.endZoneOffset,
+                    energy = Energy.kilocalories(record.kilocalories),
+                    metadata = metadata(record.meta),
+                )
+                is BasalMetabolicRate -> BasalMetabolicRateRecord(record.time, record.zoneOffset, Power.kilocaloriesPerDay(record.kilocaloriesPerDay), metadata(record.meta))
+                is RestingHeartRate -> RestingHeartRateRecord(record.time, record.zoneOffset, record.beatsPerMinute, metadata(record.meta))
                 else -> throw HealthCallFailedException("${record.type} records are not written by this version")
             }
         }
@@ -245,6 +284,12 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
                 },
                 meta = metaOf(record.metadata),
             )
+            is StepsRecord -> Steps(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), record.count, metaOf(record.metadata))
+            is DistanceRecord -> Distance(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), record.distance.inMeters, metaOf(record.metadata))
+            is ActiveCaloriesBurnedRecord ->
+                ActiveCaloriesBurned(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), record.energy.inKilocalories, metaOf(record.metadata))
+            is BasalMetabolicRateRecord -> BasalMetabolicRate(record.time, offsetOf(record.zoneOffset), record.basalMetabolicRate.inKilocaloriesPerDay, metaOf(record.metadata))
+            is RestingHeartRateRecord -> RestingHeartRate(record.time, offsetOf(record.zoneOffset), record.beatsPerMinute, metaOf(record.metadata))
             else -> throw HealthCallFailedException("$type records are not read back by this version")
         }
 

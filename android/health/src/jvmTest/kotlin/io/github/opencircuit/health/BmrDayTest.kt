@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
 
 /**
  * Basal metabolic rate, one record per finalized local day (PORTING.md D-296): upstream writes an
- * hourly basal-energy sample (HealthKitWriter.swift:1453-1488 @ b1c2fdd); Health Connect has a
+ * hourly basal-energy sample (HealthKitWriter.swift:1453-1483 @ b1c2fdd); Health Connect has a
  * basal-metabolic-RATE record and derives total calories from it, so one `oc:bmr:<date>` per day,
  * at the day's start, valued `Calories.basalKcalPerHour × 24` (Mifflin-St Jeor on the profile,
  * nudged by the day's resting heart rate against the prior days' baseline). Same finalization and

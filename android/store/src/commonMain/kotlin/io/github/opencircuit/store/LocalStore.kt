@@ -449,6 +449,10 @@ class LocalStore internal constructor(
     suspend fun pendingStepSampleRows(): List<StoredStepRow> =
         dailyDao.pendingStepSamples().map { StoredStepRow(it.id, it.toStepSample()) }
 
+    /** As [stepSamples], each with its row id: rows that share a start are told apart by it. */
+    suspend fun stepSampleRows(from: Instant, to: Instant): List<StoredStepRow> =
+        dailyDao.stepSamples(from, to).map { StoredStepRow(it.id, it.toStepSample()) }
+
     /** Marks the step deltas with these row ids written to Health Connect, in one statement; unknown ids are ignored. */
     suspend fun markStepSamplesWritten(ids: List<Long>) {
         if (ids.isEmpty()) return

@@ -1,11 +1,13 @@
 package io.github.opencircuit.app
 
 import io.github.opencircuit.app.health.HealthFlush
+import io.github.opencircuit.app.health.StoreHealthActivity
 import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreHealthSleep
 import io.github.opencircuit.app.health.StoreWriteGenerations
 import io.github.opencircuit.health.FakeHealthConnect
+import io.github.opencircuit.health.HealthActivityStore
 import io.github.opencircuit.health.HealthConnectPort
 import io.github.opencircuit.health.HealthRecord
 import io.github.opencircuit.health.HealthWriter
@@ -58,8 +60,14 @@ internal class InsertGate(private val hc: FakeHealthConnect) : HealthConnectPort
 }
 
 /** The world on this test's scheduler; pass [HealthWorld.db] to `syncWorld(reuseDb = …)` and `afterCommit = { it.flush.request() }`. */
-internal suspend fun TestScope.healthWorld(wallStart: Instant = SYNC_TEST_EPOCH): HealthWorld {
-    val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
+internal suspend fun TestScope.healthWorld(
+    wallStart: Instant = SYNC_TEST_EPOCH,
+    /** Write steps, energy and the daily records too (the app does); off for the tests that count only sync data. */
+    activity: Boolean = false,
+    /** The store to write from; a fresh in-memory one when null. */
+    reuseDb: StoreDatabase? = null,
+): HealthWorld {
+    val db = reuseDb ?: StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
     val wall = { wallStart.plusMillis(testScheduler.currentTime) }
     val hc = FakeHealthConnect(wall).apply { grantAll() }
     val gate = InsertGate(hc)
@@ -73,6 +81,7 @@ internal suspend fun TestScope.healthWorld(wallStart: Instant = SYNC_TEST_EPOCH)
         zone = { ZoneOffset.UTC },
         device = { RingDevice("Gen 2") },
         sleep = StoreHealthSleep({ db }, wall, { ZoneOffset.UTC }),
+        activity = if (activity) StoreHealthActivity({ db }, wall, { ZoneOffset.UTC }) else HealthActivityStore.NONE,
     )
     return HealthWorld(db, hc, gate, appScope, HealthFlush(writer::flush, appScope, log = {}))
 }

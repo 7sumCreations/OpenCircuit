@@ -67,6 +67,22 @@ class StepHealthPendingTest {
         }
     }
 
+    /** The rows of a span, written or not, with their ids: the writer sums rows that share a start. */
+    @Test
+    fun theRowsOfASpanCarryTheirIdsWrittenOrNot() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val store = LocalStore(db)
+            store.threeReadings()
+            val (first, second, _) = store.pendingStepSampleRows()
+            store.markStepSamplesWritten(listOf(first.id))
+
+            val rows = store.stepSampleRows(at("09:30:00"), at("10:02:00"))
+
+            assertEquals(listOf(first.id, second.id), rows.map { it.id })
+            assertEquals(listOf(true, false), rows.map { it.sample.healthWritten })
+        }
+    }
+
     /** Rows of every day stay pending until written (upstream: "unbounded by today"). */
     @Test
     fun anEarlierDaysRowStaysPending() = runBlocking<Unit> {

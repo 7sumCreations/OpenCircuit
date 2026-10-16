@@ -417,7 +417,7 @@ class HealthWriter(
         }
 
         /**
-         * Upstream `flushRestingHR` (HKW:1406-1439): one record per final day after the day mark
+         * Upstream `flushRestingHR` (HKW:1406-1437): one record per final day after the day mark
          * ([DailyRecords.daysToWrite], 7 days back at most), valued by `RestingHR.dailyValues` over
          * the stored heart rate and the stored nights' stages (the mean asleep heart rate where a
          * night was staged, else the lowest sustained window). A day without readings gets none.
@@ -446,7 +446,7 @@ class HealthWriter(
 
         /**
          * One basal-metabolic-rate record per final day after the day mark (PORTING.md D-296; upstream
-         * writes basal energy per hour, HKW:1453-1488): a first run writes today only, as upstream's
+         * writes basal energy per hour, HKW:1453-1483): a first run writes today only, as upstream's
          * meter starts at the current hour; each day valued [DailyRecords.basalKcalPerDay] with the
          * resting heart rate of [DailyRecords.BASAL_LOOKBACK_DAYS] days of stored heart rate.
          */

@@ -70,9 +70,9 @@ object DailyRecords {
     /**
      * A day's basal rate in kilocalories per day: upstream's hourly `Calories.basalKcalPerHour` × 24,
      * nudged by the day's resting heart rate against the trimmed mean of the prior days'
-     * (`restingEnergyInputs`, HealthKitWriter.swift:1515-1521); the static rate when the day has no
+     * (`restingEnergyInputs`, HealthKitWriter.swift:1510-1516); the static rate when the day has no
      * resting heart rate or the baseline too few days. [daily] comes from heart rate alone (no
-     * sleep), as upstream's `dailyRestingHR` (:1508-1512).
+     * sleep), as upstream's `dailyRestingHR` (:1500-1504).
      */
     fun basalKcalPerDay(dayStart: Instant, daily: List<RestingHR.DailyValue>, profile: UserProfile): Double {
         val today = daily.firstOrNull { it.day == dayStart }?.bpm
