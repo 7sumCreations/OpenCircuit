@@ -2,13 +2,16 @@ package io.github.opencircuit.app
 
 import io.github.opencircuit.app.demo.DemoRingLink
 import io.github.opencircuit.app.live.LiveMode
+import io.github.opencircuit.app.live.StoreLiveReadings
 import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.session.RingSessionController
+import io.github.opencircuit.app.sync.HistoryStore
 import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.app.sync.StoreHistory
 import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.ringkit.Command
+import io.github.opencircuit.store.LocalStore
 import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.StoreFactory
 import java.time.Instant
@@ -259,6 +262,49 @@ class DemoRingLinkTest {
         link.connect()
         advanceTo(330_000)
         assertEquals(6, descriptors(), "again after a reconnect: one at once, one 30 s later")
+    }
+
+    /**
+     * The demo's descriptor carries a step count as the ring's does (`[4:6]`, PROTOCOL.md §5.4): the
+     * steps since the wall-clock quarter hour began, cleared at :00 / :15 / :30 / :45 — 8 a minute,
+     * a slow walk — so the live step path has something to keep on the emulator.
+     */
+    @Test
+    fun theDemoDescriptorCarriesAQuarterHourStepBucketThatClearsAtEachQuarter() = runTest {
+        val wallStart = Instant.parse("2026-10-16T10:07:30Z").toEpochMilli()
+        val link = DemoRingLink(backgroundScope, wallClock = { wallStart + testScheduler.currentTime }, zone = { ZoneOffset.UTC })
+        val received = mutableListOf<ByteArray>()
+        backgroundScope.launch { link.frames.collect { received += it } }
+        fun lastSteps() = received.last { it[0] == 0x10.toByte() }.let { ((it[4].toInt() and 0xff) shl 8) or (it[5].toInt() and 0xff) }
+
+        link.connect()
+        runCurrent()
+        assertEquals(60, lastSteps(), "7.5 minutes into the 10:00 quarter")
+        advanceTo(330_000) // 10:13:00
+        assertEquals(104, lastSteps())
+        advanceTo(600_000) // 10:17:30, the bucket cleared at 10:15
+        assertEquals(20, lastSteps())
+    }
+
+    @Test
+    fun theDemoRingsStepsReachTheStoreThroughTheSession() = runTest {
+        val db = StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
+        val wallStart = Instant.parse("2026-10-16T10:07:30Z")
+        val wall = { wallStart.plusMillis(testScheduler.currentTime) }
+        val link = DemoRingLink(backgroundScope, wallClock = { wall().toEpochMilli() }, zone = { ZoneOffset.UTC })
+        val controller = RingSessionController(
+            link, backgroundScope, monotonicMillis = { testScheduler.currentTime }, log = { logLines += it },
+            history = SessionHistory(
+                HistoryStore.NONE, wallClock = wall, disconnectAfterSync = { false }, zone = { ZoneOffset.UTC },
+                live = StoreLiveReadings({ db }, wall, { ZoneOffset.UTC }),
+            ),
+        )
+
+        controller.connect()
+        runCurrent()
+        advanceTo(330_000)
+
+        assertEquals(104L, LocalStore(db).todaySteps(wallStart, ZoneOffset.UTC), "60 at the link-up, then the bucket's growth at each 30 s descriptor")
     }
 
     @Test
