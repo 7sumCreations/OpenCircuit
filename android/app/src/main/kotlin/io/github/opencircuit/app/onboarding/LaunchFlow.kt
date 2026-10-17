@@ -56,7 +56,7 @@ object OnboardingPages {
             "Permissions",
             listOf(
                 "Nearby devices (Bluetooth) — to find and connect to your ring. OpenCircuit never uses it for location.",
-                "Health Connect — to save your metrics, in a later version. You choose exactly what to share.",
+                "Health Connect — to write your metrics there, when you tap Connect Health Connect on the Ring screen. You choose exactly what to share.",
                 "You'll be asked the first time you tap Scan & connect. Android may also ask you to confirm pairing with the ring.",
             ),
         ),
