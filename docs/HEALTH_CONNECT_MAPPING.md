@@ -107,5 +107,9 @@ app writes each 15-minute calorie bucket as a whole value rather than adding to 
   settings** (Health Connect's own page for OpenCircuit) instead of asking again.
 - **Health Connect is not available** on this card means Android reports it missing or disabled,
   or the app runs in a work profile or Private Space, where Health Connect is not offered.
+- **Turning a type off** in Health Connect stops new writes of that type. The app can then no
+  longer replace or delete the records it wrote earlier either, because Health Connect allows an
+  app to change its own records only while it holds that type's write permission. Delete them in
+  Health Connect → Data and access → OpenCircuit, or turn the type back on first.
 - **Uninstalling** OpenCircuit leaves its records in Health Connect. Delete them in Health Connect
   → Data and access → OpenCircuit before uninstalling if you want them gone.
