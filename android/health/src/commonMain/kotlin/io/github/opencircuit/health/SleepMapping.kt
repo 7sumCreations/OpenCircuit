@@ -8,8 +8,8 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * A night or a nap as one Health Connect sleep session (research Q11 as approved; spike S10 on the
- * device: overlapping stages and a stage outside the session are refused).
+ * A night or a nap as one Health Connect sleep session (as approved; measured on a device:
+ * overlapping stages and a stage outside the session are refused).
  *
  * - The session spans the earliest to the latest of the segments given (the in-bed span).
  * - In-bed is not a stage: in-bed time no other segment covers is AWAKE_IN_BED; outside the in-bed

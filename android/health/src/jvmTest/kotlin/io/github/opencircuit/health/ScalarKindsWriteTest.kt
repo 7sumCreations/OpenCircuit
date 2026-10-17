@@ -163,7 +163,7 @@ class ScalarKindsWriteTest {
 
     @Test
     fun theRmssdBoundsAreTheRangeTablesEdges() = runTest {
-        // 1.0 and 200.0 ms are inside; 0.999 and 200.001 are not (research Q13 platform column).
+        // 1.0 and 200.0 ms are inside; 0.999 and 200.001 are not (the platform's own limits).
         samples.add(hrv(1, 0.999), hrv(2, 1.0), hrv(3, 200.0), hrv(4, 200.001))
 
         val result = writer().flush()

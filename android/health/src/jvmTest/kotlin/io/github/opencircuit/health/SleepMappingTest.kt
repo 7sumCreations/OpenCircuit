@@ -14,7 +14,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * A night or a nap as one Health Connect sleep session (research Q11, as approved): the session
+ * A night or a nap as one Health Connect sleep session (as approved): the session
  * spans the earliest to the latest segment; in-bed is not a stage, its time no stage covers is
  * awake-in-bed; asleep-core is light on a staged night and plain sleeping on a coarse one; stages
  * never overlap (the later one starts where the earlier ended); the wearer's own spans are named in

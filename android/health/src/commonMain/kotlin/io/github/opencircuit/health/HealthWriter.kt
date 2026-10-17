@@ -763,7 +763,7 @@ class HealthWriter(
         private const val SECONDS_PER_HOUR = 3_600L
         private const val SECONDS_PER_DAY = 86_400L
 
-        /** A nap's session title (research Q11). */
+        /** A nap's session title. */
         const val NAP_TITLE = "Nap"
     }
 }
