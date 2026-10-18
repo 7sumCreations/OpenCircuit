@@ -189,4 +189,33 @@ class PostCommitFlushSeamTest {
         assertNotNull(flush.state.value.last)
         appScope.cancel()
     }
+
+    /**
+     * The seam the other way: the hook is a trigger, not part of the sync. A trigger that throws —
+     * the store's generation cannot be read, the writer cannot be built — leaves the sync's report
+     * standing and its outcome intact, with the failure logged as its kind only. Without the hook's
+     * own catch a broken Health Connect trigger would take the sync's tail down with it.
+     */
+    @Test
+    fun aFlushRequestThatThrowsNeverBreaksTheSync() = runTest {
+        var requests = 0
+        val w = syncWorld(
+            afterCommit = { requests++; throw IllegalStateException("the write could not be started") },
+            makeRing = ringWith(HistoryTestPages.backlog(3)),
+        )
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            advanceTo(60_000)
+
+            assertEquals(1, requests, "the after-commit hook still ran")
+            val report = assertNotNull(w.session.sync.state.value.last)
+            assertEquals(SyncOutcome.COMPLETE, report.outcome, "the sync completed: a trigger that threw is not the sync's failure")
+            assertNotNull(report.commit, "the commit stands, with its report")
+            assertFalse(w.session.sync.isSyncing.value, "the sync ended as it always does")
+            assertTrue(w.logs.any { "The Health Connect write could not be started: IllegalStateException" in it }, "the failure is logged, as its kind only")
+        } finally {
+            w.db.close()
+        }
+    }
 }
