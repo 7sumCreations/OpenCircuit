@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.opencircuit.app.health.HealthPermissionsRationaleActivity
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,10 +35,14 @@ class HealthRationaleRenderTest {
         title.assertIsDisplayed()
 
         title.assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+        // One heading and only one: a screen that makes every paragraph a heading is as hostile to
+        // TalkBack as a screen whose title says nothing.
+        assertEquals(1, compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).fetchSemanticsNodes().size)
     }
 
     @Test
     fun theScreenSaysWriteOnlyAndNothingLeavesThePhone() {
+        compose.onNodeWithText("permission to WRITE", substring = true).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("It never asks to read", substring = true).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("no internet permission", substring = true).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("not a medical device", substring = true).performScrollTo().assertIsDisplayed()

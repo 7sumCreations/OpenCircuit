@@ -41,7 +41,11 @@ class HealthPermissionsRationaleActivity : ComponentActivity() {
                             .padding(24.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        Text("How OpenCircuit uses Health Connect", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+                        Text(
+                            "How OpenCircuit uses Health Connect",
+                            style = MaterialTheme.typography.headlineSmall,
+                            modifier = Modifier.semantics { heading() },
+                        )
                         PARAGRAPHS.forEach { Text(it, style = MaterialTheme.typography.bodyLarge) }
                     }
                 }

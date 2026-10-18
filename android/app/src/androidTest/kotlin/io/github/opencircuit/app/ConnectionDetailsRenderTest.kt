@@ -100,6 +100,7 @@ class ConnectionDetailsRenderTest {
         show(details(full))
 
         compose.onNodeWithText("Connection details").assertIsDisplayed()
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
         compose.onNodeWithText("RingConn Gen2-••••").assertIsDisplayed()
         compose.onNodeWithText("AA:••:••:••:••:••").assertIsDisplayed()
         compose.onNodeWithText("247").assertIsDisplayed()

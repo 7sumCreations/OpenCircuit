@@ -1,5 +1,8 @@
 package io.github.opencircuit.app
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -41,16 +44,20 @@ class OnboardingRenderTest {
         show()
 
         compose.onNodeWithText("Welcome to OpenCircuit").assertIsDisplayed()
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
         compose.onNodeWithText("Health Connect", substring = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("Page 1 of 4").assertIsDisplayed()
         next()
         compose.onNodeWithText("Getting started").assertIsDisplayed()
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
         compose.onNodeWithText("force-stop it", substring = true).assertIsDisplayed()
         next()
         compose.onNodeWithText("Permissions").assertIsDisplayed()
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
         compose.onNodeWithText("Nearby devices (Bluetooth)", substring = true).assertIsDisplayed()
         next()
         compose.onNodeWithText("Good to know").assertIsDisplayed()
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
         compose.onNodeWithContentDescription("Page 4 of 4").assertIsDisplayed()
         compose.onNodeWithText("not affiliated with, authorized, or endorsed by RingConn or JZ_Tech", substring = true)
             .performScrollTo().assertIsDisplayed()
