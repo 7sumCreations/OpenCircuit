@@ -202,12 +202,16 @@ also syncs the ring's history onto the phone (see "Syncing your ring"), and from
 it writes it to Health Connect (see "Health Connect"). Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
 and its SHA-256 checksum file, and the release notes give the signing certificate's digest.
 
-> **0.3.0 was built from `eca6a006`.** Four commits have landed on the branch since, three of them
+> **0.3.0 was built from `eca6a006`.** Nine commits have landed on the branch since, four of them
 > fixes: a settled-sleep write that read a long-standing install's night marks one night at a time
-> (slow on an install with years of history), a sleep record Health Connect refused clearing the
-> queued edit for good (a path the app cannot reach until it can edit a night), and a screen title
-> TalkBack could not read as a heading. They are in the code and ship with the next release; the
-> 0.3.0 APK does not contain them.
+> (slow on an install with years of history); a sleep record Health Connect refused clearing the
+> queued edit for good (a path the app cannot reach until it can edit a night); the guard that stops
+> a reading saved *while* a write is running from being counted as already written, which used to be
+> optional and is now required of every store — the phone checks for 0.3.0 were made before that
+> became mandatory, so this one rule rests on the app's tests rather than on those checks; and a
+> screen title TalkBack could not read as a heading. The other five are a documentation note, a
+> tidy-up, a reorganisation that changes nothing about how the app behaves, and two test additions.
+> They are in the code and ship with the next release; the 0.3.0 APK does not contain them.
 
 > **Not affiliated with, authorized, or endorsed by RingConn or JZ_Tech. Not a medical device.**
 > Readings are estimates from a consumer ring and are not for diagnosis or treatment.
