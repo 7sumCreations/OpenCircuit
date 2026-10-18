@@ -349,10 +349,13 @@ class HealthWriter(
          * night's end, so no settle margin); then the ids the night no longer has are deleted and the
          * naps the edited window absorbed are removed; the edit marks move from what was written; the
          * item is cleared only if it is still the one written. An edit of a night no longer stored,
-         * or with nothing in it, is dropped; so is one breaking a platform rule for good (counted as
-         * rejected), while one starting ahead of the clock waits. Without the sleep grant the queue waits (upstream drops
-         * it when sleep is denied). A queue this build cannot read is a failure of the type, and the
-         * rest of the flush goes on.
+         * or with nothing in it, is dropped; so is one this build's own rule table knows is broken
+         * for good (counted as rejected). A record the platform refuses for a rule the table does
+         * not know is counted and left queued: a refusal is not a finding that the edit can never
+         * be written, and the settled step never writes an edited night, so dropping it here would
+         * lose the night for good. One starting ahead of the clock waits. Without the sleep grant
+         * the queue waits (upstream drops it when sleep is denied). A queue this build cannot read
+         * is a failure of the type, and the rest of the flush goes on.
          */
         private suspend fun writeQueuedEdits(nights: List<StoredSleepNight>, granted: Set<HealthPermission>) {
             val type = RecordType.SLEEP_SESSION
@@ -397,9 +400,12 @@ class HealthWriter(
                         sleep.clearQueuedEdit(edit)
                     }
                     Sent.REFUSED_RECORD -> {
-                        // Refused by the platform for a rule our table missed: as above, dropped once.
+                        // The platform refused this record for a rule this table does not know — which
+                        // says nothing about whether the edit can ever be written. The settled step
+                        // leaves an edited night to its edit, so clearing it here would leave the
+                        // night out of Health Connect for good: the refusal is counted and the edit
+                        // stays queued, and the next write tries it again (PORTING D-289).
                         reject(type, 1)
-                        sleep.clearQueuedEdit(edit)
                     }
                     Sent.STOP -> return
                 }

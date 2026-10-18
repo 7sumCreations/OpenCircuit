@@ -147,22 +147,29 @@ class EditedNightReplaceTest {
         assertTrue(sleep.editsMarked.isEmpty())
     }
 
-    /** A rule the edit breaks for good can never be written: it is dropped and counted, not retried every flush. */
+    /**
+     * A refusal says only that this call held a record the platform would not take — not that the
+     * edit can never be written. The edit stays queued and is counted, so the night is tried again
+     * on the next write instead of being lost (the settled step leaves an edited night to its edit).
+     */
     @Test
-    fun anEditThePlatformRefusesIsDroppedAndCountedOnce() = runBlocking<Unit> {
+    fun anEditThePlatformRefusesStaysQueuedAndIsCountedEveryWrite() = runBlocking<Unit> {
         writtenUnedited()
         sleep.queue(edit())
         hc.failNext(RecordType.SLEEP_SESSION, HealthInvalidRecordException("stages overlap"))
 
         val first = writer().flush()
         assertEquals(1, first.rejected[RecordType.SLEEP_SESSION])
-        assertTrue(sleep.queued().isEmpty(), "dropped, not queued for ever")
+        assertEquals(listOf(edit()), sleep.queued(), "the edit the wearer made is not destroyed by a refusal")
 
+        hc.failNext(RecordType.SLEEP_SESSION, HealthInvalidRecordException("stages overlap"))
         val second = writer().flush()
-        assertEquals(null, second.rejected[RecordType.SLEEP_SESSION])
+        assertEquals(1, second.rejected[RecordType.SLEEP_SESSION], "tried again, and counted again")
+        assertEquals(listOf(edit()), sleep.queued())
         assertEquals(recorded.minOf { it.start }, sessions().single().start, "the night as it was, untouched")
         assertTrue(sleep.editsMarked.isEmpty())
     }
+
 
     /** Only an edit starting ahead of the clock waits: it is written once the clock passes it. */
     @Test
