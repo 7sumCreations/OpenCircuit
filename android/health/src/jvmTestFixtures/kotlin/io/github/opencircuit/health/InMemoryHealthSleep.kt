@@ -83,6 +83,12 @@ class InMemoryHealthSleep : HealthSleepStore {
         Unit
     }
 
+    /** As the store: every stored night of the range, each answered as [mirror] and [recordIds] answer it. */
+    override suspend fun nightMarks(from: Instant, until: Instant): Map<Instant, NightMarks> = synchronized(lock) {
+        nightList.filter { !it.night.isBefore(from) && it.night.isBefore(until) }
+            .associate { it.night to NightMarks(mirrors[it.night], idsOf(it.night)) }
+    }
+
     override suspend fun markNightWritten(segments: List<SleepSegment>) = synchronized(lock) {
         nightsMarked += segments
         segments.maxOfOrNull { it.end }?.let(::advance)

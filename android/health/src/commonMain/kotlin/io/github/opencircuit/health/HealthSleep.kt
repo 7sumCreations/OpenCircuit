@@ -41,6 +41,13 @@ data class StoredNapToWrite(
 /** What was last written for an unedited night: the signature of its staging and its span. */
 data class NightMirror(val signature: String, val spanStart: Instant, val spanEnd: Instant)
 
+/**
+ * One stored night's marks, read in a batch: [mirror] and [recordIds] together, each answering exactly
+ * as the single-night member answers it — [mirror] null when nothing was written or it cannot be read,
+ * [recordIds] empty when none and null when the stored list cannot be read.
+ */
+data class NightMarks(val mirror: NightMirror?, val recordIds: List<String>?)
+
 /** The queue of edited nights is stored in a form this build cannot read; it was left as stored. */
 class UnreadableEditQueueException(message: String) : Exception(message)
 
@@ -63,6 +70,14 @@ interface HealthSleepStore {
 
     /** Keeps [ids] as the record ids written for [night]. */
     suspend fun setRecordIds(night: Instant, ids: List<String>)
+
+    /**
+     * [mirror] and [recordIds] for every stored night `from <= night < until`, in one read: each night
+     * of the range has an entry, and it answers exactly what the single-night members answer that
+     * night — a night nothing is kept for answers a null mirror and no ids. The settled sleep write
+     * reads its whole backlog this way instead of two reads per stored night.
+     */
+    suspend fun nightMarks(from: Instant, until: Instant): Map<Instant, NightMarks>
 
     /** After a settled night's [segments] were accepted: the sleep mark moves to their end and an edit they cover is marked covered. */
     suspend fun markNightWritten(segments: List<SleepSegment>)
@@ -99,6 +114,7 @@ interface HealthSleepStore {
             override suspend fun setMirror(night: Instant, mirror: NightMirror) = Unit
             override suspend fun recordIds(night: Instant): List<String> = emptyList()
             override suspend fun setRecordIds(night: Instant, ids: List<String>) = Unit
+            override suspend fun nightMarks(from: Instant, until: Instant): Map<Instant, NightMarks> = emptyMap()
             override suspend fun markNightWritten(segments: List<SleepSegment>) = Unit
             override suspend fun markEditWritten(night: Instant, segments: List<SleepSegment>, recordedEnd: Instant) = Unit
             override suspend fun queuedEdits(): List<QueuedNightEdit> = emptyList()

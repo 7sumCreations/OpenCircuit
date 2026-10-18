@@ -128,6 +128,14 @@ class SleepStore internal constructor(
         db.withWriteTransaction { health.setMirroredNight(night.toStoredMillis(), record, now.toStoredMillis()) }
 
     /**
+     * [sleepHealthRecordIds] and [mirroredNight] for every stored night keyed `from <= night < until`,
+     * in one read transaction: the settled sleep write reads the marks of its whole backlog this way
+     * instead of opening two reads per stored night on every flush.
+     */
+    suspend fun sleepHealthMarks(from: Instant, until: Instant): Map<Instant, NightHealthMarks> =
+        db.withReadTransaction { health.marks(from.toStoredMillis(), until.toStoredMillis()) }
+
+    /**
      * The edited nights' extensions Health Connect has not received (upstream
      * `pendingSleepEditHealthWrites`): offered only once the sleep mark covers the night's recorded
      * end. Moves nothing.

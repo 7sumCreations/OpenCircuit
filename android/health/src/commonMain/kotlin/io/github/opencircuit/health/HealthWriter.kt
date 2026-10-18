@@ -318,33 +318,47 @@ class HealthWriter(
          */
         private suspend fun writeSettledNights(nights: List<StoredSleepNight>, granted: Set<HealthPermission>) {
             val type = RecordType.SLEEP_SESSION
-            class Settled(val night: StoredSleepNight, val published: List<SleepSegment>, val id: String, val signature: String)
-            val toWrite = nights.mapNotNull { n ->
-                if (n.edited) return@mapNotNull null
-                val published = n.timeline.healthPublishable
-                if (published.isEmpty() || published.containsAssertedTime) return@mapNotNull null
-                if (!SleepHealthGate.isReadyToWrite(published.maxOf { it.end }, now, finalized = false)) return@mapNotNull null
-                val id = RecordIds.sleepNight(n.key)
-                val signature = SleepSignature.of(n.timeline)
-                if (sleep.mirror(n.night)?.signature == signature && sleep.recordIds(n.night) == listOf(id)) return@mapNotNull null
-                Settled(n, published, id, signature)
-            }
+            val candidates = nights.mapNotNull { settledCandidate(it) }
+            if (candidates.isEmpty()) return
+            // Every candidate's marks in one read. Read per night, this step cost two reads for every
+            // night the install has ever stored, on every flush, for the life of the install.
+            val marks = sleep.nightMarks(candidates.minOf { it.night.night }, candidates.maxOf { it.night.night }.plusMillis(1))
+            val toWrite = candidates.filterNot { alreadyMirrored(marks[it.night.night], it.signature, it.id) }
             if (toWrite.isEmpty()) return
             if (type.permission !in granted) {
                 notGranted += type
                 return
             }
             val v = version()
-            val items = toWrite.mapNotNull { s ->
-                val meta = RecordMeta(s.id, v, RecordingMethod.AUTOMATICALLY_RECORDED, device())
-                val session = SleepMapping.session(s.published, SleepMapping.pathOf(s.published), meta, zone(), null) ?: return@mapNotNull null
-                WriteItem(session, emptyList()) {
-                    sleep.setMirror(s.night.night, NightMirror(s.signature, session.start, session.end))
-                    replaceIds(type, s.night.night, s.id)
-                    sleep.markNightWritten(s.published)
-                }
+            writeItems(type, toWrite.mapNotNull { settledItem(type, it, v) })
+        }
+
+        /** The night the settled step writes, or null: an edited night (its edit owns it), one carrying the wearer's own time, one with nothing publishable, or one that has not settled. */
+        private fun settledCandidate(n: StoredSleepNight): Settled? {
+            if (n.edited) return null
+            val published = n.timeline.healthPublishable
+            if (published.isEmpty() || published.containsAssertedTime) return null
+            if (!SleepHealthGate.isReadyToWrite(published.maxOf { it.end }, now, finalized = false)) return null
+            return Settled(n, published, RecordIds.sleepNight(n.key), SleepSignature.of(n.timeline))
+        }
+
+        /**
+         * Whether Health Connect already holds [id] as exactly [signature]: the night needs no write.
+         * A night the store names no marks for is a night nothing was written for, the same answer the
+         * single-night reads give it; an unreadable id list is not the night's own id.
+         */
+        private fun alreadyMirrored(marks: NightMarks?, signature: String, id: String): Boolean =
+            marks?.mirror?.signature == signature && marks?.recordIds == listOf(id)
+
+        /** The settled night's session, and the marks it earns once Health Connect accepts it; null when the staging gives no session. */
+        private suspend fun settledItem(type: RecordType, s: Settled, v: Long): WriteItem? {
+            val meta = RecordMeta(s.id, v, RecordingMethod.AUTOMATICALLY_RECORDED, device())
+            val session = SleepMapping.session(s.published, SleepMapping.pathOf(s.published), meta, zone(), null) ?: return null
+            return WriteItem(session, emptyList()) {
+                sleep.setMirror(s.night.night, NightMirror(s.signature, session.start, session.end))
+                replaceIds(type, s.night.night, s.id)
+                sleep.markNightWritten(s.published)
             }
-            writeItems(type, items)
         }
 
         /**
@@ -758,6 +772,9 @@ class HealthWriter(
             return Sent.STOP
         }
     }
+
+    /** A stored night the settled step would write: its publishable staging, its id, its staging's signature. */
+    private data class Settled(val night: StoredSleepNight, val published: List<SleepSegment>, val id: String, val signature: String)
 
     /** How one call ended, for the writer. */
     private enum class Sent { ACCEPTED, REFUSED_RECORD, STOP }

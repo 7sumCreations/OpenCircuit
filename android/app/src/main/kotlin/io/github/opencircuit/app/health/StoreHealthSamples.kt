@@ -5,6 +5,7 @@ import io.github.opencircuit.health.HealthActivityStore
 import io.github.opencircuit.health.HealthFailureStore
 import io.github.opencircuit.health.HealthSampleStore
 import io.github.opencircuit.health.HealthSleepStore
+import io.github.opencircuit.health.NightMarks
 import io.github.opencircuit.health.NightMirror
 import io.github.opencircuit.health.NightWindow
 import io.github.opencircuit.health.QueuedNightEdit
@@ -127,6 +128,11 @@ class StoreHealthSleep(
     override suspend fun recordIds(night: Instant): List<String>? = sleep().sleepHealthRecordIds(night)
 
     override suspend fun setRecordIds(night: Instant, ids: List<String>) = sleep().setSleepHealthRecordIds(night, ids, now())
+
+    override suspend fun nightMarks(from: Instant, until: Instant): Map<Instant, NightMarks> =
+        sleep().sleepHealthMarks(from, until).mapValues { (_, stored) ->
+            NightMarks(stored.mirror?.let { NightMirror(it.signature, it.spanStart, it.spanEnd) }, stored.recordIds)
+        }
 
     override suspend fun markNightWritten(segments: List<SleepSegment>) {
         LocalStore(database()).markSleepWritten(segments)

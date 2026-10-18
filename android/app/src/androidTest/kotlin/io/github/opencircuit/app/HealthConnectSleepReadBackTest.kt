@@ -11,6 +11,7 @@ import io.github.opencircuit.health.HealthSleepStore
 import io.github.opencircuit.health.HealthWriter
 import io.github.opencircuit.health.JetpackHealthConnect
 import io.github.opencircuit.health.NightMirror
+import io.github.opencircuit.health.NightMarks
 import io.github.opencircuit.health.NightWindow
 import io.github.opencircuit.health.QueuedNightEdit
 import io.github.opencircuit.health.RecordType
@@ -107,6 +108,11 @@ class HealthConnectSleepReadBackTest {
         override suspend fun setMirror(night: Instant, mirror: NightMirror) { mirrors[night] = mirror }
         override suspend fun recordIds(night: Instant) = recordIds[night].orEmpty()
         override suspend fun setRecordIds(night: Instant, ids: List<String>) { recordIds[night] = ids }
+        override suspend fun nightMarks(from: Instant, until: Instant): Map<Instant, NightMarks> {
+            val key = this.key
+            if (key.isBefore(from) || !key.isBefore(until)) return emptyMap()
+            return mapOf(key to NightMarks(mirrors[key], recordIds[key].orEmpty()))
+        }
         override suspend fun markNightWritten(segments: List<SleepSegment>) = Unit
         override suspend fun markEditWritten(night: Instant, segments: List<SleepSegment>, recordedEnd: Instant) = Unit
         override suspend fun queuedEdits() = queue.toList()

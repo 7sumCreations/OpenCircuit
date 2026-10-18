@@ -40,6 +40,13 @@ data class MirroredNight(val signature: String, val spanStart: Instant, val span
  */
 data class PendingSleepEditHealthWrite(val night: Instant, val segments: List<SleepSegment>)
 
+/**
+ * One stored night's Health Connect marks read in a batch: what was last written for it, and the ids
+ * written for it. Each answers exactly as [SleepHealthBookkeeping.mirroredNight] and
+ * [SleepHealthBookkeeping.recordIds] answer a single night.
+ */
+data class NightHealthMarks(val mirror: MirroredNight?, val recordIds: List<String>?)
+
 /** The reads and writes behind [SleepStore]'s Health bookkeeping, inside the caller's transaction. */
 internal class SleepHealthBookkeeping(private val sleepDao: SleepDao, private val kv: KvDao) {
 
@@ -62,6 +69,32 @@ internal class SleepHealthBookkeeping(private val sleepDao: SleepDao, private va
         val stored = MirroredNight(record.signature, record.spanStart.toStoredMillis(), record.spanEnd.toStoredMillis())
         kv.upsert(StoreKvEntity(NightOverlays.key(MIRROR, night), MirroredNightCodec.encode(stored), now))
     }
+
+    /**
+     * [recordIds] and [mirroredNight] for every stored night keyed `from <= night < until`, inside the
+     * caller's transaction. Each overlay prefix is read with one range scan instead of one read per
+     * night, so a write that looks at every stored night pays two queries for the whole store rather
+     * than two transactions per night. Every answer is what the single-night read gives that night: a
+     * night nothing is kept for is a null mirror and no ids, and a kept value this build cannot read
+     * is null.
+     */
+    suspend fun marks(from: Instant, until: Instant): Map<Instant, NightHealthMarks> {
+        val mirrors = kv.range(MIRROR, MIRROR + KEY_END).associate { it.key to it.value }
+        val ids = kv.range(RECORD_IDS, RECORD_IDS + KEY_END).associate { it.key to it.value }
+        return sleepDao.summaries(from, until).associate { row ->
+            row.night to NightHealthMarks(
+                mirror = storedMirror(mirrors[NightOverlays.key(MIRROR, row.night)]),
+                recordIds = storedRecordIds(ids[NightOverlays.key(RECORD_IDS, row.night)]),
+            )
+        }
+    }
+
+    /** [mirroredNight]'s answer for a key already read: null when it is absent or cannot be read. */
+    private fun storedMirror(stored: String?): MirroredNight? = stored?.let { MirroredNightCodec.decode(it).valueOrNull() }
+
+    /** [recordIds]'s answer for a key already read: empty when the key is absent, null when its value cannot be read. */
+    private fun storedRecordIds(stored: String?): List<String>? =
+        if (stored == null) emptyList() else RecordIdListCodec.decode(stored).valueOrNull()
 
     /** Upstream `pendingSleepEditHealthWrites` (:2728-2789), over [nights] (every stored night, as values). */
     suspend fun pendingEditWrites(nights: List<StoredNight>): List<PendingSleepEditHealthWrite> {
@@ -154,6 +187,9 @@ internal class SleepHealthBookkeeping(private val sleepDao: SleepDao, private va
 
         /** What was last written for an unedited night (NightRekey moves it). */
         const val MIRROR = "sleep.mirror.night"
+
+        /** Sorts after every night-key suffix (`:` follows `.` and the digits), so `prefix .. prefix + KEY_END` is the whole prefix. */
+        const val KEY_END = ":"
 
         val LEADING: String = NightRekey.WATERMARK_PREFIXES[0]
         val LEADING_ASLEEP: String = NightRekey.WATERMARK_PREFIXES[1]
