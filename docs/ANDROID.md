@@ -327,6 +327,12 @@ Connect is not available" means Android reports it missing or disabled, or the a
 profile or Private Space. Writing the same data again never makes duplicates. What goes where:
 [`HEALTH_CONNECT_MAPPING.md`](HEALTH_CONNECT_MAPPING.md).
 
+> **A Health Connect quirk, not a bug in OpenCircuit.** Health Connect's own setup banner can say
+> "no compatible apps installed" even though OpenCircuit is connected and writing. That banner lists
+> apps that *read* Health Connect; OpenCircuit only *writes*, so it does not appear there. Its data
+> is all present under Health Connect → **Data and access**, and in any app that reads from Health
+> Connect. If the banner worries you, check Data and access — that is where the ring's data shows.
+
 **Connection details.** Expand the card to see the ring's facts (firmware, address type, ATT MTU,
 whether it is history-safe) and **Link diagnostics**: the last steps of the connection with times,
 the pairing prompt, and a **Last measure** row with what the ring answered to the last live
