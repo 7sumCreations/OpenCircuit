@@ -182,135 +182,157 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
             // Our own fault, not a platform rule: a failed call (shown on the card), never a refused record.
             if (record.type != type) throw HealthCallFailedException("a ${record.type} record in a $type call")
             return when (record) {
-                is HeartRateSeries -> HeartRateRecord(
-                    startTime = record.start,
-                    startZoneOffset = record.startZoneOffset,
-                    endTime = record.end,
-                    endZoneOffset = record.endZoneOffset,
-                    samples = record.samples.map { HeartRateRecord.Sample(time = it.time, beatsPerMinute = it.beatsPerMinute) },
-                    metadata = metadata(record.meta),
-                )
+                is HeartRateSeries -> toJetpack(record)
                 is HeartRateVariabilityRmssd -> HeartRateVariabilityRmssdRecord(record.time, record.zoneOffset, record.millis, metadata(record.meta))
                 is OxygenSaturation -> OxygenSaturationRecord(record.time, record.zoneOffset, Percentage(record.percent), metadata(record.meta))
                 is RespiratoryRate -> RespiratoryRateRecord(record.time, record.zoneOffset, record.breathsPerMinute, metadata(record.meta))
-                is SkinTemperature -> SkinTemperatureRecord(
-                    startTime = record.start,
-                    startZoneOffset = record.startZoneOffset,
-                    endTime = record.end,
-                    endZoneOffset = record.endZoneOffset,
-                    metadata = metadata(record.meta),
-                    deltas = record.deltas.map { SkinTemperatureRecord.Delta(it.time, TemperatureDelta.celsius(it.deltaCelsius)) },
-                    baseline = record.baselineCelsius?.let { Temperature.celsius(it) },
-                    measurementLocation = when (record.location) {
-                        SkinTemperatureLocation.UNKNOWN -> SkinTemperatureRecord.MEASUREMENT_LOCATION_UNKNOWN
-                        SkinTemperatureLocation.FINGER -> SkinTemperatureRecord.MEASUREMENT_LOCATION_FINGER
-                        SkinTemperatureLocation.TOE -> SkinTemperatureRecord.MEASUREMENT_LOCATION_TOE
-                        SkinTemperatureLocation.WRIST -> SkinTemperatureRecord.MEASUREMENT_LOCATION_WRIST
-                    },
-                )
+                is SkinTemperature -> toJetpack(record)
                 // Our stage kinds carry the platform's own numbers (SleepSessionRecord.STAGE_TYPE_*).
-                is SleepSession -> SleepSessionRecord(
-                    startTime = record.start,
-                    startZoneOffset = record.startZoneOffset,
-                    endTime = record.end,
-                    endZoneOffset = record.endZoneOffset,
-                    metadata = metadata(record.meta),
-                    title = record.title,
-                    notes = record.notes,
-                    stages = record.stages.map { SleepSessionRecord.Stage(startTime = it.start, endTime = it.end, stage = it.stage.platformCode) },
-                )
-                is Steps -> StepsRecord(
-                    startTime = record.start,
-                    startZoneOffset = record.startZoneOffset,
-                    endTime = record.end,
-                    endZoneOffset = record.endZoneOffset,
-                    count = record.count,
-                    metadata = metadata(record.meta),
-                )
-                is Distance -> DistanceRecord(
-                    startTime = record.start,
-                    startZoneOffset = record.startZoneOffset,
-                    endTime = record.end,
-                    endZoneOffset = record.endZoneOffset,
-                    distance = Length.meters(record.meters),
-                    metadata = metadata(record.meta),
-                )
-                is ActiveCaloriesBurned -> ActiveCaloriesBurnedRecord(
-                    startTime = record.start,
-                    startZoneOffset = record.startZoneOffset,
-                    endTime = record.end,
-                    endZoneOffset = record.endZoneOffset,
-                    energy = Energy.kilocalories(record.kilocalories),
-                    metadata = metadata(record.meta),
-                )
+                is SleepSession -> toJetpack(record)
+                is Steps -> toJetpack(record)
+                is Distance -> toJetpack(record)
+                is ActiveCaloriesBurned -> toJetpack(record)
                 is BasalMetabolicRate -> BasalMetabolicRateRecord(record.time, record.zoneOffset, Power.kilocaloriesPerDay(record.kilocaloriesPerDay), metadata(record.meta))
                 is RestingHeartRate -> RestingHeartRateRecord(record.time, record.zoneOffset, record.beatsPerMinute, metadata(record.meta))
                 // Our flow levels carry the platform's own numbers (MenstruationFlowRecord.FLOW_*).
                 is MenstruationFlow -> MenstruationFlowRecord(time = record.time, zoneOffset = record.zoneOffset, metadata = metadata(record.meta), flow = record.flow.platformCode)
-                is MenstruationPeriod -> MenstruationPeriodRecord(
-                    startTime = record.start,
-                    startZoneOffset = record.startZoneOffset,
-                    endTime = record.end,
-                    endZoneOffset = record.endZoneOffset,
-                    metadata = metadata(record.meta),
-                )
+                is MenstruationPeriod -> toJetpack(record)
             }
         }
 
+        private fun toJetpack(record: HeartRateSeries): HeartRateRecord = HeartRateRecord(
+            startTime = record.start,
+            startZoneOffset = record.startZoneOffset,
+            endTime = record.end,
+            endZoneOffset = record.endZoneOffset,
+            samples = record.samples.map { HeartRateRecord.Sample(time = it.time, beatsPerMinute = it.beatsPerMinute) },
+            metadata = metadata(record.meta),
+        )
+
+        private fun toJetpack(record: SkinTemperature): SkinTemperatureRecord = SkinTemperatureRecord(
+            startTime = record.start,
+            startZoneOffset = record.startZoneOffset,
+            endTime = record.end,
+            endZoneOffset = record.endZoneOffset,
+            metadata = metadata(record.meta),
+            deltas = record.deltas.map { SkinTemperatureRecord.Delta(it.time, TemperatureDelta.celsius(it.deltaCelsius)) },
+            baseline = record.baselineCelsius?.let { Temperature.celsius(it) },
+            measurementLocation = when (record.location) {
+                SkinTemperatureLocation.UNKNOWN -> SkinTemperatureRecord.MEASUREMENT_LOCATION_UNKNOWN
+                SkinTemperatureLocation.FINGER -> SkinTemperatureRecord.MEASUREMENT_LOCATION_FINGER
+                SkinTemperatureLocation.TOE -> SkinTemperatureRecord.MEASUREMENT_LOCATION_TOE
+                SkinTemperatureLocation.WRIST -> SkinTemperatureRecord.MEASUREMENT_LOCATION_WRIST
+            },
+        )
+
+        private fun toJetpack(record: SleepSession): SleepSessionRecord = SleepSessionRecord(
+            startTime = record.start,
+            startZoneOffset = record.startZoneOffset,
+            endTime = record.end,
+            endZoneOffset = record.endZoneOffset,
+            metadata = metadata(record.meta),
+            title = record.title,
+            notes = record.notes,
+            stages = record.stages.map { SleepSessionRecord.Stage(startTime = it.start, endTime = it.end, stage = it.stage.platformCode) },
+        )
+
+        private fun toJetpack(record: Steps): StepsRecord = StepsRecord(
+            startTime = record.start,
+            startZoneOffset = record.startZoneOffset,
+            endTime = record.end,
+            endZoneOffset = record.endZoneOffset,
+            count = record.count,
+            metadata = metadata(record.meta),
+        )
+
+        private fun toJetpack(record: Distance): DistanceRecord = DistanceRecord(
+            startTime = record.start,
+            startZoneOffset = record.startZoneOffset,
+            endTime = record.end,
+            endZoneOffset = record.endZoneOffset,
+            distance = Length.meters(record.meters),
+            metadata = metadata(record.meta),
+        )
+
+        private fun toJetpack(record: ActiveCaloriesBurned): ActiveCaloriesBurnedRecord = ActiveCaloriesBurnedRecord(
+            startTime = record.start,
+            startZoneOffset = record.startZoneOffset,
+            endTime = record.end,
+            endZoneOffset = record.endZoneOffset,
+            energy = Energy.kilocalories(record.kilocalories),
+            metadata = metadata(record.meta),
+        )
+
+        private fun toJetpack(record: MenstruationPeriod): MenstruationPeriodRecord = MenstruationPeriodRecord(
+            startTime = record.start,
+            startZoneOffset = record.startZoneOffset,
+            endTime = record.end,
+            endZoneOffset = record.endZoneOffset,
+            metadata = metadata(record.meta),
+        )
+
         private fun fromJetpack(type: RecordType, record: Record): HealthRecord = when (record) {
-            is HeartRateRecord -> HeartRateSeries(
-                start = record.startTime,
-                startZoneOffset = requireNotNull(record.startZoneOffset) { "every record the app writes carries its zone offsets" },
-                end = record.endTime,
-                endZoneOffset = requireNotNull(record.endZoneOffset) { "every record the app writes carries its zone offsets" },
-                samples = record.samples.map { HeartRateSample(it.time, it.beatsPerMinute) },
-                meta = metaOf(record.metadata),
-            )
+            is HeartRateRecord -> fromJetpack(record)
             is HeartRateVariabilityRmssdRecord -> HeartRateVariabilityRmssd(record.time, offsetOf(record.zoneOffset), record.heartRateVariabilityMillis, metaOf(record.metadata))
             is OxygenSaturationRecord -> OxygenSaturation(record.time, offsetOf(record.zoneOffset), record.percentage.value, metaOf(record.metadata))
             is RespiratoryRateRecord -> RespiratoryRate(record.time, offsetOf(record.zoneOffset), record.rate, metaOf(record.metadata))
-            is SkinTemperatureRecord -> SkinTemperature(
-                start = record.startTime,
-                startZoneOffset = offsetOf(record.startZoneOffset),
-                end = record.endTime,
-                endZoneOffset = offsetOf(record.endZoneOffset),
-                baselineCelsius = record.baseline?.inCelsius,
-                deltas = record.deltas.map { SkinTemperatureDelta(it.time, it.delta.inCelsius) },
-                location = when (record.measurementLocation) {
-                    SkinTemperatureRecord.MEASUREMENT_LOCATION_FINGER -> SkinTemperatureLocation.FINGER
-                    SkinTemperatureRecord.MEASUREMENT_LOCATION_TOE -> SkinTemperatureLocation.TOE
-                    SkinTemperatureRecord.MEASUREMENT_LOCATION_WRIST -> SkinTemperatureLocation.WRIST
-                    else -> SkinTemperatureLocation.UNKNOWN
-                },
-                meta = metaOf(record.metadata),
-            )
-            is SleepSessionRecord -> SleepSession(
-                start = record.startTime,
-                startZoneOffset = offsetOf(record.startZoneOffset),
-                end = record.endTime,
-                endZoneOffset = offsetOf(record.endZoneOffset),
-                title = record.title,
-                notes = record.notes,
-                stages = record.stages.map { s ->
-                    SleepStage(s.startTime, s.endTime, SleepStageType.entries.firstOrNull { it.platformCode == s.stage } ?: SleepStageType.UNKNOWN)
-                },
-                meta = metaOf(record.metadata),
-            )
+            is SkinTemperatureRecord -> fromJetpack(record)
+            is SleepSessionRecord -> fromJetpack(record)
             is StepsRecord -> Steps(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), record.count, metaOf(record.metadata))
             is DistanceRecord -> Distance(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), record.distance.inMeters, metaOf(record.metadata))
             is ActiveCaloriesBurnedRecord ->
                 ActiveCaloriesBurned(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), record.energy.inKilocalories, metaOf(record.metadata))
             is BasalMetabolicRateRecord -> BasalMetabolicRate(record.time, offsetOf(record.zoneOffset), record.basalMetabolicRate.inKilocaloriesPerDay, metaOf(record.metadata))
             is RestingHeartRateRecord -> RestingHeartRate(record.time, offsetOf(record.zoneOffset), record.beatsPerMinute, metaOf(record.metadata))
-            is MenstruationFlowRecord -> MenstruationFlow(
-                record.time,
-                offsetOf(record.zoneOffset),
-                MenstruationFlowLevel.entries.firstOrNull { it.platformCode == record.flow } ?: MenstruationFlowLevel.UNKNOWN,
-                metaOf(record.metadata),
-            )
+            is MenstruationFlowRecord -> fromJetpack(record)
             is MenstruationPeriodRecord -> MenstruationPeriod(record.startTime, offsetOf(record.startZoneOffset), record.endTime, offsetOf(record.endZoneOffset), metaOf(record.metadata))
             else -> throw HealthCallFailedException("$type records are not read back by this version")
         }
+
+        private fun fromJetpack(record: HeartRateRecord): HeartRateSeries = HeartRateSeries(
+            start = record.startTime,
+            startZoneOffset = requireNotNull(record.startZoneOffset) { "every record the app writes carries its zone offsets" },
+            end = record.endTime,
+            endZoneOffset = requireNotNull(record.endZoneOffset) { "every record the app writes carries its zone offsets" },
+            samples = record.samples.map { HeartRateSample(it.time, it.beatsPerMinute) },
+            meta = metaOf(record.metadata),
+        )
+
+        private fun fromJetpack(record: SkinTemperatureRecord): SkinTemperature = SkinTemperature(
+            start = record.startTime,
+            startZoneOffset = offsetOf(record.startZoneOffset),
+            end = record.endTime,
+            endZoneOffset = offsetOf(record.endZoneOffset),
+            baselineCelsius = record.baseline?.inCelsius,
+            deltas = record.deltas.map { SkinTemperatureDelta(it.time, it.delta.inCelsius) },
+            location = when (record.measurementLocation) {
+                SkinTemperatureRecord.MEASUREMENT_LOCATION_FINGER -> SkinTemperatureLocation.FINGER
+                SkinTemperatureRecord.MEASUREMENT_LOCATION_TOE -> SkinTemperatureLocation.TOE
+                SkinTemperatureRecord.MEASUREMENT_LOCATION_WRIST -> SkinTemperatureLocation.WRIST
+                else -> SkinTemperatureLocation.UNKNOWN
+            },
+            meta = metaOf(record.metadata),
+        )
+
+        private fun fromJetpack(record: SleepSessionRecord): SleepSession = SleepSession(
+            start = record.startTime,
+            startZoneOffset = offsetOf(record.startZoneOffset),
+            end = record.endTime,
+            endZoneOffset = offsetOf(record.endZoneOffset),
+            title = record.title,
+            notes = record.notes,
+            stages = record.stages.map { s ->
+                SleepStage(s.startTime, s.endTime, SleepStageType.entries.firstOrNull { it.platformCode == s.stage } ?: SleepStageType.UNKNOWN)
+            },
+            meta = metaOf(record.metadata),
+        )
+
+        private fun fromJetpack(record: MenstruationFlowRecord): MenstruationFlow = MenstruationFlow(
+            record.time,
+            offsetOf(record.zoneOffset),
+            MenstruationFlowLevel.entries.firstOrNull { it.platformCode == record.flow } ?: MenstruationFlowLevel.UNKNOWN,
+            metaOf(record.metadata),
+        )
 
         private fun offsetOf(offset: ZoneOffset?): ZoneOffset = requireNotNull(offset) { "every record the app writes carries its zone offsets" }
 

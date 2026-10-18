@@ -3,6 +3,12 @@ package io.github.opencircuit.health
 import java.time.Instant
 
 /**
+ * One day in whole seconds. Shared by the writer's day windows and this table's day-long rules, so
+ * the length of a day has one definition in the module.
+ */
+internal const val SECONDS_PER_DAY = 86_400L
+
+/**
  * The record rules Health Connect applies on the phone, checked before a record is sent.
  *
  * On Android 14 and later a Jetpack record checks itself against the PLATFORM's rules when it is
@@ -73,8 +79,6 @@ object HealthRanges {
         val kept = records.filter { violation(it, now) == null }
         return Checked(kept, records.size - kept.size)
     }
-
-    private const val SECONDS_PER_DAY = 86_400L
 
     private fun heartRateSeries(r: HeartRateSeries): String? {
         if (r.samples.isEmpty()) return "a heart-rate series needs at least one sample"

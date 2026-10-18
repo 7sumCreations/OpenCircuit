@@ -363,17 +363,8 @@ class HealthWriter(
 
         /**
          * Upstream `reconcileEditedNightSleepLocked` (HKW:1981-2091) for each queued edit, oldest
-         * night first: the edited picture is written as the night's record (the wearer's save is the
-         * night's end, so no settle margin); then the ids the night no longer has are deleted and the
-         * naps the edited window absorbed are removed; the edit marks move from what was written; the
-         * item is cleared only if it is still the one written. An edit of a night no longer stored,
-         * or with nothing in it, is dropped; so is one this build's own rule table knows is broken
-         * for good (counted as rejected). A record the platform refuses for a rule the table does
-         * not know is counted and left queued: a refusal is not a finding that the edit can never
-         * be written, and the settled step never writes an edited night, so dropping it here would
-         * lose the night for good. One starting ahead of the clock waits. Without the sleep grant
-         * the queue waits (upstream drops it when sleep is denied). A queue this build cannot read
-         * is a failure of the type, and the rest of the flush goes on.
+         * night first: one edit at a time ([writeQueuedEdit]) until one of them stops the step. A queue
+         * this build cannot read is a failure of the type, and the rest of the flush goes on.
          */
         private suspend fun writeQueuedEdits(nights: List<StoredSleepNight>, granted: Set<HealthPermission>) {
             val type = RecordType.SLEEP_SESSION
@@ -385,48 +376,65 @@ class HealthWriter(
             }
             for (edit in edits) {
                 if (catchingUp) return
-                val night = nights.firstOrNull { it.night == edit.night }
-                val published = edit.segments.healthPublishable
-                if (night == null || published.isEmpty()) {
+                if (!writeQueuedEdit(type, edit, nights, granted)) return
+            }
+        }
+
+        /**
+         * One queued edit of [edit]'s night: the edited picture is written as the night's record (the
+         * wearer's save is the night's end, so no settle margin); then the ids the night no longer has
+         * are deleted and the naps the edited window absorbed are removed; the edit marks move from what
+         * was written; the item is cleared only if it is still the one written. An edit of a night no
+         * longer stored, or with nothing in it, is dropped; so is one this build's own rule table knows
+         * is broken for good (counted as rejected). A record the platform refuses for a rule the table
+         * does not know is counted and left queued: a refusal is not a finding that the edit can never
+         * be written, and the settled step never writes an edited night, so dropping it here would lose
+         * the night for good. One starting ahead of the clock waits. Without the sleep grant the queue
+         * waits (upstream drops it when sleep is denied). False when the step must stop here (the grant
+         * is missing, or a call asked to be made later); true when the next edit may go on.
+         */
+        private suspend fun writeQueuedEdit(type: RecordType, edit: QueuedNightEdit, nights: List<StoredSleepNight>, granted: Set<HealthPermission>): Boolean {
+            val night = nights.firstOrNull { it.night == edit.night }
+            val published = edit.segments.healthPublishable
+            if (night == null || published.isEmpty()) {
+                sleep.clearQueuedEdit(edit)
+                return true
+            }
+            if (type.permission !in granted) {
+                notGranted += type
+                return false
+            }
+            val id = RecordIds.sleepNight(night.key)
+            val meta = RecordMeta(id, version(), RecordingMethod.AUTOMATICALLY_RECORDED, device())
+            val session = SleepMapping.session(published, SleepMapping.pathOf(published), meta, zone(), null)
+            if (session == null) {
+                sleep.clearQueuedEdit(edit)
+                return true
+            }
+            if (session.start.isAfter(now)) return true // kept queued: written once the clock passes its start
+            if (HealthRanges.violation(session, now) != null) {
+                // A rule broken for good: the edit can never be written, so it is dropped, counted once.
+                reject(type, 1)
+                sleep.clearQueuedEdit(edit)
+                return true
+            }
+            return when (send(type, listOf(session))) {
+                Sent.ACCEPTED -> {
+                    written[type] = (written[type] ?: 0) + 1
+                    replaceIds(type, night.night, id)
+                    sweepAbsorbedNaps(type, edit)
+                    sleep.markEditWritten(night.night, published, night.recordedEnd)
                     sleep.clearQueuedEdit(edit)
-                    continue
+                    true
                 }
-                if (type.permission !in granted) {
-                    notGranted += type
-                    return
-                }
-                val id = RecordIds.sleepNight(night.key)
-                val meta = RecordMeta(id, version(), RecordingMethod.AUTOMATICALLY_RECORDED, device())
-                val session = SleepMapping.session(published, SleepMapping.pathOf(published), meta, zone(), null)
-                if (session == null) {
-                    sleep.clearQueuedEdit(edit)
-                    continue
-                }
-                if (session.start.isAfter(now)) continue // kept queued: written once the clock passes its start
-                if (HealthRanges.violation(session, now) != null) {
-                    // A rule broken for good: the edit can never be written, so it is dropped, counted once.
+                // The platform refused this record for a rule this table does not know, which says nothing
+                // about whether the edit can ever be written: the settled step never writes an edited
+                // night, so clearing it here would leave it out of Health Connect for good (PORTING D-289).
+                Sent.REFUSED_RECORD -> {
                     reject(type, 1)
-                    sleep.clearQueuedEdit(edit)
-                    continue
+                    true
                 }
-                when (send(type, listOf(session))) {
-                    Sent.ACCEPTED -> {
-                        written[type] = (written[type] ?: 0) + 1
-                        replaceIds(type, night.night, id)
-                        sweepAbsorbedNaps(type, edit)
-                        sleep.markEditWritten(night.night, published, night.recordedEnd)
-                        sleep.clearQueuedEdit(edit)
-                    }
-                    Sent.REFUSED_RECORD -> {
-                        // The platform refused this record for a rule this table does not know — which
-                        // says nothing about whether the edit can ever be written. The settled step
-                        // leaves an edited night to its edit, so clearing it here would leave the
-                        // night out of Health Connect for good: the refusal is counted and the edit
-                        // stays queued, and the next write tries it again (PORTING D-289).
-                        reject(type, 1)
-                    }
-                    Sent.STOP -> return
-                }
+                Sent.STOP -> false
             }
         }
 
@@ -788,7 +796,6 @@ class HealthWriter(
         const val MAX_CALLS_PER_FLUSH = 300
 
         private const val SECONDS_PER_HOUR = 3_600L
-        private const val SECONDS_PER_DAY = 86_400L
 
         /** A nap's session title. */
         const val NAP_TITLE = "Nap"

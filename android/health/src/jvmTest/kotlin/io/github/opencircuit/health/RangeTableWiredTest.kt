@@ -72,6 +72,12 @@ class RangeTableWiredTest {
         assertEquals(listOf("one port.insert, inside send"), WriterScan.problems(direct))
         val sideDoor = source.replace("private suspend fun writeNaps(granted: Set<HealthPermission>) {", "private suspend fun writeNaps(granted: Set<HealthPermission>) {\n send(RecordType.SLEEP_SESSION, emptyList())")
         assertEquals(listOf("send is called only by writeItems, isolate and the checked edit step"), WriterScan.problems(sideDoor))
+        // The queue step may only hand each edit to the checked step: a send from the loop itself is a side door.
+        val fromTheQueue = source.replace("private suspend fun writeQueuedEdits(nights: List<StoredSleepNight>, granted: Set<HealthPermission>) {", "private suspend fun writeQueuedEdits(nights: List<StoredSleepNight>, granted: Set<HealthPermission>) {\n send(RecordType.SLEEP_SESSION, emptyList())")
+        assertEquals(listOf("send is called only by writeItems, isolate and the checked edit step"), WriterScan.problems(fromTheQueue))
+        // The checked step is checked: an edit step that sends without the table is the same bypass.
+        val uncheckedEdit = source.replace("if (HealthRanges.violation(session, now) != null) {", "if (false) {")
+        assertEquals(listOf("the edit step checks the table before sending"), WriterScan.problems(uncheckedEdit))
     }
 
     private fun writerSource(): String {
@@ -95,12 +101,12 @@ class RangeTableWiredTest {
             val inserts = fns.filter { "port.insert(" in it.second }.map { it.first }
             if (inserts != listOf("send") || Regex("""port\.insert\(""").findAll(source).count() != 1) out += "one port.insert, inside send"
             val callers = fns.filter { (name, body) -> name != "send" && Regex("""\bsend\(""").containsMatchIn(body) }.map { it.first }.toSet()
-            if (callers != setOf("writeItems", "isolate", "writeQueuedEdits")) out += "send is called only by writeItems, isolate and the checked edit step"
+            if (callers != setOf("writeItems", "isolate", "writeQueuedEdit")) out += "send is called only by writeItems, isolate and the checked edit step"
             val writeItems = fns.first { it.first == "writeItems" }.second
             if (!writeItems.contains("HealthRanges.violation(it.record, now) == null") || writeItems.indexOf("HealthRanges") > writeItems.indexOf("send(")) {
                 out += "writeItems drops what breaks the table before sending"
             }
-            val edits = fns.first { it.first == "writeQueuedEdits" }.second
+            val edits = fns.first { it.first == "writeQueuedEdit" }.second
             if (!edits.contains("HealthRanges.violation(session, now)") || edits.indexOf("HealthRanges") > edits.indexOf("send(")) {
                 out += "the edit step checks the table before sending"
             }

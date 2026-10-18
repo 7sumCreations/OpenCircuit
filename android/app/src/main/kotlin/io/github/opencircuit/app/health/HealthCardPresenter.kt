@@ -170,30 +170,38 @@ data class HealthCardInput(val access: HealthAccessState, val flush: HealthFlush
 object HealthCardPresenter {
     fun present(input: HealthCardInput): HealthCardUi {
         val access = input.access
-        if (access.available == false) {
-            return HealthCardUi(
-                headline = "Health Connect is not available",
-                body = "Install or enable Health Connect in system settings, then come back.",
-                button = CONNECT,
-                action = null,
-                buttonEnabled = false,
-            )
-        }
+        if (access.available == false) return notAvailable()
         val share = HealthShare.resolve(access.granted, access.requested)
-        if (share == ShareState.Unauthorized) {
-            // Once the permission screen was answered with nothing allowed, asking again may be
-            // refused without showing anything (the user chose "don't ask again"): Health
-            // Connect's own settings for this app are the way back.
-            if (access.asked) {
-                return HealthCardUi(
-                    headline = "Not connected",
-                    body = "Nothing is allowed yet. Choose what OpenCircuit may write in Health Connect's settings.",
-                    button = "Open Health Connect settings",
-                    action = HealthCardAction.MANAGE,
-                    buttonEnabled = true,
-                )
-            }
-            return HealthCardUi(
+        if (share == ShareState.Unauthorized) return notConnected(access)
+        return connected(input, access, share)
+    }
+
+    /** Health Connect is not on this phone at all: there is nothing to connect to, and the card says so. */
+    private fun notAvailable(): HealthCardUi = HealthCardUi(
+        headline = "Health Connect is not available",
+        body = "Install or enable Health Connect in system settings, then come back.",
+        button = CONNECT,
+        action = null,
+        buttonEnabled = false,
+    )
+
+    /**
+     * Nothing of what the app asks for is granted, or none of it has been read yet. Once the
+     * permission screen was answered with nothing allowed, asking again may be refused without
+     * showing anything (the user chose "don't ask again"): Health Connect's own settings for this
+     * app are the way back.
+     */
+    private fun notConnected(access: HealthAccessState): HealthCardUi =
+        if (access.asked) {
+            HealthCardUi(
+                headline = "Not connected",
+                body = "Nothing is allowed yet. Choose what OpenCircuit may write in Health Connect's settings.",
+                button = "Open Health Connect settings",
+                action = HealthCardAction.MANAGE,
+                buttonEnabled = true,
+            )
+        } else {
+            HealthCardUi(
                 headline = "Not connected",
                 body = "Writes your ring data to Health Connect on this phone. Nothing leaves the phone.",
                 button = CONNECT,
@@ -201,6 +209,13 @@ object HealthCardPresenter {
                 buttonEnabled = true,
             )
         }
+
+    /**
+     * Connected: the last write's rows, what the last write could not write and what is not allowed,
+     * the "catching up" and live-only lines, and the Write now button (Writing… while a write runs,
+     * Try again after a failure, Change in Health Connect beside a partial grant).
+     */
+    private fun connected(input: HealthCardInput, access: HealthAccessState, share: ShareState): HealthCardUi {
         val last = input.flush.last
         val rows = mutableListOf<Pair<String, String>>()
         if (last == null) {
