@@ -91,7 +91,10 @@ class HealthConnectReadBackTest {
 
         override suspend fun nights(from: Instant, until: Instant) = emptyList<NightWindow>()
 
-        override suspend fun markWritten(samples: List<QuantitySample>) {
+        // Nothing is stored while a flush runs here, so there is no later row a mark could pass.
+        override suspend fun rowWatermark(): Long? = HealthSampleStore.NO_WATERMARK
+
+        override suspend fun markWritten(samples: List<QuantitySample>, seenWatermark: Long?) {
             val newest = samples.maxOf { it.start }
             if (mark.let { it == null || it.isBefore(newest) }) mark = newest
         }

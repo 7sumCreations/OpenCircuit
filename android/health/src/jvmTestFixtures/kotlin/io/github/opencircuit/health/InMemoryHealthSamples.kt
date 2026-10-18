@@ -43,8 +43,6 @@ class InMemoryHealthSamples : HealthSampleStore {
         stored.filter { it.sample.kind == kind && !it.sample.start.isBefore(from) && it.sample.start.isBefore(until) }.sortedBy { it.sample.start }
     }
 
-    override suspend fun markWritten(samples: List<QuantitySample>) = markWritten(samples, null)
-
     override suspend fun hasPending(kind: MetricKind, upTo: Instant): Boolean = synchronized(lock) {
         val mark = marks[kind]
         stored.any { it.sample.kind == kind && it.sample.value > 0 && (mark == null || it.sample.start.isAfter(mark)) && !it.sample.start.isAfter(upTo) }

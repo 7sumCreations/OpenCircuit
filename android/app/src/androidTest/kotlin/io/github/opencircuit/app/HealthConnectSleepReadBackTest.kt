@@ -123,7 +123,8 @@ class HealthConnectSleepReadBackTest {
         override suspend fun pendingRows(kind: MetricKind) = emptyList<SampleRow>()
         override suspend fun rows(kind: MetricKind, from: Instant, until: Instant) = emptyList<SampleRow>()
         override suspend fun nights(from: Instant, until: Instant) = emptyList<NightWindow>()
-        override suspend fun markWritten(samples: List<QuantitySample>) = Unit
+        override suspend fun rowWatermark(): Long? = HealthSampleStore.NO_WATERMARK
+        override suspend fun markWritten(samples: List<QuantitySample>, seenWatermark: Long?) = Unit
     }
 
     private class Generations : WriteGenerationStore {

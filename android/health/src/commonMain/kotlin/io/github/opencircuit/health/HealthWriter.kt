@@ -40,9 +40,6 @@ interface HealthSampleStore {
     /** The stored nights keyed `from <= night < until`, oldest first. */
     suspend fun nights(from: Instant, until: Instant): List<NightWindow>
 
-    /** Moves each kind's mark to the newest of [samples] (forward only). Only what Health Connect accepted. */
-    suspend fun markWritten(samples: List<QuantitySample>)
-
     /**
      * Whether a sample of [kind] above zero, newer than the kind's mark and not after [upTo], is
      * stored: asked instead of reading them all for a type the user has not allowed.
@@ -51,16 +48,23 @@ interface HealthSampleStore {
 
     /**
      * A watermark of what is stored now (the store's highest row id), read before a flush reads what
-     * is pending; null for a store that keeps none.
+     * is pending; [NO_WATERMARK] for a store that keeps none. Required of every store, which says
+     * which one it is: a flush's marks are guarded by what it answers.
      */
-    suspend fun rowWatermark(): Long? = null
+    suspend fun rowWatermark(): Long?
 
     /**
-     * As [markWritten], by a flush that read what is pending after [seenWatermark]: a mark never
-     * passes a sample stored after it (a sync or a live reading landing while the flush sends), so
-     * that sample stays pending.
+     * Moves each kind's mark to the newest of [samples] (forward only), for a flush that read what is
+     * pending after [seenWatermark] ([rowWatermark]): a mark never passes a sample stored after that
+     * row (a sync or a live reading landing while the flush sends), so that sample stays pending. A
+     * store handed [NO_WATERMARK] checks nothing. Only what Health Connect accepted is passed.
      */
-    suspend fun markWritten(samples: List<QuantitySample>, seenWatermark: Long?) = markWritten(samples)
+    suspend fun markWritten(samples: List<QuantitySample>, seenWatermark: Long?)
+
+    companion object {
+        /** What [rowWatermark] answers for a store that keeps no row watermark, and what it is handed back. */
+        val NO_WATERMARK: Long? = null
+    }
 }
 
 /** What one flush did, per record type. Counts only: no value, no id. */

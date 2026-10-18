@@ -108,7 +108,9 @@ class HealthConnectScalarReadBackTest {
             rowsOf(kind).filter { !it.sample.start.isBefore(from) && it.sample.start.isBefore(until) }
         override suspend fun nights(from: Instant, until: Instant) =
             (prior + tonight).filter { !it.night.isBefore(from) && it.night.isBefore(until) }.sortedBy { it.night }
-        override suspend fun markWritten(samples: List<QuantitySample>) {
+        // Nothing is stored while a flush runs here, so there is no later row a mark could pass.
+        override suspend fun rowWatermark(): Long? = HealthSampleStore.NO_WATERMARK
+        override suspend fun markWritten(samples: List<QuantitySample>, seenWatermark: Long?) {
             for ((kind, ofKind) in samples.groupBy { it.kind }) {
                 val newest = ofKind.maxOf { it.start }
                 if (marks[kind].let { it == null || it.isBefore(newest) }) marks[kind] = newest

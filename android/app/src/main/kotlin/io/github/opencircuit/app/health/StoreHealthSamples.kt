@@ -52,8 +52,6 @@ class StoreHealthSamples(private val database: suspend () -> StoreDatabase) : He
     override suspend fun nights(from: Instant, until: Instant): List<NightWindow> =
         SleepStore(database()).sleepSummaries(from, until).map { NightWindow(it.keyText, it.night, it.inBedStart, it.inBedEnd, it.skinTempC) }
 
-    override suspend fun markWritten(samples: List<QuantitySample>) = store().markHealthWritten(samples)
-
     override suspend fun hasPending(kind: MetricKind, upTo: Instant): Boolean = store().hasPendingHealthSamples(kind, upTo)
 
     override suspend fun rowWatermark(): Long = store().sampleRowWatermark()
