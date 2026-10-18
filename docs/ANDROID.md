@@ -202,6 +202,13 @@ also syncs the ring's history onto the phone (see "Syncing your ring"), and from
 it writes it to Health Connect (see "Health Connect"). Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
 and its SHA-256 checksum file, and the release notes give the signing certificate's digest.
 
+> **0.3.0 was built from `eca6a006`.** Four commits have landed on the branch since, three of them
+> fixes: a settled-sleep write that read a long-standing install's night marks one night at a time
+> (slow on an install with years of history), a sleep record Health Connect refused clearing the
+> queued edit for good (a path the app cannot reach until it can edit a night), and a screen title
+> TalkBack could not read as a heading. They are in the code and ship with the next release; the
+> 0.3.0 APK does not contain them.
+
 > **Not affiliated with, authorized, or endorsed by RingConn or JZ_Tech. Not a medical device.**
 > Readings are estimates from a consumer ring and are not for diagnosis or treatment.
 
@@ -252,7 +259,9 @@ Bluetooth pairing is left alone.
 ## Using the app
 
 **First run.** Four short onboarding pages explain what the app does (no account, no subscription,
-no cloud), what it needs and what it does not do yet. Nothing is requested during onboarding.
+no cloud), what it needs (Nearby devices, and Health Connect only when you tap **Connect Health
+Connect** later) and what it is not (not affiliated with RingConn, not a medical device). Nothing is
+requested during onboarding.
 
 **Pairing.** Tap **Scan & connect**. Android asks for "Nearby devices" the first time. If several
 rings are found you pick one. The "Pair with …" card then offers **Continue** (Android's
@@ -267,6 +276,8 @@ the charger. Disconnect ends this connection; **Stop reconnecting** makes the ap
 **Measuring.** Measure starts a live heart-rate or SpO₂ reading ("Hold still" while the ring
 settles) with a chart; stop it at any time. The app asks the ring to start, reads the ring's answer,
 and stops the ring's mode again afterwards. If the ring refuses or stops answering, the card says so.
+A reading you stopped is kept on the phone — the settled heart rate, or the last SpO₂ — and written to
+Health Connect like any other reading; a heart rate that never settled is not kept.
 
 **Syncing your ring.** The **Ring data** card, under the connection card, keeps the ring's history
 on the phone. **Sync now** connects to the ring, downloads everything it recorded since the last
@@ -311,12 +322,15 @@ range, nights, last night's sleep) and the last sync's result.
   (and writes them to Health Connect) only for the time it was connected. A ring that syncs and
   disconnects has no steps or skin temperature for the time it was disconnected, and nothing
   fills that gap later. Turning **Disconnect after syncing** off keeps the ring connected while
-  the app is running, so they are recorded for that time only.
+  the app is running, so they are recorded for that time only. Each reading is stored as it
+  arrives, so closing the app does not lose what was already measured, and the next write sends it.
 
 **Health Connect.** The **Health Connect** card, under the Ring data card, writes the ring's data
 to Health Connect on the phone — heart rate, resting heart rate, HRV, SpO₂, respiratory rate,
 skin temperature, steps, distance, active calories, basal metabolic rate and sleep (nights and
-naps). Nothing leaves the phone. Tap **Connect Health Connect** and choose what to allow; the app
+naps). Nothing leaves the phone. What it writes is whatever the phone holds: what a sync stored, what
+the ring measured live while it was connected, and what **Measure** found. Tap **Connect Health
+Connect** and choose what to allow; the app
 asks only for write permissions. After that it writes after every sync that stored something, and
 **Write to Health Connect now** writes at once. The card shows when it last wrote and how many
 records ("Written this sync"); amber names types you did not allow ("Not allowed: …", with
@@ -326,6 +340,11 @@ next sync. If you allowed nothing, the card offers **Open Health Connect setting
 Connect is not available" means Android reports it missing or disabled, or the app is in a work
 profile or Private Space. Writing the same data again never makes duplicates. What goes where:
 [`HEALTH_CONNECT_MAPPING.md`](HEALTH_CONNECT_MAPPING.md).
+
+Health Connect can also ask why OpenCircuit wants these permissions. The app answers with one
+short page, "How OpenCircuit uses Health Connect": write-only, never reads other apps' data,
+nothing leaves the phone. It has no internet access to show anything else, and Android 14 and later
+refuse every health permission to an app that cannot show it.
 
 > **A Health Connect quirk, not a bug in OpenCircuit.** Health Connect's own setup banner can say
 > "no compatible apps installed" even though OpenCircuit is connected and writing. That banner lists
@@ -344,8 +363,10 @@ first, with what each channel did. **Copy connection details** puts the text on 
 the ring's address and name masked, so it is safe to paste into a bug report.
 
 **Privacy.** The app has no internet permission and sends nothing anywhere. Its data is excluded
-from both cloud backup and device-to-device transfer. It is not a medical device; talk to a
-clinician about any health concern.
+from both cloud backup and device-to-device transfer. The one place it writes to outside its own
+storage is Health Connect on the same phone, and only the types you allow there; it asks for write
+permissions only and reads no health data back out of Health Connect. It is not a medical device; talk
+to a clinician about any health concern.
 
 ## Troubleshooting
 
@@ -368,10 +389,13 @@ clinician about any health concern.
 - **"This ring's firmware sends history this version can't read yet".** The ring is on older
   firmware (seen on FR02.013), which sends its history in a format this version can't read yet.
   The pages are kept on your phone. Update the ring's firmware in the RingConn app and sync again.
-
 - **Health Connect's step total is another app's, not the ring's.** Where several apps' steps
   overlap, Health Connect counts the app highest in its priority list, not the sum. Change it in Health
   Connect → Data and access → Steps → App priority.
+- **Everything is in Health Connect except skin temperature.** A night's skin temperature is written
+  only once at least 3 earlier nights give it a baseline, only if the ring was connected overnight,
+  and only on a phone whose Health Connect offers the type (the card then says "Not supported on
+  this phone"). Nothing is wrong; it appears on its own once those are met.
 
 ## FAQ
 

@@ -1,6 +1,6 @@
 # OpenCircuit for Android — questions and answers
 
-Last updated: 0.3.0 — 2026-10-17
+Last updated: 0.3.0 — 2026-10-18
 
 Not affiliated with RingConn · not a medical device · no account, no cloud
 
@@ -21,11 +21,12 @@ the details of each screen, see [`ANDROID.md`](ANDROID.md).
 | Can't yet | Read the history of rings on older firmware (seen on FR02.013). It is stored, not readable yet: update the ring's firmware in the RingConn app |
 | Can | Write to Health Connect on the phone (from 0.3.0): heart rate, resting heart rate, HRV, blood oxygen, breathing, skin temperature, steps, distance, active calories, basal metabolic rate and sleep, after every sync and on "Write to Health Connect now" |
 | Can | Write again without duplicates, skip types you did not allow, and retry a failed type on the next sync |
+| Can | Keep what the ring and Measure find live — steps, skin temperature, a Measure's settled heart rate or last SpO₂ — on the phone as they arrive, so closing the app does not lose them, and write them to Health Connect |
 | Can't yet | Sync in the background. Keep the app open while it syncs; leaving it pauses the sync until you come back |
 | Can't yet | Record steps or skin temperature while the ring is disconnected. They are only recorded (and written to Health Connect) while connected |
 | Can't yet | Write skin temperature on a phone whose Health Connect does not offer it (Android 14). The card says "Not supported on this phone" |
 | Can't yet | Log periods, headaches or workouts in the app. Headaches have no Health Connect type and will never be written there |
-| Can't | Read anything from Health Connect: the app asks for write permissions only |
+| Can't | Read health data from Health Connect: it asks for write permissions only, and reads no data back out of Health Connect |
 | Can't | Work without Bluetooth, or on a phone older than Android 14 |
 | Can't | Sync to any cloud, or use an account: there is none |
 
@@ -44,6 +45,11 @@ treatment.
 breathing and every night's sleep are saved on the phone. Steps and skin temperature are only
 recorded while the ring is connected.
 
+**What is Health Connect?** The health store built into Android 14 and later, part of the system
+(you can find it in Settings → Security & privacy → Privacy → Health Connect; on GrapheneOS it is
+built in and needs no Google Play services). OpenCircuit writes your ring's data there and nowhere
+else, and any app you allow to read Health Connect can then show it.
+
 **Can it write to Health Connect?** Yes, from 0.3.0. On the Ring screen, tap **Connect Health
 Connect** on the Health Connect card and choose what to allow. The app then writes after every
 sync that stored something, and **Write to Health Connect now** writes at once. It asks only to
@@ -54,11 +60,29 @@ write, never to read. Which metric becomes which Health Connect record:
 which opens Health Connect's page for OpenCircuit. Turn on what it may write and come back: the
 card updates.
 
+**Health Connect asked why the app wants these permissions. What did it answer?** One short page that
+is offline and has nothing to fetch: OpenCircuit writes, it never reads other apps' data, and nothing
+leaves the phone. Android 14 and later refuse every health permission to an app that cannot show such
+a page, so it is not a formality — without it nothing would be granted.
+
 **What does "Not allowed: …" in amber mean?** Those types are off for OpenCircuit in Health
 Connect; the rest is written. **Change in Health Connect** opens the page to turn them on.
 
+**Why is skin temperature missing from Health Connect?** Three things have to be true, and until they
+are nothing is written and nothing is wrong. Your phone's Health Connect must offer the type (Android
+15 and later in practice — otherwise the card says "Skin temperature · Not supported on this phone");
+the ring must have been connected overnight, since skin temperature comes only from the live readings;
+and at least 3 earlier nights must give the night a baseline to measure against. It appears on its own
+once all three hold.
+
 **What does "Catching up" mean?** Health Connect asked the app to slow down. Nothing is lost:
 the rest is written on the next sync.
+
+**What is the difference between Sync now and Write to Health Connect now?** **Sync now** talks to the
+ring: it downloads what the ring recorded since the last sync and saves it on the phone, and the write
+follows on its own once the data is saved. **Write to Health Connect now** never touches the ring: it
+writes what the phone already holds. Use it after you change what Health Connect may accept, when the
+card says a write failed, or to check that writing again adds nothing.
 
 **Why are Health Connect's steps not the ring's?** Where several apps write steps, Health Connect
 counts the app highest in its priority list, not the sum. Change it in Health Connect → Data and
@@ -69,6 +93,12 @@ Delete it there (Data and access → OpenCircuit) if you want it gone.
 
 **If I delete OpenCircuit's records in Health Connect, does the app put them back?** No, unless
 that item changes later (a night re-staged, a new reading in that hour).
+
+**Where do I look in Health Connect to see what OpenCircuit wrote?** Health Connect → **Data and
+access** → OpenCircuit. Its own setup banner lists apps that *read* Health Connect, so a write-only app
+never appears there and the banner can even say "no compatible apps installed" while the data is being
+written — that is Health Connect's quirk, not a failure. Any app you allow to read Health Connect
+shows the same data.
 
 **Does "Stop reconnecting" unpair the ring?** No. It forgets the ring in the app only; Android's
 own pairing is kept, so pairing again later asks nothing.

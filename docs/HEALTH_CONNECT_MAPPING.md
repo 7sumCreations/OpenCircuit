@@ -6,9 +6,10 @@ the phone: the app has no internet permission, and Health Connect is part of And
 (Settings → Security & privacy → Privacy → Health Connect; on GrapheneOS it is built in and needs
 no Google Play services).
 
-The app asks only for the **12 write permissions** below. It never asks to read anything,
-including other apps' data. It reads back only its own records, which Health Connect lets an app
-do with its write permission.
+The app asks only for the **12 write permissions** below. It never asks to read anything, including
+other apps' data, and it reads no health data back out of Health Connect. (A write permission does let
+an app read back the records it wrote itself — that is the only read the app's code could ever make,
+and it is used only by the app's own on-device tests.)
 
 ## Ring metrics
 
@@ -89,8 +90,11 @@ The app has no screen for logging these yet; the writer is ready for the epics t
 
 Steps and skin temperature are not in the ring's history: the ring sends them only while it is
 connected. The app records them only for the time the ring was connected, so a ring that syncs and
-disconnects has none for the time in between. Turn **Disconnect after syncing** off to stay
-connected while the app is running.
+disconnects has none for the time in between. Turn **Disconnect after syncing** off to stay connected
+while the app is running. A **Measure** is stored the same way: its settled heart rate, or its last
+SpO₂, is kept when you stop the reading (a heart rate that never settled is not kept) and written as
+its ordinary record type. Every live reading is stored as it arrives, outside the sync's history
+position, so closing the app does not lose it and a later sync still brings the ring's older backlog.
 
 ## Steps from several apps — Health Connect's app priority
 
@@ -105,6 +109,12 @@ app writes each 15-minute calorie bucket as a whole value rather than adding to 
 - The Ring screen's **Health Connect** card asks for permission only when you tap **Connect Health
   Connect**, never at launch. If you allowed nothing, the card offers **Open Health Connect
   settings** (Health Connect's own page for OpenCircuit) instead of asking again.
+- **The "why does this app want access" page.** Android 14 and later ask an app to explain its health
+  permissions before granting any, and refuse them all to an app that cannot show one. OpenCircuit
+  answers with a static page that fetches nothing (it has no internet permission): it writes, it never
+  reads other apps' data, nothing leaves the phone. The page is declared in the manifest as an alias
+  only the system may open — and an update that drops that alias revokes every health permission the
+  app holds, which is why it is guarded by a test.
 - **Health Connect is not available** on this card means Android reports it missing or disabled,
   or the app runs in a work profile or Private Space, where Health Connect is not offered.
 - **Turning a type off** in Health Connect stops new writes of that type. The app can then no
