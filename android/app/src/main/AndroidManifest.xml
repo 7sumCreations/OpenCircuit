@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Nearby devices: find the ring (never used to derive location) and talk to it. Asked for
          at the first Scan & connect, never by onboarding. Nothing else: no network, no
@@ -8,6 +9,22 @@
         android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Health Connect: WRITE only, one per kind of record the app writes. Asked for from the Ring
+         screen's Health Connect card, never at launch. No READ permission: an app reads back
+         what it wrote itself with its WRITE permission alone. -->
+    <uses-permission android:name="android.permission.health.WRITE_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.WRITE_OXYGEN_SATURATION" />
+    <uses-permission android:name="android.permission.health.WRITE_RESPIRATORY_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_SKIN_TEMPERATURE" />
+    <uses-permission android:name="android.permission.health.WRITE_STEPS" />
+    <uses-permission android:name="android.permission.health.WRITE_DISTANCE" />
+    <uses-permission android:name="android.permission.health.WRITE_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.WRITE_BASAL_METABOLIC_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_SLEEP" />
+    <uses-permission android:name="android.permission.health.WRITE_MENSTRUATION" />
 
     <!-- The companion device manager accepts an association only from an app that lists this
          feature. Not required: a phone without it can still install the app, and pairing then
@@ -31,6 +48,33 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Health Connect's "why does this app want access" page: static, offline privacy text.
+             Reached only through the alias below, which only the system may start. Android 14
+             and later refuse every health permission to an app without this alias, and revoke
+             them all if an update removes it. -->
+        <activity
+            android:name=".health.HealthPermissionsRationaleActivity"
+            android:exported="false" />
+        <activity-alias
+            android:name="ViewPermissionUsageActivity"
+            android:exported="true"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE"
+            android:targetActivity=".health.HealthPermissionsRationaleActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- The Health Connect library brings an exported service that serves only the Health
+             Connect app of Android 13 and earlier. This app needs Android 14, where Health Connect
+             is part of the system, so the service is removed rather than left reachable. The
+             class is in :health's private dependencies, out of lint's sight from here. -->
+        <service
+            android:name="androidx.health.platform.client.impl.sdkservice.HealthDataSdkService"
+            tools:ignore="MissingClass"
+            tools:node="remove" />
     </application>
 
 </manifest>

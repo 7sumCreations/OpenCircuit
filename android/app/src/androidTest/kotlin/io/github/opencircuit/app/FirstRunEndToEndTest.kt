@@ -64,7 +64,7 @@ class FirstRunEndToEndTest {
 
         ActivityScenario.launch(MainActivity::class.java).use {
             compose.onNodeWithText("Welcome to OpenCircuit").assertDoesNotExist()
-            compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithText("Connected").fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithText("Demo ring").assertExists()
         }
         assertEquals("no scan on the way to the remembered ring", scansBefore, scanner.scansStarted)

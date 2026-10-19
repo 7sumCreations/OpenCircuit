@@ -3,6 +3,7 @@ package io.github.opencircuit.store
 import androidx.room3.withReadTransaction
 import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.BulkRecord
+import io.github.opencircuit.ringkit.DateInterval
 import io.github.opencircuit.ringkit.MeasuredCoverage
 import io.github.opencircuit.ringkit.NapDetection
 import io.github.opencircuit.ringkit.OSASpO2
@@ -18,6 +19,7 @@ import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SleepStage
 import io.github.opencircuit.ringkit.SleepStaging
 import io.github.opencircuit.ringkit.SleepSummaryMerge
+import io.github.opencircuit.store.codec.Decoded
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -107,6 +109,136 @@ class SleepStore internal constructor(
     private val nightRekey = NightRekey(sleepDao, kvDao)
 
     private val pending = PendingSleepReconciles(kvDao)
+
+    private val health = SleepHealthBookkeeping(sleepDao, kvDao)
+
+    // Health Connect bookkeeping (SleepHealthBookkeeping). Every night here is a stored row's key.
+
+    /** The Health Connect record ids written for [night]: empty when none, null when the stored list cannot be read. */
+    suspend fun sleepHealthRecordIds(night: Instant): List<String>? = db.withReadTransaction { health.recordIds(night.toStoredMillis()) }
+
+    /** Keeps [ids] as the Health Connect record ids written for [night] (none clears the key). */
+    suspend fun setSleepHealthRecordIds(night: Instant, ids: List<String>, now: Instant) =
+        db.withWriteTransaction { health.setRecordIds(night.toStoredMillis(), ids, now.toStoredMillis()) }
+
+    /** What was last written to Health Connect for the unedited [night]; null when nothing was, or it cannot be read. */
+    suspend fun mirroredNight(night: Instant): MirroredNight? = db.withReadTransaction { health.mirroredNight(night.toStoredMillis()) }
+
+    suspend fun setMirroredNight(night: Instant, record: MirroredNight, now: Instant) =
+        db.withWriteTransaction { health.setMirroredNight(night.toStoredMillis(), record, now.toStoredMillis()) }
+
+    /**
+     * [sleepHealthRecordIds] and [mirroredNight] for every stored night keyed `from <= night < until`,
+     * in one read transaction: the settled sleep write reads the marks of its whole backlog this way
+     * instead of opening two reads per stored night on every flush.
+     */
+    suspend fun sleepHealthMarks(from: Instant, until: Instant): Map<Instant, NightHealthMarks> =
+        db.withReadTransaction { health.marks(from.toStoredMillis(), until.toStoredMillis()) }
+
+    /**
+     * The edited nights' extensions Health Connect has not received (upstream
+     * `pendingSleepEditHealthWrites`): offered only once the sleep mark covers the night's recorded
+     * end. Moves nothing.
+     */
+    suspend fun pendingSleepEditHealthWrites(): List<PendingSleepEditHealthWrite> =
+        db.withReadTransaction { health.pendingEditWrites(sleepDao.allSummaries().map { value(it) }) }
+
+    /**
+     * After Health Connect accepted [segments] for the stored [night]: lowers its two leading
+     * watermarks to what was written before the recorded bedtime and onset, and moves the sleep mark
+     * to their end (never back). Pass only what was written. Nothing happens when no night is stored there.
+     */
+    suspend fun markSleepEditHealthWritten(night: Instant, segments: List<SleepSegment>) = db.withWriteTransaction {
+        val row = sleepDao.summaryAt(night.toStoredMillis()) ?: return@withWriteTransaction
+        health.markEditWritten(value(row), segments)
+    }
+
+    /** After a night write [segments] that already covers an edited night's leading extension: marks it covered. */
+    suspend fun markSleepEditHealthCovered(segments: List<SleepSegment>) =
+        db.withWriteTransaction { health.markEditCovered(sleepDao.allSummaries().map { value(it) }, segments) }
+
+    // The queue of edited nights waiting for their Health write (upstream :1312-1334), consumed by
+    // the Health Connect writer. A queue this build cannot read throws
+    // [SleepStoreException.UnreadablePendingReconcile] from every call here and is never written over.
+
+    /** The queued edited nights, oldest night first. */
+    suspend fun pendingSleepReconciles(): List<PendingSleepReconcile> = db.withReadTransaction {
+        when (val d = pending.all()) {
+            is Decoded.Readable -> d.value.sortedBy { it.night }
+            is Decoded.Unreadable -> throw SleepStoreException.UnreadablePendingReconcile()
+        }
+    }
+
+    /** Queues [item]'s Health write, replacing any item queued for the same day in [zone]. */
+    suspend fun setPendingSleepReconcile(item: PendingSleepReconcile, zone: ZoneId, now: Instant) =
+        db.withWriteTransaction { pending.upsert(item, zone, now.toStoredMillis()) }
+
+    /**
+     * Removes the item queued for [item]'s day in [zone] only when it is still [item], whole — so an
+     * edit of the same night queued while [item]'s write ran is kept for the next write. True when it
+     * removed it.
+     */
+    suspend fun clearPendingSleepReconcileIfUnchanged(item: PendingSleepReconcile, zone: ZoneId, now: Instant): Boolean =
+        db.withWriteTransaction {
+            val current = when (val d = pending.all()) {
+                is Decoded.Readable -> d.value.firstOrNull { isSameDay(it.night, item.night, zone) }
+                is Decoded.Unreadable -> throw SleepStoreException.UnreadablePendingReconcile()
+            }
+            if (current != item) return@withWriteTransaction false
+            pending.clear(item.night, zone, now.toStoredMillis())
+            true
+        }
+
+    // Naps and Health (upstream :3016-3044, :1344-1355). A nap's Health record is keyed by its stored
+    // start, which an edit keeps, so an edited nap is rewritten under the same id.
+
+    /** The naps not yet written to Health, the earliest start first. */
+    suspend fun pendingNaps(): List<StoredNapRecord> =
+        db.withReadTransaction { sleepDao.allNaps().filter { !it.healthWritten }.sortedBy { it.start }.map { it.toStoredNapRecord() } }
+
+    /** Marks the nap stored at [start] written, recording the window it shows now; nothing when none is stored there. */
+    suspend fun markNapWritten(start: Instant) = db.withWriteTransaction {
+        val row = sleepDao.napAt(start.toStoredMillis()) ?: return@withWriteTransaction
+        sleepDao.updateNap(row.copy(healthWritten = true, healthWrittenStart = row.editedStart ?: row.start, healthWrittenEnd = row.editedEnd ?: row.end))
+    }
+
+    /**
+     * As [markNapWritten], for a writer that sent the nap showing `[shownStart, shownEnd]` with
+     * [segments]: marked only if the stored nap still shows exactly that. A nap a sync or an edit
+     * changed while its record was being sent stays pending, so the change is written too.
+     */
+    suspend fun markNapWritten(start: Instant, shownStart: Instant, shownEnd: Instant, segments: List<SleepSegment>?) = db.withWriteTransaction {
+        val row = sleepDao.napAt(start.toStoredMillis()) ?: return@withWriteTransaction
+        val unchanged = (row.editedStart ?: row.start) == shownStart.toStoredMillis() &&
+            (row.editedEnd ?: row.end) == shownEnd.toStoredMillis() &&
+            row.toStoredNapRecord().segments == segments
+        if (unchanged) sleepDao.updateNap(row.copy(healthWritten = true, healthWrittenStart = row.editedStart ?: row.start, healthWrittenEnd = row.editedEnd ?: row.end))
+    }
+
+    /** What was last written for the nap at [start] together with the window it shows now; null when it was never written. */
+    suspend fun staleNapHealthSpan(start: Instant): DateInterval? = db.withReadTransaction {
+        val row = sleepDao.napAt(start.toStoredMillis()) ?: return@withReadTransaction null
+        if (row.healthWrittenEnd <= row.healthWrittenStart) return@withReadTransaction null
+        val lo = minOf(row.healthWrittenStart, row.editedStart ?: row.start)
+        val hi = maxOf(row.healthWrittenEnd, row.editedEnd ?: row.end)
+        if (hi > lo) DateInterval(lo, hi) else null
+    }
+
+    /**
+     * The windows of the naps written to Health — each the detected and shown windows together — that
+     * share time with `[start, end]`, the earliest first; [manualOnly] keeps only the wearer's (added
+     * or edited) naps.
+     */
+    suspend fun healthWrittenNapWindows(start: Instant, end: Instant, manualOnly: Boolean = false): List<DateInterval> =
+        db.withReadTransaction {
+            sleepDao.allNaps().mapNotNull { nap ->
+                if (!nap.healthWritten) return@mapNotNull null
+                if (manualOnly && !nap.isManuallyAdded && !nap.isManuallyEdited) return@mapNotNull null
+                val lo = minOf(nap.start, nap.editedStart ?: nap.start)
+                val hi = maxOf(nap.end, nap.editedEnd ?: nap.end)
+                if (hi > lo && lo < end && hi > start) DateInterval(lo, hi) else null
+            }
+        }
 
     /**
      * Stores a staged night under the start of [night]'s day in [zone], or deliberately keeps the
@@ -520,8 +652,9 @@ class SleepStore internal constructor(
      * in place — its end, minutes, long-nap flag and [segments] (none stored as coarse) — and anything
      * else is inserted. Nothing is written when the nap shares time with a stored night (the night's
      * recorded window, or its edited window once edited), or when the nap stored at that start was
-     * added or edited by the wearer. An update leaves what was written to Health, the ring's kept
-     * staging and the edit as they were. Night keys within two days either side of the nap in [zone]
+     * added or edited by the wearer. An update leaves the ring's kept staging and the edit as they
+     * were, and what was written to Health too unless the end or the staging changed (Health
+     * Connect replaces the nap's record whole, so a changed nap is written again). Night keys within two days either side of the nap in [zone]
      * are looked at. Throws, writing nothing, when a lookup or the write fails.
      */
     suspend fun saveNap(
@@ -546,8 +679,13 @@ class SleepStore internal constructor(
                 )
                 // A nap the wearer added or edited is theirs; a detection never replaces it.
                 existing.isManuallyEdited || existing.isManuallyAdded -> Unit
+                // Health Connect holds the nap as one record, replaced whole: a detection that changes
+                // its end or its staging must be written again.
                 else -> sleepDao.updateNap(
-                    existing.copy(end = to, asleepMin = asleepMin, isLongNap = isLongNap, napSegmentsData = data, updatedAt = at),
+                    existing.copy(
+                        end = to, asleepMin = asleepMin, isLongNap = isLongNap, napSegmentsData = data, updatedAt = at,
+                        healthWritten = existing.healthWritten && existing.end == to && existing.napSegmentsData.contentEquals(data),
+                    ),
                 )
             }
         }
@@ -580,8 +718,8 @@ class SleepStore internal constructor(
      * Applies the wearer's edit of the nap detected at [originalStart]: the new window is kept beside
      * the detected one (the start stays the nap's key, so a later detection finds the same nap), all of
      * it asleep, the segments the whole window in bed and asleep. On the first edit the ring's staging
-     * is kept aside. When the window written to Health is no longer inside the new one, the nap is
-     * marked unwritten so Health can be corrected; a widening leaves it. Returns false, writing
+     * is kept aside. Unless the new window is exactly the one written to Health, the nap is marked
+     * unwritten so Health's record is replaced (a widening too). Returns false, writing
      * nothing, when [newEnd] is not after [newStart], the new window shares time with a stored night,
      * or no nap is stored at [originalStart]. Throws, writing nothing, when a lookup or the write fails.
      */
@@ -598,10 +736,14 @@ class SleepStore internal constructor(
             // Reversibility before the segments are replaced, and only from a nap that is still the
             // ring's recording: an edited nap's segments are edit output, never a recording.
             val keepRecording = row.recordedNapSegmentsData == null && !row.isManuallyEdited
-            // A window written to Health that the new one no longer covers must be rewritten there; a
-            // widening is left to the append-only write.
-            val writtenNotCovered = row.healthWritten && row.healthWrittenEnd > row.healthWrittenStart &&
-                (row.healthWrittenStart < from || row.healthWrittenEnd > to)
+            // Health Connect holds the nap as one record under its start, replaced whole: any window
+            // other than the one written there must be written again, a widening too (upstream keeps a
+            // widened nap written, for its append-only write; PORTING.md D-292). A written nap with no
+            // known written window cannot be checked, so it is written again as well.
+            // The same window holds the same record only if it was already all asleep: an edit drops
+            // the ring's staging, which Health Connect would otherwise keep.
+            val alreadyCoarse = row.napSegmentsData == null || row.napSegmentsData.contentEquals(coarse)
+            val stillAsWritten = row.healthWritten && row.healthWrittenStart == from && row.healthWrittenEnd == to && alreadyCoarse
             sleepDao.updateNap(
                 row.copy(
                     recordedNapSegmentsData = if (keepRecording) row.napSegmentsData else row.recordedNapSegmentsData,
@@ -611,7 +753,7 @@ class SleepStore internal constructor(
                     isLongNap = isLongNap(from, to),
                     isManuallyEdited = true,
                     napSegmentsData = coarse,
-                    healthWritten = row.healthWritten && !writtenNotCovered,
+                    healthWritten = stillAsWritten,
                     updatedAt = at,
                 ),
             )

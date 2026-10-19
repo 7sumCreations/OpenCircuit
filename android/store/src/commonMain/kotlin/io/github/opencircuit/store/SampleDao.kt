@@ -51,13 +51,44 @@ internal interface SampleDao {
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start >= :since AND value > 0 ORDER BY start, id")
     suspend fun recentSamples(kindRaw: String, since: Instant): List<StoredSampleEntity>
 
+    /** Samples of one kind with `start > after` and a positive value, oldest first (upstream `pendingHealthSamples`). */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start > :after AND value > 0 ORDER BY start, id")
+    suspend fun positiveSamplesAfter(kindRaw: String, after: Instant): List<StoredSampleEntity>
+
+    /** Whether a positive sample of one kind with `after < start <= until` is stored. */
+    @Query("SELECT EXISTS(SELECT 1 FROM stored_sample WHERE kind_raw = :kindRaw AND start > :after AND start <= :until AND value > 0)")
+    suspend fun hasPositiveBetween(kindRaw: String, after: Instant, until: Instant): Boolean
+
+    /** Whether a positive sample of one kind with `start <= until` is stored. */
+    @Query("SELECT EXISTS(SELECT 1 FROM stored_sample WHERE kind_raw = :kindRaw AND start <= :until AND value > 0)")
+    suspend fun hasPositiveUpTo(kindRaw: String, until: Instant): Boolean
+
+    /** The highest row id stored so far, or null for an empty table. */
+    @Query("SELECT MAX(id) FROM stored_sample")
+    suspend fun maxSampleId(): Long?
+
+    /** The oldest positive sample of one kind stored after row [afterId] with `start <= until`, or null. */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND id > :afterId AND value > 0 AND start <= :until ORDER BY start, id LIMIT 1")
+    suspend fun oldestPositiveAddedAfter(kindRaw: String, afterId: Long, until: Instant): StoredSampleEntity?
+
+    /** Every sample of one kind with a positive value, oldest first. */
+    @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND value > 0 ORDER BY start, id")
+    suspend fun positiveSamples(kindRaw: String): List<StoredSampleEntity>
+
     /** The newest sample of one kind at or before [notAfter] (the cursor repair's reset target). */
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start <= :notAfter ORDER BY start DESC, id DESC LIMIT 1")
     suspend fun latestSampleAtOrBefore(kindRaw: String, notAfter: Instant): StoredSampleEntity?
 
-    /** Deletes every sample with `start < cutoff` (the retention prune); returns how many. */
-    @Query("DELETE FROM stored_sample WHERE start < :cutoff")
-    suspend fun deleteSamplesBefore(cutoff: Instant): Int
+    /**
+     * Deletes every sample with `start < cutoff` except the readings above zero of the [guardedKinds]
+     * (the retention prune; those are pruned per kind by [deleteWrittenSamplesBefore]); returns how many.
+     */
+    @Query("DELETE FROM stored_sample WHERE start < :cutoff AND (kind_raw NOT IN (:guardedKinds) OR value <= 0)")
+    suspend fun deleteSamplesBefore(cutoff: Instant, guardedKinds: List<String>): Int
+
+    /** Deletes one kind's samples with `start < cutoff` at or before its Health Connect [mark]; returns how many. */
+    @Query("DELETE FROM stored_sample WHERE kind_raw = :kindRaw AND start < :cutoff AND start <= :mark")
+    suspend fun deleteWrittenSamplesBefore(kindRaw: String, cutoff: Instant, mark: Instant): Int
 
     /** Deletes the samples of one kind whose value is below [lowest] or above [highest]. */
     @Query("DELETE FROM stored_sample WHERE kind_raw = :kindRaw AND (value < :lowest OR value > :highest)")
@@ -69,6 +100,10 @@ internal interface SampleDao {
 
     @Query("DELETE FROM stored_cursor WHERE kind_raw = :kindRaw")
     suspend fun deleteCursor(kindRaw: String)
+
+    /** How many samples of one kind are stored exactly at [start] (the live insert's dedupe). */
+    @Query("SELECT COUNT(*) FROM stored_sample WHERE kind_raw = :kindRaw AND start = :start")
+    suspend fun countAt(kindRaw: String, start: Instant): Int
 
     /** The newest sample of one kind with `from <= start < to` and `start < before`. */
     @Query(

@@ -1,5 +1,8 @@
 package io.github.opencircuit.app
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -54,6 +57,7 @@ class RingDataCardRenderTest {
         show(RingDataUi(headline = "Not synced yet", syncEnabled = true, disconnectAfterSync = true))
 
         compose.onNodeWithText("Ring data").assertIsDisplayed()
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
         compose.onNodeWithText("Not synced yet").assertIsDisplayed()
         compose.onNodeWithText("Steps and skin temperature are only recorded while the ring is connected.").assertIsDisplayed()
         compose.onNodeWithText("Disconnect after syncing").assertIsOn()

@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import io.github.opencircuit.app.details.ConnectionDetailsCard
+import io.github.opencircuit.app.health.HealthCardAction
+import io.github.opencircuit.app.health.HealthConnectCard
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.live.MeasureSection
 import io.github.opencircuit.app.sync.SyncLifecycle
@@ -43,6 +45,15 @@ sealed interface RingAction {
 
     /** Turned the Ring data card's "Disconnect after syncing" switch [on] or off. */
     data class SetDisconnectAfterSync(val on: Boolean) : RingAction
+
+    /** Tapped Connect Health Connect: Health Connect's own permission screen (the activity's). */
+    data object ConnectHealth : RingAction
+
+    /** Tapped Open Health Connect settings or Change in Health Connect: Health Connect's page for this app (the activity's). */
+    data object OpenHealthSettings : RingAction
+
+    /** Tapped Write to Health Connect now. */
+    data object WriteHealthNow : RingAction
 }
 
 /**
@@ -83,6 +94,19 @@ fun RingScreen(
                 onSyncNow = { onAction(RingAction.SyncNow) },
                 onDisconnectAfterSync = { onAction(RingAction.SetDisconnectAfterSync(it)) },
             )
+            state.health?.let { health ->
+                HealthConnectCard(
+                    health,
+                    onAction = { action ->
+                        when (action) {
+                            HealthCardAction.CONNECT -> onAction(RingAction.ConnectHealth)
+                            // Changing what is allowed happens on Health Connect's own page for the app.
+                            HealthCardAction.MANAGE -> onAction(RingAction.OpenHealthSettings)
+                            HealthCardAction.WRITE_NOW -> onAction(RingAction.WriteHealthNow)
+                        }
+                    },
+                )
+            }
             state.measure?.let { measure ->
                 MeasureSection(
                     measure = measure,

@@ -1,6 +1,7 @@
 package io.github.opencircuit.app.session
 
 import io.github.opencircuit.app.live.LiveMeasureController
+import io.github.opencircuit.app.live.LiveReadings
 import io.github.opencircuit.app.ring.DeviceStatusModel
 import io.github.opencircuit.app.sync.HistoryDrainController
 import io.github.opencircuit.app.sync.HistoryPages
@@ -37,7 +38,7 @@ data class SessionTeardowns(
  * its opcode), never through the flow. Because nothing restarts a collection that ended, the
  * dispatcher contains a handler's exception instead of letting it end the collection.
  *
- * Routes: `0x10` / `0x87` descriptors → [deviceStatus]; `0x15` live samples and `0x86` mode
+ * Routes: `0x10` / `0x87` descriptors → [deviceStatus] and [liveReadings]; `0x15` live samples and `0x86` mode
  * answers → [liveMeasure]; `0x11` heartbeats (the link already answered them) and `0x81` status
  * replies (the link answers the `81 00` challenge itself; what reaches the app is the ring's
  * `81 01 …` answer to the auth reply) are ignored; everything else is counted by the dispatcher.
@@ -62,12 +63,17 @@ class RingSessionController(
     /** The ring's battery and status, from its descriptors. */
     val deviceStatus = DeviceStatusModel(scope, monotonicMillis)
 
+    /** Keeps what the ring measures live: each descriptor's steps and skin temperature, each measure's reading. */
+    val liveReadings = LiveReadings(history.live, scope, history.wallClock, history.zone, log)
+
     /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames; none starts during a sync. */
     val liveMeasure: LiveMeasureController = LiveMeasureController(
         send = link::send,
         scope = scope,
         monotonicMillis = monotonicMillis,
         isSyncing = { sync.isSyncing.value },
+        wallClock = history.wallClock,
+        onMeasured = liveReadings::onMeasured,
     )
 
     /** Whether a status query waits for its answer: the drain's first open waits for it (or 2 s). */
@@ -100,6 +106,7 @@ class RingSessionController(
         nightWindow = { triggers?.nightWindow()?.window },
         record = syncRecords::record,
         faults = history.faults,
+        afterCommit = history.afterCommit,
     )
 
     /**
@@ -157,8 +164,9 @@ class RingSessionController(
     init {
         // Descriptors and 0x50 frames also answer a status query (PROTOCOL.md §4).
         // A descriptor's step bucket can confirm the wearer is up, ending the night's quiet.
-        dispatcher.register(DESCRIPTOR) { deviceStatus.onDescriptor(it); statusQueries.onAnswer(); triggers?.onDescriptor(it) }
-        dispatcher.register(DESCRIPTOR_RESPONSE) { deviceStatus.onDescriptor(it); statusQueries.onAnswer(); triggers?.onDescriptor(it) }
+        // Its steps and skin temperature are kept (liveReadings).
+        dispatcher.register(DESCRIPTOR) { deviceStatus.onDescriptor(it); statusQueries.onAnswer(); triggers?.onDescriptor(it); liveReadings.onDescriptor(it) }
+        dispatcher.register(DESCRIPTOR_RESPONSE) { deviceStatus.onDescriptor(it); statusQueries.onAnswer(); triggers?.onDescriptor(it); liveReadings.onDescriptor(it) }
         dispatcher.register(LIVE_SAMPLE, liveMeasure::onFrame)
         dispatcher.register(MODE_REPLY, liveMeasure::onModeReply)
         dispatcher.ignore(HEARTBEAT)

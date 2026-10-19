@@ -12,6 +12,12 @@ import io.github.opencircuit.app.details.ConnectionDetailsPresenter
 import io.github.opencircuit.app.details.ConnectionDetailsUi
 import io.github.opencircuit.app.details.DetailsInput
 import io.github.opencircuit.app.details.DetailsSources
+import io.github.opencircuit.app.health.HealthAccessState
+import io.github.opencircuit.app.health.HealthCardInput
+import io.github.opencircuit.app.health.HealthCardPresenter
+import io.github.opencircuit.app.health.HealthCardSources
+import io.github.opencircuit.app.health.HealthCardUi
+import io.github.opencircuit.app.health.HealthFlushState
 import io.github.opencircuit.app.live.LiveMeasureState
 import io.github.opencircuit.app.live.MeasureUi
 import io.github.opencircuit.app.live.measureUi
@@ -53,6 +59,8 @@ data class RingUiState(
     val details: ConnectionDetailsUi = ConnectionDetailsPresenter.present(DetailsInput()),
     /** The Ring data card: the last sync, Sync now and the "Disconnect after syncing" switch. */
     val ringData: RingDataUi = RingDataPresenter.present(RingDataInput(now = Instant.EPOCH)),
+    /** The Health Connect card; null when the screen has no Health Connect (the card is not drawn). */
+    val health: HealthCardUi? = null,
 )
 
 /**
@@ -89,6 +97,8 @@ class RingViewModel(
      * while nothing else changes (the link idle after a sync, the ring out of reach).
      */
     clockTicks: Flow<Unit> = everyMinute(),
+    /** What the Health Connect card shows and its Write now; null: no card (screens built without Health Connect). */
+    private val health: HealthCardSources? = null,
 ) : ViewModel(scope) {
 
     /** The Ring screen's state. */
@@ -171,8 +181,21 @@ class RingViewModel(
         val flowState: StateFlow<ConnectFlowState> = connectFlow?.state ?: MutableStateFlow(ConnectFlowState())
         val initialDetails = DetailsInput(pairing = details.pairingOutcome.value, scanKept = scanKept, scan = details.scanMatch?.value)
         val switchAndClock: Flow<Boolean> = disconnectAfterSync.combine(clockTicks) { on, _ -> on }
-        uiState = combine(linkParts, flowState, adapterState, detailsInput, switchAndClock, ::render)
-            .stateIn(scope, SharingStarted.Eagerly, render(LinkParts(), flowState.value, adapterState.value, initialDetails, disconnectAfterSync.value))
+        // The Health Connect card follows its own sources; "Last written" moves on with the screen's clock ticks.
+        fun withHealth(state: RingUiState, access: HealthAccessState?, flush: HealthFlushState?): RingUiState =
+            if (access == null || flush == null) state else state.copy(health = HealthCardPresenter.present(HealthCardInput(access, flush, wallClock())))
+        val accessFlow: Flow<HealthAccessState?> = health?.access ?: flowOf(null)
+        val flushFlow: Flow<HealthFlushState?> = health?.flush ?: flowOf(null)
+        uiState = combine(combine(linkParts, flowState, adapterState, detailsInput, switchAndClock, ::render), accessFlow, flushFlow, ::withHealth)
+            .stateIn(
+                scope,
+                SharingStarted.Eagerly,
+                withHealth(
+                    render(LinkParts(), flowState.value, adapterState.value, initialDetails, disconnectAfterSync.value),
+                    health?.access?.value,
+                    health?.flush?.value,
+                ),
+            )
     }
 
     /**
@@ -189,6 +212,9 @@ class RingViewModel(
             is RingAction.Measure -> controller?.let { if (!it.deviceStatus.state.value.onCharger) it.liveMeasure.start(action.mode) }
             RingAction.StopMeasure -> controller?.liveMeasure?.stop()
             RingAction.SyncNow -> controller?.sync?.syncNow()
+            RingAction.WriteHealthNow -> health?.writeNow?.invoke()
+            // Health Connect's permission screen is the activity's (the activity result registry).
+            RingAction.ConnectHealth, RingAction.OpenHealthSettings -> Unit
             is RingAction.SetDisconnectAfterSync -> {
                 if (prefs?.setDisconnectAfterSync(action.on) == false) {
                     // Not saved: the switch shows what is kept, so the user sees it did not change.

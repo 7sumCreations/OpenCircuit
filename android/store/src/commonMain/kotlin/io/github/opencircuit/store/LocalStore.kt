@@ -8,6 +8,7 @@ import io.github.opencircuit.ringkit.LiveHR
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.ringkit.SleepEdit
+import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SyncCursor
 import io.github.opencircuit.ringkit.isCumulativeCounter
 import java.time.Instant
@@ -27,7 +28,10 @@ import java.time.ZoneId
 // (ios/OpenCircuit/CycleStore.swift :73-156), the headache log and the frozen headache-risk rows
 // (ios/OpenCircuit/Store/HeadacheStore.swift :195-315, :332-406), without their health-write calls
 // (`periodEntriesNeedingHealthMirror`, `recordPeriodEntryHK`, `pendingHeadacheEntries`,
-// `recordHeadacheEntryHK`), which belong to the health-store port.
+// `recordHeadacheEntryHK`), which belong to the health-store port; and the Health Connect
+// watermark (`healthMirroredKinds`, `pendingHealthSamples` :1215-1233, `markHealthWritten`,
+// `loadHealthCursor` :1358-1377) and the sleep mark (`pendingHealthSleep`, `markSleepWritten`,
+// `forceSleepCursorAtLeast` :1239-1279).
 //
 // Differences, each deliberate:
 // - `now` and `zone` are parameters. Upstream reads the wall clock and `Calendar.current`; the
@@ -113,6 +117,47 @@ class LocalStore internal constructor(
     /** Every logged period, oldest start first. */
     suspend fun allPeriodEntries(): List<PeriodEntry> = userEntryDao.allPeriods().map { it.toPeriodEntry() }
 
+    /**
+     * The logged periods the Health Connect writer has to look at, oldest start first (upstream
+     * `periodEntriesNeedingHealthMirror`, CycleStore.swift:173-194): one never written or edited
+     * since; one still open (a further day may have elapsed since its last write); or one whose
+     * end day, in [zone], is after [today]'s (written up to today so far, its later days still to
+     * come). Being here is not a decision to write: the writer decides, against the same clock.
+     */
+    suspend fun periodEntriesNeedingHealthMirror(today: Instant, zone: ZoneId): List<PeriodEntry> {
+        val todayDay = startOfDay(today, zone)
+        return userEntryDao.allPeriods().filter { row ->
+            !row.healthWritten || row.end == null || startOfDay(row.end, zone) > todayDay
+        }.map { it.toPeriodEntry() }
+    }
+
+    /**
+     * Records what the Health Connect writer wrote for the period starting at [start] (upstream
+     * `recordPeriodEntryHK`, CycleStore.swift:204-211): the record [ids] it names, and whether the
+     * entry is now written up to date ([finalized]). Nothing happens when no period starts there.
+     */
+    suspend fun recordPeriodEntryHealthIds(start: Instant, ids: List<String>, finalized: Boolean) {
+        val written = ids.toList()
+        db.withWriteTransaction {
+            val row = userEntryDao.periodAt(start.toStoredMillis()) ?: return@withWriteTransaction
+            userEntryDao.updatePeriod(row.copy(hkSampleUUIDs = written, healthWritten = finalized))
+        }
+    }
+
+    /**
+     * As [recordPeriodEntryHealthIds], by a writer that wrote the entry with [writtenEnd] and
+     * [writtenFlowLevelRaw]: it is finalized only if it still has them. An entry the wearer edited
+     * while its records were sent keeps the ids named and stays to be written.
+     */
+    suspend fun recordPeriodEntryHealthIds(start: Instant, ids: List<String>, finalized: Boolean, writtenEnd: Instant?, writtenFlowLevelRaw: Int) {
+        val written = ids.toList()
+        db.withWriteTransaction {
+            val row = userEntryDao.periodAt(start.toStoredMillis()) ?: return@withWriteTransaction
+            val unchanged = row.end == writtenEnd?.toStoredMillis() && row.flowLevelRaw == writtenFlowLevelRaw
+            userEntryDao.updatePeriod(row.copy(hkSampleUUIDs = written, healthWritten = finalized && unchanged))
+        }
+    }
+
     // Headache log (ios/OpenCircuit/Store/HeadacheStore.swift :195-315).
 
     /**
@@ -183,6 +228,15 @@ class LocalStore internal constructor(
 
     /** The health-store sample ids already imported as headaches, so a repeated import adds nothing. */
     suspend fun importedHeadacheHKUUIDs(): Set<String> = userEntryDao.importedHeadacheUUIDs().toSet()
+
+    /**
+     * The headaches not yet written to the health store, oldest onset first (upstream
+     * `pendingHeadacheEntries`, HeadacheStore.swift:303-309): written cleared, and not imported from
+     * the health store (writing one back would duplicate it). Bookkeeping only on Android: Health
+     * Connect has no headache type, so nothing writes a headache and nothing marks one written.
+     */
+    suspend fun pendingHeadacheEntries(): List<HeadacheEntry> =
+        userEntryDao.pendingHeadaches(HeadacheSource.HEALTH_IMPORT.rawValue).map { it.toHeadacheEntry() }
 
     // Frozen risk rows (ios/OpenCircuit/Store/HeadacheStore.swift :332-406).
 
@@ -337,6 +391,7 @@ class LocalStore internal constructor(
                 ingested += delta
             }
             sampleDao.insertSamples(toInsert)
+            pullHealthMarksBehind(ingested)
 
             // Only the kinds whose cursor moved.
             val advanced = staged.advanced
@@ -347,6 +402,50 @@ class LocalStore internal constructor(
             )
             ingested
         }
+
+    /**
+     * Keeps readings measured live — a settled heart rate, the last blood oxygen, a nightly skin
+     * temperature — OUTSIDE the sync cursor, in one transaction, and returns what was stored. The
+     * cursor is forward-only: a reading taken now would make the next drain drop every older sample
+     * the ring still holds (upstream's fix after the pin; PORTING.md D-293). Instead a reading is
+     * skipped when a sample of its kind is already stored at its start (to the stored millisecond),
+     * so a re-sent reading is kept once; the first reading at a start wins. Implausible readings are
+     * dropped by the same check as [ingest]. Only [LIVE_KINDS] are taken; anything else throws
+     * [IllegalArgumentException], writing nothing.
+     */
+    suspend fun insertLiveSamples(samples: List<QuantitySample>, now: Instant): List<QuantitySample> {
+        samples.firstOrNull { it.kind !in LIVE_KINDS }?.let { throw IllegalArgumentException("${it.kind} is not a live reading kind") }
+        return db.withWriteTransaction {
+            val stored = ArrayList<QuantitySample>(samples.size)
+            for (s in samples.map(::toStoredPrecision)) {
+                if (plausibility(s, now) != Plausibility.PLAUSIBLE) continue
+                if (sampleDao.countAt(s.kind.rawValue, s.start) > 0) continue
+                sampleDao.insertSamples(listOf(StoredSampleEntity.of(s)))
+                stored += s
+            }
+            // A reading stamped behind its kind's mark (the phone's clock behind the ring's) is
+            // pending too, never taken as written.
+            pullHealthMarksBehind(stored)
+            stored
+        }
+    }
+
+    /**
+     * After an ingest or a live insert stored [stored]: a kind's Health Connect mark at or after the
+     * oldest of them is pulled back to just before it, so the writer takes them. A live reading
+     * (stored outside the cursor, [insertLiveSamples]) can put the mark ahead of a drain, and a
+     * drain's marked samples ahead of a live reading stamped by a slower clock; the samples written again
+     * carry the same ids, so Health Connect replaces them (PORTING.md D-294).
+     */
+    private suspend fun pullHealthMarksBehind(stored: List<QuantitySample>) {
+        val marks = healthMarks()
+        val pulled = stored.filter { it.kind in HEALTH_MIRRORED_KINDS }.groupBy { it.kind }.mapNotNull { (kind, rows) ->
+            val oldest = rows.minOf { it.start }
+            val mark = marks.last(kind) ?: return@mapNotNull null
+            if (oldest > mark) null else StoredCursorEntity(kindRaw = HEALTH_CURSOR_PREFIX + kind.rawValue, last = oldest.minusMillis(1))
+        }
+        if (pulled.isNotEmpty()) sampleDao.upsertCursors(pulled)
+    }
 
     /** Stored samples of [kind] with `from <= start < to`, oldest first. */
     suspend fun samples(kind: MetricKind, from: Instant, to: Instant): List<QuantitySample> =
@@ -396,6 +495,27 @@ class LocalStore internal constructor(
     /** Step deltas with `from <= start < to`, oldest first. */
     suspend fun stepSamples(from: Instant, to: Instant): List<StepSample> = dailyDao.stepSamples(from, to).map { it.toStepSample() }
 
+    /**
+     * The step deltas not yet written to Health Connect, every day, oldest first (ties in row order),
+     * each with its row id (upstream `pendingStepSamples`, LocalStore.swift:3083-3088). Moves
+     * nothing: call [markStepSamplesWritten] with the rows Health Connect accepted.
+     */
+    suspend fun pendingStepSampleRows(): List<StoredStepRow> =
+        dailyDao.pendingStepSamples().map { StoredStepRow(it.id, it.toStepSample()) }
+
+    /** Whether a step delta not yet written starts at or before [upTo], without reading them. */
+    suspend fun hasPendingStepSamples(upTo: Instant): Boolean = dailyDao.hasPendingStepSamples(upTo)
+
+    /** As [stepSamples], each with its row id: rows that share a start are told apart by it. */
+    suspend fun stepSampleRows(from: Instant, to: Instant): List<StoredStepRow> =
+        dailyDao.stepSamples(from, to).map { StoredStepRow(it.id, it.toStepSample()) }
+
+    /** Marks the step deltas with these row ids written to Health Connect, in one statement; unknown ids are ignored. */
+    suspend fun markStepSamplesWritten(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        db.withWriteTransaction { ids.chunked(MAX_IDS_PER_STATEMENT).forEach { dailyDao.markStepSamplesWritten(it) } }
+    }
+
     /** The newest day's step total, or null. */
     suspend fun latestDaily(): DailySteps? = dailyDao.recentDailies(limit = 1).firstOrNull()?.toDailySteps()
 
@@ -419,14 +539,25 @@ class LocalStore internal constructor(
      * Deletes raw samples, step deltas and daytime readings older than [olderThanDays] calendar
      * days before [now] in [zone] (`time < cutoff`; a row exactly at the cutoff is kept), in one
      * transaction. Day totals and cursors are never pruned. Meant for once a launch, not per write.
+     *
+     * Nothing Health Connect has not received is pruned (PORTING D-300): a reading above zero of a
+     * [HEALTH_MIRRORED_KINDS] kind is deleted only at or before its kind's mark (with no mark, none
+     * is), and a step delta only once marked written; they age out once written. A zero reading,
+     * which is never written, and the daytime readings, which are not written to Health Connect,
+     * age out as before.
      */
     suspend fun pruneExpiredSamples(now: Instant, zone: ZoneId, olderThanDays: Long = SAMPLE_RETENTION_DAYS) {
         // Calendar days in the zone, as Foundation's `date(byAdding: .day, value: -days, to:)`.
         val cutoff = now.atZone(zone).minusDays(olderThanDays).toInstant()
         db.withWriteTransaction {
-            sampleDao.deleteSamplesBefore(cutoff)
+            sampleDao.deleteSamplesBefore(cutoff, HEALTH_MIRRORED_KINDS.map { it.rawValue })
+            val marks = healthMarks()
+            for (kind in HEALTH_MIRRORED_KINDS) {
+                val mark = marks.last(kind) ?: continue
+                sampleDao.deleteWrittenSamplesBefore(kind.rawValue, cutoff, mark)
+            }
             dailyDao.deleteDaytimeTempsBefore(cutoff)
-            dailyDao.deleteStepSamplesBefore(cutoff)
+            dailyDao.deleteWrittenStepSamplesBefore(cutoff)
         }
     }
 
@@ -492,6 +623,123 @@ class LocalStore internal constructor(
             purged
         }
 
+    // The Health Connect watermark (upstream LocalStore.swift :1215-1233, :1358-1377): its own
+    // `hk:<kind>` rows in the cursor table, apart from the ingest cursor, so storing a sample never
+    // counts as writing it to Health Connect. Only the writer moves it, after a write was accepted.
+
+    /**
+     * Stored samples of every [HEALTH_MIRRORED_KINDS] kind newer than that kind's Health Connect
+     * mark and above zero, oldest first (ties in row order). Moves nothing: call [markHealthWritten]
+     * once Health Connect has accepted them.
+     */
+    suspend fun pendingHealthSamples(): List<QuantitySample> =
+        HEALTH_MIRRORED_KINDS.flatMap { pendingHealthSamples(it) }.sortedBy { it.start }
+
+    /** As [pendingHealthSamples], for one [kind]; empty for a kind that is not written from here. */
+    suspend fun pendingHealthSamples(kind: MetricKind): List<QuantitySample> = pendingHealthSampleRows(kind).map { it.sample }
+
+    /** Whether [pendingHealthSamples] of [kind] holds one starting at or before [upTo], without reading them. */
+    suspend fun hasPendingHealthSamples(kind: MetricKind, upTo: Instant): Boolean {
+        if (kind !in HEALTH_MIRRORED_KINDS) return false
+        val mark = healthMarks().last(kind)
+        return if (mark == null) sampleDao.hasPositiveUpTo(kind.rawValue, upTo) else sampleDao.hasPositiveBetween(kind.rawValue, mark, upTo)
+    }
+
+    /**
+     * As [pendingHealthSamples] for one [kind], each with its row id: two stored rows of one kind may
+     * share a start (the start is indexed, not unique), and the row id tells them apart for good.
+     */
+    suspend fun pendingHealthSampleRows(kind: MetricKind): List<StoredSampleRow> {
+        if (kind !in HEALTH_MIRRORED_KINDS) return emptyList()
+        val mark = healthMarks().last(kind)
+        val rows = if (mark == null) sampleDao.positiveSamples(kind.rawValue) else sampleDao.positiveSamplesAfter(kind.rawValue, mark)
+        return rows.mapNotNull { row -> row.toSample()?.let { StoredSampleRow(row.id, it) } }
+    }
+
+    /** Every stored sample of [kind] with `from <= start < until`, any value, with its row id, oldest first (ties in row order). */
+    suspend fun sampleRows(kind: MetricKind, from: Instant, until: Instant): List<StoredSampleRow> =
+        sampleDao.samples(kind.rawValue, from, until).mapNotNull { row -> row.toSample()?.let { StoredSampleRow(row.id, it) } }
+
+    /**
+     * Moves each kind's Health Connect mark to the newest start among [samples] of that kind —
+     * forward only, never back — in one transaction. Pass only what Health Connect accepted. Kinds
+     * that are not written from the store (steps, energy, sleep) move no mark.
+     */
+    suspend fun markHealthWritten(samples: List<QuantitySample>) = markHealthWritten(samples, seenUpToRow = null)
+
+    /**
+     * The highest sample row id stored so far (0 for none). A writer reads it before it reads what
+     * is pending and hands it back to [markHealthWritten]: a row stored after it is one the writer
+     * cannot have sent.
+     */
+    suspend fun sampleRowWatermark(): Long = sampleDao.maxSampleId() ?: 0L
+
+    /**
+     * As [markHealthWritten], for a writer that read what is pending after [seenUpToRow]
+     * ([sampleRowWatermark]): a kind's mark never passes a positive sample stored after that row (a
+     * drain or a live reading that landed while the writer was sending), it stops just before the
+     * oldest such sample, which stays pending for the next write. Null checks nothing.
+     */
+    suspend fun markHealthWritten(samples: List<QuantitySample>, seenUpToRow: Long?) {
+        val mirrored = samples.filter { it.kind in HEALTH_MIRRORED_KINDS }
+        if (mirrored.isEmpty()) return
+        db.withWriteTransaction {
+            val marks = healthMarks()
+            val moved = mirrored.groupBy { it.kind }.mapNotNull { (kind, ofKind) ->
+                val newest = ofKind.maxOf { it.start.toStoredMillis() }
+                val unseen = seenUpToRow?.let { sampleDao.oldestPositiveAddedAfter(kind.rawValue, it, newest) }
+                val target = unseen?.let { minOf(newest, it.start.minusMillis(1)) } ?: newest
+                val current = marks.last(kind)
+                if (current != null && target <= current) null else StoredCursorEntity(kindRaw = HEALTH_CURSOR_PREFIX + kind.rawValue, last = target)
+            }
+            if (moved.isNotEmpty()) sampleDao.upsertCursors(moved)
+        }
+    }
+
+    // The sleep mark (upstream LocalStore.swift :1239-1279): the ingest-namespace `sleep` cursor row,
+    // NOT an `hk:` row, as upstream. Health Connect keeps a night as one record, so the writer never
+    // sends what [pendingHealthSleep] clips (that would replace the night with its tail); it moves the
+    // mark after a night it wrote whole, and the edit bookkeeping reads it.
+
+    /**
+     * The segments of a night still to be written, judged against the sleep mark: none when the
+     * night's latest end is not after the mark; with a mark inside the night, only what lies past
+     * it, a segment crossing it clipped to start there. Moves nothing.
+     */
+    suspend fun pendingHealthSleep(segments: List<SleepSegment>): List<SleepSegment> {
+        val latest = segments.maxOfOrNull { it.end.toStoredMillis() } ?: return emptyList()
+        val last = sampleDao.allCursors().firstOrNull { it.kindRaw == MetricKind.SLEEP.rawValue }?.last
+            ?: return segments
+        if (latest <= last) return emptyList()
+        return segments.mapNotNull { s ->
+            val start = maxOf(s.start, last)
+            if (s.end > start) SleepSegment(start, s.end, s.stage, s.provenance) else null
+        }
+    }
+
+    /** Moves the sleep mark to the latest end of [segments] (forward only). Only what Health Connect accepted. */
+    suspend fun markSleepWritten(segments: List<SleepSegment>) {
+        val latest = segments.maxOfOrNull { it.end } ?: return
+        forceSleepCursorAtLeast(latest)
+    }
+
+    /** Moves the sleep mark to [date] when it is later than the mark; never back. One transaction. */
+    suspend fun forceSleepCursorAtLeast(date: Instant) {
+        val at = date.toStoredMillis()
+        db.withWriteTransaction {
+            val last = sampleDao.allCursors().firstOrNull { it.kindRaw == MetricKind.SLEEP.rawValue }?.last
+            if (last == null || at > last) sampleDao.upsertCursors(listOf(StoredCursorEntity(MetricKind.SLEEP.rawValue, at)))
+        }
+    }
+
+    /** The Health Connect marks, from the `hk:` rows, keyed by bare kind. */
+    private suspend fun healthMarks(): SyncCursor =
+        SyncCursor(
+            sampleDao.allCursors()
+                .filter { it.kindRaw.startsWith(HEALTH_CURSOR_PREFIX) }
+                .associate { it.kindRaw.removePrefix(HEALTH_CURSOR_PREFIX) to it.last },
+        )
+
     /** Daytime readings with `from <= time < to`, oldest first. */
     suspend fun daytimeTemperatures(from: Instant, to: Instant): List<DaytimeTemperature> =
         dailyDao.daytimeTemps(from, to).map { it.toDaytimeTemperature() }
@@ -540,6 +788,19 @@ class LocalStore internal constructor(
     companion object {
         /** Days of raw samples, step deltas and daytime readings kept on the phone (upstream `sampleRetentionDays`). */
         const val SAMPLE_RETENTION_DAYS = 30L
+
+        /**
+         * The kinds written to Health Connect straight from the stored samples (upstream
+         * `healthMirroredKinds`). Steps, active energy and sleep take their own paths.
+         */
+        val HEALTH_MIRRORED_KINDS: List<MetricKind> =
+            listOf(MetricKind.HEART_RATE, MetricKind.HRV_SDNN, MetricKind.SPO2, MetricKind.RESPIRATORY_RATE, MetricKind.TEMPERATURE)
+
+        /** The kinds [insertLiveSamples] takes: what the app measures live and keeps (upstream persists these three). */
+        val LIVE_KINDS: Set<MetricKind> = setOf(MetricKind.HEART_RATE, MetricKind.SPO2, MetricKind.TEMPERATURE)
+
+        /** Row ids bound in one statement: well under SQLite's 999 host parameters. */
+        private const val MAX_IDS_PER_STATEMENT = 500
 
         /** Cursor rows of the health-store writer share the table; they are not the ingest cursor. */
         private const val HEALTH_CURSOR_PREFIX = "hk:"

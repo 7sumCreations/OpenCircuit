@@ -8,6 +8,7 @@ import io.github.opencircuit.app.connect.AndroidCompanionPort
 import io.github.opencircuit.app.connect.CompanionPairing
 import io.github.opencircuit.app.connect.RingScannerFactory
 import io.github.opencircuit.app.data.AppPrefs
+import io.github.opencircuit.app.data.LaunchHousekeeping
 import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.data.PrefsRememberedRingStore
 import io.github.opencircuit.app.data.PrefsSyncMarks
@@ -15,6 +16,20 @@ import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.details.DetailsSources
+import io.github.opencircuit.app.health.HealthAccess
+import io.github.opencircuit.app.health.HealthFlush
+import io.github.opencircuit.app.health.StoreHealthAccessMemory
+import io.github.opencircuit.app.health.StoreHealthActivity
+import io.github.opencircuit.app.health.StoreHealthFailures
+import io.github.opencircuit.app.health.StoreHealthPeriods
+import io.github.opencircuit.app.health.StoreHealthSamples
+import io.github.opencircuit.app.health.StoreHealthSleep
+import io.github.opencircuit.app.health.StoreWriteGenerations
+import io.github.opencircuit.app.live.StoreLiveReadings
+import io.github.opencircuit.health.HealthWriter
+import io.github.opencircuit.health.JetpackHealthConnect
+import io.github.opencircuit.health.RingDevice
+import io.github.opencircuit.health.WriteGeneration
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.RingSessions
 import io.github.opencircuit.app.sync.SessionHistory
@@ -94,6 +109,52 @@ class AppContainer(context: Context) {
     /** The ring the app reconnects to. */
     val rememberedRings: RememberedRingStore = PrefsRememberedRingStore(keyValues)
 
+    /** The phone's wall clock as an instant. */
+    private val wallNow: () -> Instant = { Instant.ofEpochMilli(clock.nowMillis()) }
+
+    /** Health Connect on this phone (the platform's, Android 14 and later); the one client of the app. */
+    val healthConnect: JetpackHealthConnect = JetpackHealthConnect(context)
+
+    /** The Health Connect write-failure map in the store, shared by every write and the card. */
+    private val healthFailures = StoreHealthFailures({ database.await() }, wallNow, log)
+
+    /**
+     * Writes what the store holds and Health Connect lacks. The ring's model comes from the current
+     * session's firmware revision, when one has been read. A store with no write generation yet
+     * (a first install, a reinstall, cleared data) starts it above the wall clock in milliseconds,
+     * above any version an earlier install left in Health Connect.
+     */
+    private val healthWriter = HealthWriter(
+        port = healthConnect,
+        store = StoreHealthSamples { database.await() },
+        generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow)) { clock.nowMillis() },
+        failureStore = healthFailures,
+        clock = wallNow,
+        zone = ZoneId::systemDefault,
+        device = { RingDevice.ofFirmware(ringSessions.current.value?.let { it.link.info.value.firmware.version }) },
+        sleep = StoreHealthSleep({ database.await() }, wallNow, ZoneId::systemDefault),
+        activity = StoreHealthActivity({ database.await() }, wallNow, ZoneId::systemDefault),
+        periods = StoreHealthPeriods { database.await() },
+    )
+
+    /**
+     * The store's launch repairs (the 30-day prune, the purges, the night move, the backfill, the
+     * heal, the cursor repair), once per process, off the main thread, after the store opened.
+     */
+    private val launchRepairs = LaunchHousekeeping({ database.await() }, wallNow, ZoneId::systemDefault, log).start(appScope)
+
+    /**
+     * Starts the Health Connect writes — after each committed sync and on "Write to Health Connect
+     * now" — on the process scope, so neither a sync's pause nor a session's end cuts one. Each
+     * write waits for the launch repairs: the night move re-keys the nights a write keeps its marks
+     * under.
+     */
+    val healthFlush: HealthFlush = HealthFlush({ launchRepairs.join(); healthWriter.flush() }, appScope, log)
+
+    /** Whether Health Connect is there and which WRITE permissions are granted; read now, on each resume and after the permission screen. */
+    val healthAccess: HealthAccess =
+        HealthAccess(healthConnect, StoreHealthAccessMemory({ database.await() }, wallNow, healthFailures), appScope, log).also { it.refresh() }
+
     /** Android's companion-device manager: the pairing sheet before the first bond, and forgetting. */
     val companionPairing: CompanionPairing = CompanionPairing(AndroidCompanionPort(context), log)
 
@@ -156,6 +217,10 @@ class AppContainer(context: Context) {
             zone = { ZoneId.systemDefault() },
             // The debug build's sync test action; the release build's never cuts.
             faults = VariantLinks.syncFaults,
+            // Each committed sync's data goes on to Health Connect.
+            afterCommit = { healthFlush.request() },
+            // What the ring measures live while connected: steps, nightly skin temperature, a measure's result.
+            live = StoreLiveReadings({ database.await() }, wallNow, { ZoneId.systemDefault() }),
         )
     }
 

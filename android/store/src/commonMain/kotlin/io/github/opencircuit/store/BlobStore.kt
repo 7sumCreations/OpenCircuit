@@ -28,6 +28,7 @@ import io.github.opencircuit.store.codec.StrandedCountersCodec
 import io.github.opencircuit.store.codec.WorkoutSessionSnapshotCodec
 import java.time.Instant
 import java.time.LocalDate
+import java.time.format.DateTimeParseException
 import java.util.Collections
 
 // Typed access to the values upstream keeps in `UserDefaults`, here in the `store_kv` table of the
@@ -47,6 +48,9 @@ import java.util.Collections
 // Not given a home: the history-sync evidence list (its wrapper type belongs to the sync epic; the
 // trace codec is here), and `UnattributedPageBuffer` (in memory upstream, RingSession.swift:499;
 // the history journal's rows with no drain replace it).
+
+/** The value kept for an active-energy bucket written while it was still running ([BlobStore.saveHealthEnergyWritten]). */
+const val ENERGY_WRITTEN_RUNNING = -1.0
 
 /**
  * The stored values that are not sample rows: one key each, named as upstream names its
@@ -188,6 +192,158 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
     suspend fun saveEnergyLedgerDay(day: EnergyLedgerDay, now: Instant): Boolean =
         putIfEncoded(energyKey(day.localDate), EnergyLedgerDayCodec.encode(day), now)
 
+    // Health Connect write generation: one number; an unreadable value is reported, never read as absent.
+
+    /**
+     * The last Health Connect write generation handed out: null when none ever was,
+     * [Decoded.Unreadable] when what is stored is not a whole number of at least 1. A caller must
+     * not start again from 1 over an unreadable value: every record already written carries a
+     * higher version, so each later write would be ignored.
+     */
+    suspend fun loadHealthWriteGeneration(): Decoded<Long>? {
+        val raw = kv.get(HEALTH_WRITE_GENERATION)?.value ?: return null
+        // ASCII digits only: Kotlin's toLongOrNull also reads other scripts' digits ("９").
+        val value = if (ASCII_DIGITS.matches(raw)) raw.toLongOrNull() else null
+        return if (value != null && value >= 1) Decoded.Readable(value) else Decoded.Unreadable(raw, "not a whole number of at least 1")
+    }
+
+    /** Saves [generation] (at least 1) as the last write generation handed out. */
+    suspend fun saveHealthWriteGeneration(generation: Long, now: Instant) {
+        require(generation >= 1) { "a write generation is at least 1, was $generation" }
+        put(HEALTH_WRITE_GENERATION, generation.toString(), now)
+    }
+
+    // Health Connect write failures (upstream `hk.failures.byMetric`, HealthKitWriter.swift
+    // :377-396): record type name → last failure time. An unreadable value is reported.
+
+    /**
+     * The types whose last Health Connect write failed, by name, with when: null when none,
+     * [Decoded.Unreadable] when what is stored is not `NAME=epochMillis` pairs joined by `;`.
+     */
+    suspend fun loadHealthWriteFailures(): Decoded<Map<String, Instant>>? {
+        val raw = kv.get(HEALTH_WRITE_FAILURES)?.value ?: return null
+        val out = sortedMapOf<String, Instant>()
+        for (pair in raw.split(';')) {
+            val parts = pair.split('=')
+            val name = parts.getOrNull(0)
+            val millis = parts.getOrNull(1)
+            if (parts.size != 2 || name == null || millis == null || !FAILURE_NAME.matches(name) || !ASCII_DIGITS.matches(millis)) {
+                return Decoded.Unreadable(raw, "not NAME=epochMillis pairs")
+            }
+            val ms = millis.toLongOrNull() ?: return Decoded.Unreadable(raw, "a time out of range")
+            out[name] = Instant.ofEpochMilli(ms)
+        }
+        return Decoded.Readable(out.toMap())
+    }
+
+    /**
+     * Saves [failures] (type name → last failure time, at or after 1970), replacing what was
+     * stored; an empty map removes the value. A name is an upper-case constant (`SLEEP_SESSION`).
+     */
+    suspend fun saveHealthWriteFailures(failures: Map<String, Instant>, now: Instant) {
+        failures.forEach { (name, at) ->
+            require(FAILURE_NAME.matches(name)) { "a failure's name must be an upper-case constant, was \"$name\"" }
+            require(!at.isBefore(Instant.EPOCH)) { "a failure time must be at or after 1970, was $at" }
+        }
+        if (failures.isEmpty()) {
+            kv.delete(HEALTH_WRITE_FAILURES)
+            return
+        }
+        put(HEALTH_WRITE_FAILURES, failures.toSortedMap().entries.joinToString(";") { (name, at) -> "$name=${at.toEpochMilli()}" }, now)
+    }
+
+    // Health Connect's permission screen shown once: after it, a "Not connected" card offers
+    // Health Connect's settings instead of asking again (Android shows the screen only so often).
+
+    /** Whether the permission screen was shown. Any stored value counts: a damaged one must not make the card ask again in a loop. */
+    suspend fun loadHealthPermissionsRequested(): Boolean = kv.get(HEALTH_PERMISSIONS_REQUESTED) != null
+
+    /** Records that the permission screen was shown and answered. */
+    suspend fun saveHealthPermissionsRequested(now: Instant) = put(HEALTH_PERMISSIONS_REQUESTED, "1", now)
+
+    // The live step fold's baseline (upstream keeps it in UserDefaults, RingSession.swift :2239-2253):
+    // `raw;dayStartMillis;sampleAtMillis`. Unreadable is none: the next reading is then credited whole.
+
+    /** The last raw step counter folded, its local day and when it arrived; null when none or unreadable. */
+    suspend fun loadStepBaseline(): StepBaseline? {
+        val parts = kv.get(STEP_BASELINE)?.value?.split(';') ?: return null
+        if (parts.size != 3 || parts.any { !ASCII_DIGITS.matches(it) }) return null
+        val raw = parts[0].toIntOrNull()?.takeIf { it in 0..StepBaseline.MAX_RAW } ?: return null
+        val day = parts[1].toLongOrNull() ?: return null
+        val at = parts[2].toLongOrNull() ?: return null
+        return StepBaseline(raw, Instant.ofEpochMilli(day), Instant.ofEpochMilli(at))
+    }
+
+    /** Saves the step fold's baseline, replacing the last one. */
+    suspend fun saveStepBaseline(baseline: StepBaseline, now: Instant) {
+        require(baseline.raw in 0..StepBaseline.MAX_RAW) { "a raw step counter is 0..${StepBaseline.MAX_RAW}, was ${baseline.raw}" }
+        require(!baseline.day.isBefore(Instant.EPOCH) && !baseline.sampleAt.isBefore(Instant.EPOCH)) { "a step baseline is dated at or after 1970" }
+        put(STEP_BASELINE, "${baseline.raw};${baseline.day.toEpochMilli()};${baseline.sampleAt.toEpochMilli()}", now)
+    }
+
+    // Health Connect day marks (upstream `hk.restingHR.lastDay`): per record type name, the last local
+    // day written. Unreadable is none: the writer then rewrites its lookback, under the same ids.
+
+    /** The last local day written for [type] (a record type's name), or null when none or unreadable. */
+    suspend fun loadHealthDayMark(type: String): LocalDate? {
+        val raw = kv.get(dayMarkKey(type))?.value ?: return null
+        if (!ISO_DATE.matches(raw)) return null
+        return try {
+            LocalDate.parse(raw)
+        } catch (e: DateTimeParseException) {
+            null
+        }
+    }
+
+    /** Saves [day] as the last local day written for [type]. */
+    suspend fun saveHealthDayMark(type: String, day: LocalDate, now: Instant) = put(dayMarkKey(type), day.toString(), now)
+
+    // Health Connect active energy: per local day, the kilocalories written per bucket start
+    // (`epochMillis=kcal;…`), so a bucket that falls is written lower, down to zero. A bucket
+    // written while it was still running is kept as [ENERGY_WRITTEN_RUNNING] (`-1`): it is written
+    // again over its whole span once it closes, whatever its total.
+
+    /** The kilocalories written per bucket start of [day]; empty when none or unreadable. */
+    suspend fun loadHealthEnergyWritten(day: LocalDate): Map<Instant, Double> {
+        val raw = kv.get(healthEnergyKey(day))?.value ?: return emptyMap()
+        val out = HashMap<Instant, Double>()
+        for (pair in raw.split(';')) {
+            val parts = pair.split('=')
+            if (parts.size != 2 || !ASCII_DIGITS.matches(parts[0])) return emptyMap()
+            val kcal = if (parts[1] == ENERGY_WRITTEN_RUNNING.toString()) {
+                ENERGY_WRITTEN_RUNNING
+            } else {
+                if (!DECIMAL.matches(parts[1])) return emptyMap()
+                parts[1].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return emptyMap()
+            }
+            val millis = parts[0].toLongOrNull() ?: return emptyMap()
+            out[Instant.ofEpochMilli(millis)] = kcal
+        }
+        return out
+    }
+
+    /** Saves the kilocalories written per bucket start of [day], replacing what was stored; an empty map removes it. */
+    suspend fun saveHealthEnergyWritten(day: LocalDate, written: Map<Instant, Double>, now: Instant) {
+        written.forEach { (start, kcal) ->
+            require(!start.isBefore(Instant.EPOCH)) { "a bucket start is at or after 1970, was $start" }
+            require(kcal == ENERGY_WRITTEN_RUNNING || (kcal.isFinite() && kcal >= 0)) {
+                "written kilocalories are a finite number at least 0 (or the running marker), was $kcal"
+            }
+        }
+        if (written.isEmpty()) {
+            kv.delete(healthEnergyKey(day))
+            return
+        }
+        put(healthEnergyKey(day), written.toSortedMap().entries.joinToString(";") { (start, kcal) -> "${start.toEpochMilli()}=$kcal" }, now)
+    }
+
+    /** Forgets the energy written for every day before [day], in one transaction. */
+    suspend fun forgetHealthEnergyWrittenBefore(day: LocalDate) {
+        db.withWriteTransaction {
+            kv.range("$HEALTH_ENERGY/", healthEnergyKey(day)).forEach { kv.delete(it.key) }
+        }
+    }
+
     // Epoch archive: records only through the bounded merge.
 
     /** The stored archive and its drain facts; [StoredEpochArchive.EMPTY] when none or unreadable. */
@@ -303,6 +459,26 @@ class BlobStore internal constructor(private val db: StoreDatabase, private val 
         const val PENDING_COARSE = "sleep.pendingCoarseSegments"
         const val PENDING_STAGED = "sleep.pendingStagedSegments"
         const val ENERGY_LEDGER = "hk.activeEnergy"
+        const val HEALTH_WRITE_GENERATION = "hc.writeGeneration"
+        const val HEALTH_WRITE_FAILURES = "hc.writeFailures"
+        const val HEALTH_PERMISSIONS_REQUESTED = "hc.permissionsRequested"
+        const val STEP_BASELINE = "steps.baseline"
+        const val HEALTH_DAY_MARK = "hc.lastDay"
+        const val HEALTH_ENERGY = "hc.activeEnergy"
+        val ASCII_DIGITS = Regex("[0-9]+")
+        val ISO_DATE = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+        /** A plain decimal as Kotlin prints a Double (`12.5`, `0.0`, `1.0E-4`); no sign, no NaN. */
+        val DECIMAL = Regex("[0-9]+(\\.[0-9]+)?(E-?[0-9]+)?")
+
+        fun dayMarkKey(type: String): String {
+            require(FAILURE_NAME.matches(type)) { "a record type's name is an upper-case constant, was \"$type\"" }
+            return "$HEALTH_DAY_MARK/$type"
+        }
+
+        /** `hc.activeEnergy/2026-10-16`: ISO digits whatever the locale. */
+        fun healthEnergyKey(day: LocalDate): String = "$HEALTH_ENERGY/$day"
+        val FAILURE_NAME = Regex("[A-Z][A-Z0-9_]*")
 
         fun perRing(name: String, ringId: String): String {
             require(ringId.isNotEmpty() && '/' !in ringId) { "a ring id must be non-empty and contain no '/': \"$ringId\"" }

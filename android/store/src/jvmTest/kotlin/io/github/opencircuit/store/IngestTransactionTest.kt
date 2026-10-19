@@ -99,8 +99,13 @@ class IngestTransactionTest {
         }
     }
 
+    /**
+     * Neither watermark is read as the ingest cursor, and ingest never moves the export one. The
+     * Health Connect mark is moved by ingest in one case only: a sample stored at or behind it pulls
+     * it back to just before that sample, or the sample would never be written (PORTING.md D-294).
+     */
     @Test
-    fun healthAndExportWatermarksAreNeitherReadAsTheCursorNorMovedByIngest() = runBlocking {
+    fun healthAndExportWatermarksAreNotReadAsTheCursorAndOnlyTheHealthMarkIsPulledBehindAStoredSample() = runBlocking {
         withInMemoryStore { db ->
             val far = Instant.parse("2030-01-01T00:00:00Z")
             val watermarks = listOf(StoredCursorEntity("hk:heartRate", far), StoredCursorEntity("export:samples", far))
@@ -116,7 +121,7 @@ class IngestTransactionTest {
                 listOf(
                     StoredCursorEntity("export:samples", far),
                     StoredCursorEntity("heartRate", Instant.parse("2026-01-01T00:00:00Z")),
-                    StoredCursorEntity("hk:heartRate", far),
+                    StoredCursorEntity("hk:heartRate", Instant.parse("2025-12-31T23:59:59.999Z")),
                 ),
                 rows,
             )

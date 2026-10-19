@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.time.Instant
 import kotlin.coroutines.coroutineContext
 
 /** What a live measure reads. */
@@ -61,7 +62,7 @@ data class MeasureEvidence(
     val resets: Int = 0,
 )
 
-/** A Measure row's outcome, kept in memory for the session (live readings are not saved). */
+/** A Measure row's outcome, kept in memory for the session (the reading itself is also stored when the measure stops). */
 data class MeasureResult(
     /** The last reading: the settled heart rate, or the last SpO₂ %; null if there never was one. */
     val lastValue: Int? = null,
@@ -115,7 +116,8 @@ data class LiveMeasureState(
  *   entry, the poll loop continues), or mode switch. A tap during the entry does not overlap a
  *   second entry with it (D-237).
  * - **Stop:** [stop], the budget, [onLinkLost], or any write that is refused or fails (shown on
- *   the row — D-238). Nothing resumes it. Readings are shown and kept in memory, never saved (D-234).
+ *   the row — D-238). Nothing resumes it. A run's reading is handed to [onMeasured] as it stops,
+ *   which keeps it in the store (D-234, D-293).
  *
  * Thread-safe: every public call may come from any thread.
  */
@@ -125,6 +127,13 @@ class LiveMeasureController(
     private val monotonicMillis: () -> Long,
     /** True while a history sync runs: no measure starts then (its writes would land mid-drain). */
     private val isSyncing: () -> Boolean = { false },
+    /** The phone's wall clock: when a reading was measured. */
+    private val wallClock: () -> Instant = { Instant.EPOCH },
+    /**
+     * A measure stopped with a reading of this run: the settled heart rate or the last SpO₂ %, and
+     * when its last frame arrived. Called under the controller's lock; it must return at once.
+     */
+    private val onMeasured: (LiveMode, Int, Instant) -> Unit = { _, _, _ -> },
 ) {
     private val lock = Any()
     private val stateFlow = MutableStateFlow(LiveMeasureState())
@@ -140,6 +149,9 @@ class LiveMeasureController(
     private val awaitedAnswers = ArrayDeque<Awaited>()
     private val trend = ArrayList<Int>()
     private val session = LiveSession()
+
+    /** When this run's reading last changed (a locked heart rate, an SpO₂ value), on the wall clock; null before one. */
+    private var readingAt: Instant? = null
 
     /** What the readout and the rows show. */
     val state: StateFlow<LiveMeasureState> = stateFlow.asStateFlow()
@@ -193,6 +205,7 @@ class LiveMeasureController(
                     trend += locked
                     if (trend.size > TREND_CAPACITY) trend.removeAt(0)
                     session.add(now, locked)
+                    readingAt = wallClock()
                     next = next.copy(newest = locked, warmingUp = false, settledHeartRate = LiveHR.settled(trend))
                 } else if (LiveHR.decode(frame) != null) {
                     next = next.copy(warmingUp = true)
@@ -201,6 +214,7 @@ class LiveMeasureController(
             }
             LiveMode.SPO2 -> LiveHR.decodeSpO2(frame)?.also { spo2 ->
                 session.add(now, spo2)
+                readingAt = wallClock()
                 next = next.copy(newest = spo2)
             }
         }
@@ -236,6 +250,7 @@ class LiveMeasureController(
         val myCycle = ++cycle
         trend.clear()
         session.reset()
+        readingAt = null
         deadline = Long.MAX_VALUE
         reset = false
         awaitedAnswers.clear()
@@ -292,6 +307,7 @@ class LiveMeasureController(
         val switching = stateFlow.value.mode != mode
         trend.clear()
         if (switching) session.reset()
+        readingAt = null
         deadline = monotonicMillis() + budgetMillis(mode)
         // A fresh request: the ring may be reset once more if it refuses this mode.
         reset = false
@@ -378,6 +394,11 @@ class LiveMeasureController(
         cancelJobs()
         cycle++
         val reading = if (mode == LiveMode.HEART_RATE) current.settledHeartRate else current.newest
+        // Kept only when this run measured it, stamped when it was measured (upstream RS:3449-3474):
+        // a half-measured heart rate (no settled value) is not a reading and is not kept.
+        val measuredAt = readingAt
+        if (reading != null && measuredAt != null) onMeasured(mode, reading, measuredAt)
+        readingAt = null
         trend.clear()
         session.reset()
         deadline = Long.MAX_VALUE

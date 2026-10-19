@@ -13,6 +13,7 @@ import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.Frame
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
+import io.github.opencircuit.ringkit.StepAccumulator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -39,7 +40,8 @@ import java.time.ZoneOffset
  * meets: each flow takes one collection for the demo's lifetime (the real link lets a new
  * collector take over after one stops), and the app's session collects each flow once.
  * [connect] goes straight to [LinkState.Authenticated] and sends one device-status descriptor
- * with a battery of 72 %, then another every 30 s in [scope] and one in answer to each
+ * with a battery of 72 % and the steps of the current wall-clock quarter hour (a slow walk, the
+ * bucket cleared at each quarter as the ring's is), then another every 30 s in [scope] and one in answer to each
  * `d0 00 00`, as the ring does; [disconnect] stops them, tears the connection down once and
  * goes [LinkState.Idle]. [close] does the same and retires the link, as the real link's does.
  *
@@ -366,13 +368,22 @@ class DemoRingLink(
         /** Made-up SpO₂ values, cycled. */
         private val DEMO_SPO2 = intArrayOf(97, 96, 97, 98, 97)
 
-        /**
-         * A made-up `0x10` descriptor in the layout of PROTOCOL.md §5.4: battery 72 % (`[1]`),
-         * worn and idle (`[2]` = 0x02), skin temperature 30.0 °C on both channels, 4000 mV,
-         * not in the charging case (`[17]` = 0xff).
-         */
-        private fun demoDescriptor(): ByteArray = byteArrayOf(
-            0x10, 0x48, 0x02, 0x00, 0x00, 0x00, 0x01, 0x2c, 0x01, 0x2c,
+        /** The demo's walk: steps a minute in its step bucket. */
+        private const val DEMO_STEPS_PER_MINUTE = 8
+    }
+
+    /**
+     * A made-up `0x10` descriptor in the layout of PROTOCOL.md §5.4: battery 72 % (`[1]`), worn and
+     * idle (`[2]` = 0x02), the steps since the wall-clock quarter hour began (`[4:6]`, cleared at
+     * :00 / :15 / :30 / :45 as the ring's bucket is, [DEMO_STEPS_PER_MINUTE] a minute), skin
+     * temperature 30.0 °C on both channels, 4000 mV, not in the charging case (`[17]` = 0xff).
+     */
+    private fun demoDescriptor(): ByteArray {
+        val now = Instant.ofEpochMilli(wallClock())
+        val intoBucket = Duration.between(StepAccumulator.bucketStart(now, zone()), now).seconds
+        val steps = (intoBucket * DEMO_STEPS_PER_MINUTE / 60).toInt()
+        return byteArrayOf(
+            0x10, 0x48, 0x02, 0x00, (steps ushr 8).toByte(), (steps and 0xff).toByte(), 0x01, 0x2c, 0x01, 0x2c,
             0x00, 0x00, 0x00, 0x00, 0x0f, 0xa0.toByte(), 0x00, 0xff.toByte(), 0x00,
         )
     }

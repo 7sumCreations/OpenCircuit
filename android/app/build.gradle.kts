@@ -58,8 +58,8 @@ android {
         minSdk = 34
         // Explicit: AGP 9 otherwise sets targetSdk to compileSdk.
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.1"
+        versionCode = 5
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -176,6 +176,8 @@ dependencies {
     // The on-device database: one per app, opened by AppContainer. The JVM tests open the same
     // store in memory (StoreFactory.openInMemory, bundled SQLite with its host natives).
     implementation(project(":store"))
+    // The Health Connect writer and its one adapter over Jetpack Health Connect.
+    implementation(project(":health"))
 
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
@@ -195,6 +197,8 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     // The scripted fake link (FakeRingLink) from :ble's test fixtures. JVM only.
     testImplementation(testFixtures(project(":ble")))
+    // FakeHealthConnect, which enforces the platform's record rules, from :health's test fixtures.
+    testImplementation(testFixtures(project(":health")))
 
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

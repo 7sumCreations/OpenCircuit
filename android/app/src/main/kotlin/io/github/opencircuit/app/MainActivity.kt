@@ -29,6 +29,8 @@ import io.github.opencircuit.app.connect.ConnectFlowController
 import io.github.opencircuit.app.connect.IntentSenderSheet
 import io.github.opencircuit.app.connect.PairingSheet
 import io.github.opencircuit.app.connect.ScanStep
+import io.github.opencircuit.app.health.HealthCardSources
+import io.github.opencircuit.app.health.HealthSettingsLink
 import io.github.opencircuit.app.onboarding.Destination
 import io.github.opencircuit.app.onboarding.LaunchFlow
 import io.github.opencircuit.app.onboarding.OnboardingScreen
@@ -37,6 +39,8 @@ import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingScreen
 import io.github.opencircuit.app.ring.RingViewModel
 import io.github.opencircuit.app.ui.OpenCircuitTheme
+import io.github.opencircuit.health.HealthPermission
+import io.github.opencircuit.health.JetpackHealthConnect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,6 +80,7 @@ class MainActivity : ComponentActivity() {
                     container.detailsSources,
                     prefs = container.appPrefs,
                     wallClock = { java.time.Instant.ofEpochMilli(container.clock.nowMillis()) },
+                    health = HealthCardSources(container.healthAccess.state, container.healthFlush.state, writeNow = container.healthFlush::request),
                 )
             }
         }
@@ -88,6 +93,12 @@ class MainActivity : ComponentActivity() {
 
     private val bluetoothEnableRequest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) ringViewModel.onBluetoothEnabled(permissionReader.read())
+    }
+
+    // Health Connect's own permission screen. On Android 14 and later its request is handled only
+    // through the activity result registry; whatever the user chose is read back from Health Connect.
+    private val healthPermissionRequest = registerForActivityResult(JetpackHealthConnect.permissionRequestContract()) {
+        container.healthAccess.permissionScreenAnswered()
     }
 
     // Android's companion-device sheet; its result code is the pairing's answer.
@@ -107,7 +118,11 @@ class MainActivity : ComponentActivity() {
                     Destination.Onboarding -> OnboardingScreen(onDone = { destination = launch.finishOnboarding() })
                     Destination.Ring -> {
                         // A grant or refusal made in Settings has no callback: read it on every resume.
-                        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { ringViewModel.onResume(permissionReader.read()) }
+                        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                            ringViewModel.onResume(permissionReader.read())
+                            // A grant or revoke made in Health Connect's settings has no callback either.
+                            container.healthAccess.refresh()
+                        }
                         val state by ringViewModel.uiState.collectAsStateWithLifecycle()
                         val sheet by ringViewModel.pairingSheet.collectAsStateWithLifecycle()
                         LaunchedEffect(sheet) { sheet?.let(::showPairingSheet) }
@@ -137,6 +152,17 @@ class MainActivity : ComponentActivity() {
         if (action == RingAction.CopyDetails) {
             copyConnectionDetails()
             return
+        }
+        when (action) {
+            RingAction.ConnectHealth -> {
+                askForHealthConnect()
+                return
+            }
+            RingAction.OpenHealthSettings -> {
+                openHealthConnectSettings()
+                return
+            }
+            else -> Unit
         }
         if (action !is RingAction.Link) {
             ringViewModel.onAction(action)
@@ -180,6 +206,34 @@ class MainActivity : ComponentActivity() {
     private fun copyConnectionDetails() {
         val text = ringViewModel.uiState.value.details.copyText
         getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("OpenCircuit connection details", text))
+    }
+
+    /**
+     * Health Connect's own permission screen for the WRITE permissions the app asks for (the
+     * twelve, less skin temperature on a phone without it), at the user's tap only (never at
+     * launch). If Health Connect cannot show it, the card stays as it is.
+     */
+    private fun askForHealthConnect() {
+        try {
+            healthPermissionRequest.launch(container.healthAccess.requested().map(HealthPermission::permission).toSet())
+        } catch (_: ActivityNotFoundException) {
+            container.log("Health Connect's permission screen could not be shown")
+            container.healthAccess.refresh()
+        }
+    }
+
+    /**
+     * Health Connect's own permission page for this app, at the user's tap only. What changed there
+     * is read back when the screen resumes. If nothing on the phone takes the link, the card stays
+     * as it is.
+     */
+    private fun openHealthConnectSettings() {
+        try {
+            startActivity(HealthSettingsLink.intent(packageName))
+        } catch (_: ActivityNotFoundException) {
+            container.log("Health Connect's settings could not be opened")
+            container.healthAccess.refresh()
+        }
     }
 
     /** Android's "Nearby devices" dialog for both permissions; it answers at once if refused for good. */

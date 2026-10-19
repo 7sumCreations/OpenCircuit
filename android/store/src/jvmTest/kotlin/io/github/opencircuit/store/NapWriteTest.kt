@@ -91,7 +91,9 @@ class NapWriteTest {
 
     /**
      * A re-detection at the same start updates the end, minutes, long flag, segments and update time,
-     * and leaves the Health state, the kept ring staging and any edit columns as stored (:2877-2881).
+     * and leaves the kept ring staging and any edit columns as stored (:2877-2881). Unlike upstream it
+     * re-arms the Health write when the end or the staging changed: Health Connect replaces the nap's
+     * record whole (PORTING.md D-292), where HealthKit kept what was appended.
      */
     @Test
     fun aReDetectedNapUpdatesItsOwnFiguresAndLeavesWhatHealthAndTheEditHold() = runBlocking<Unit> {
@@ -109,7 +111,7 @@ class NapWriteTest {
 
             store.saveNap(start, end, asleepMin = 85, isLongNap = true, now = later, zone = utc)
 
-            assertEquals(before.copy(end = end, asleepMin = 85, isLongNap = true, segments = null, updatedAt = later), store.onlyNap())
+            assertEquals(before.copy(end = end, asleepMin = 85, isLongNap = true, segments = null, updatedAt = later, healthWritten = false), store.onlyNap())
         }
     }
 
@@ -285,16 +287,21 @@ class NapWriteTest {
     }
 
     /**
-     * Upstream re-arms the Health write when the window written there is not inside the new one
-     * (:2967-2970): a shrink or a move marks the nap unwritten, a widening or the same window does not,
-     * and a nap never written (or written without a known window) is left as it is.
+     * A nap is one Health Connect record under its stored start, replaced whole: an edit to any
+     * window other than the one written re-arms the write — a shrink, a move, and a widening too
+     * (upstream, :2967-2970, re-arms only when the written window is not inside the new one, and
+     * leaves a widening to its append-only write; PORTING.md D-292). The same window stays written,
+     * a nap written without a known window is re-armed (what Health holds cannot be checked), and a
+     * nap never written is left as it is.
      */
     @Test
-    fun anEditThatNoLongerCoversWhatWasWrittenToHealthMarksTheNapUnwritten() = runBlocking<Unit> {
+    fun anEditToAnyOtherWindowThanTheOneWrittenMarksTheNapUnwritten() = runBlocking<Unit> {
         val written = start to end
         val cases = listOf(
             Triple("same window", written, true),
-            Triple("widened", at("2025-06-15T12:30:00Z") to at("2025-06-15T15:00:00Z"), true),
+            Triple("widened", at("2025-06-15T12:30:00Z") to at("2025-06-15T15:00:00Z"), false),
+            Triple("start moved earlier", at("2025-06-15T12:59:59.999Z") to end, false),
+            Triple("end moved later", start to at("2025-06-15T14:30:00.001Z"), false),
             Triple("start moved later", at("2025-06-15T13:00:00.001Z") to end, false),
             Triple("end moved earlier", start to at("2025-06-15T14:29:59.999Z"), false),
             Triple("moved", at("2025-06-15T15:00:00Z") to at("2025-06-15T16:00:00Z"), false),
@@ -326,7 +333,7 @@ class NapWriteTest {
             assertTrue(store.editNap(start, at("2025-06-15T13:30:00Z"), end, now = later, zone = utc))
             assertTrue(store.editNap(at("2025-06-16T13:00:00Z"), at("2025-06-16T13:30:00Z"), at("2025-06-16T14:00:00Z"), now = later, zone = utc))
 
-            assertEquals(listOf(true, false), store.naps(from = start, to = at("2025-06-17T00:00:00Z")).map { it.healthWritten })
+            assertEquals(listOf(false, false), store.naps(from = start, to = at("2025-06-17T00:00:00Z")).map { it.healthWritten })
         }
     }
 
