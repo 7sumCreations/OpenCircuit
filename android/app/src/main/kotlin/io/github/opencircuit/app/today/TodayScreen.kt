@@ -87,6 +87,15 @@ sealed interface TodayAction {
 
     /** The "Today" chip: back to today. */
     data object ShowToday : TodayAction
+
+    /** A tile tap: open its 14- or 30-day trend. */
+    data class OpenDetail(val metric: TodayTile.Metric) : TodayAction
+
+    /** Back (or the detail's back arrow): close the trend. */
+    data object CloseDetail : TodayAction
+
+    /** The detail's 14 / 30 toggle. */
+    data class DetailRange(val days: Int) : TodayAction
 }
 
 /** The tag of Today's hero card. */

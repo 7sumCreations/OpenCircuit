@@ -80,6 +80,8 @@ data class TodayUiState(
     val browser: DayBrowserUi = DayBrowserUi(),
     /** On a past day, its heart-rate range in place of the live hero; null on today. */
     val pastDay: PastDayHeroUi? = null,
+    /** The open tile's trend screen; null with none open. */
+    val detail: TileDetailUi? = null,
 )
 
 /** What the ring session contributes to Today: its link, name, sync log, the running sync, the ring's firmware and the live measure. */

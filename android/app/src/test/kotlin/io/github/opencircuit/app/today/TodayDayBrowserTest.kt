@@ -178,6 +178,47 @@ class TodayDayBrowserTest {
     }
 
     @Test
+    fun aTileDetailOpensInTheSavedStateAndThirtyDaysWaitsForAThirtyDayLoad() = runTest {
+        val source = DaySource()
+        source.hrByDay[today.minusDays(20)] = listOf(hr(today.minusDays(20), 9, 58.0))
+        source.hrByDay[today] = listOf(hr(today, 9, 64.0))
+        val saved = SavedStateHandle()
+        val vm = open(source, saved)
+        assertNull(vm.uiState.value.detail)
+
+        vm.onAction(TodayAction.OpenDetail(TodayTile.Metric.HEART_RATE))
+        runCurrent()
+        val fourteen = vm.uiState.value.detail!!
+        assertEquals(14, fourteen.days)
+        assertEquals("1 of 14 days", fourteen.count)
+        assertFalse(fourteen.loading)
+
+        source.hold = CompletableDeferred()
+        vm.onAction(TodayAction.DetailRange(30))
+        runCurrent()
+        assertEquals(today to 30, source.loads.last(), "one wider load, not a second reader")
+        assertTrue(vm.uiState.value.detail!!.loading, "the 14-day load is not shown as thirty days")
+        source.hold!!.complete(Unit)
+        source.hold = null
+        runCurrent()
+        val thirty = vm.uiState.value.detail!!
+        assertFalse(thirty.loading)
+        assertEquals("2 of 30 days", thirty.count)
+
+        // Recreated: the open detail and its range come back.
+        val again = open(DaySource().also { it.hrByDay.putAll(source.hrByDay) }, saved)
+        assertEquals(TodayTile.Metric.HEART_RATE to 30, again.uiState.value.detail?.let { it.metric to it.days })
+
+        vm.onAction(TodayAction.CloseDetail)
+        runCurrent()
+        assertNull(vm.uiState.value.detail)
+        vm.onAction(TodayAction.DetailRange(7))
+        vm.onAction(TodayAction.OpenDetail(TodayTile.Metric.SPO2))
+        runCurrent()
+        assertEquals(30, vm.uiState.value.detail?.days, "only 14 or 30 are taken")
+    }
+
+    @Test
     fun dataLandingOnAnotherDayMarksThatDayOnlyAndVisitingItClearsTheMark() = runTest {
         val source = DaySource()
         source.hrByDay[today.minusDays(3)] = listOf(hr(today.minusDays(3), 9, 60.0))

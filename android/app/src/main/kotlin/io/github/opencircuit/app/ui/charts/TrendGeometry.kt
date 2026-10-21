@@ -23,14 +23,43 @@ data class TrendGeometry(
     val yMin: Double,
     val yMax: Double,
     val ticks: List<Tick>,
+    /** The usual mean's height (the detail chart's dashed rule); null without a usual range. */
+    val mean: Float? = null,
 ) {
     companion object {
 
         /** How much the y domain is widened beyond the data and the band: 30 % of their span, half each side. */
         const val Y_PADDING: Double = 0.30
 
-        /** One slot per day, oldest first, null for a day with no value; [band] the usual range or null. Pure. */
-        fun of(values: List<Double?>, band: ClosedFloatingPointRange<Double>?): TrendGeometry {
+        /**
+         * The chart in words ([describe]) followed by its emphasised last day, [lastDay] spelled out,
+         * with its value or "no reading".
+         */
+        fun describeTrend(
+            title: String,
+            values: List<Double?>,
+            spokenUnit: String,
+            usual: ClosedFloatingPointRange<Double>?,
+            format: (Double) -> String,
+            lastDay: String,
+            lastValue: Double?,
+        ): String {
+            val last = lastValue?.let { listOf(format(it), spokenUnit).filter(String::isNotEmpty).joinToString(" ") } ?: "no reading"
+            return "${describe(title, values, spokenUnit, usual, format)}. $lastDay: $last."
+        }
+
+        /** The slot of [count] a touch at [x] (0 → 1) reads: the nearest, clamped to the ends; null with no slots. */
+        fun slotAt(x: Float, count: Int): Int? {
+            if (count <= 0) return null
+            if (count == 1) return 0
+            return Math.round(x.coerceIn(0f, 1f) * (count - 1)).coerceIn(0, count - 1)
+        }
+
+        /**
+         * One slot per day, oldest first, null for a day with no value; [band] the usual range or
+         * null; [mean] the usual mean (placed only with a band). Pure.
+         */
+        fun of(values: List<Double?>, band: ClosedFloatingPointRange<Double>?, mean: Double? = null): TrendGeometry {
             val present = values.filterNotNull().filter { it.isFinite() }
             if (present.isEmpty()) return TrendGeometry(emptyList(), emptyList(), null, null, 0.0, 1.0, emptyList())
             var lo = present.min()
@@ -61,7 +90,8 @@ data class TrendGeometry(
             val last = values.lastOrNull()
             val newest = if (last != null && last.isFinite()) ChartPoint(x(n - 1), y(last)) else null
             val ticks = listOf(0.0, 0.5, 1.0).map { f -> (yMin + (yMax - yMin) * (0.15 + 0.7 * f)).let { Tick(it, y(it)) } }
-            return TrendGeometry(segments, dots, newest, band?.let { BandRect(y(it.endInclusive), y(it.start)) }, yMin, yMax, ticks)
+            val meanY = if (band != null && mean != null && mean.isFinite()) y(mean).coerceIn(0f, 1f) else null
+            return TrendGeometry(segments, dots, newest, band?.let { BandRect(y(it.endInclusive), y(it.start)) }, yMin, yMax, ticks, meanY)
         }
 
         /**

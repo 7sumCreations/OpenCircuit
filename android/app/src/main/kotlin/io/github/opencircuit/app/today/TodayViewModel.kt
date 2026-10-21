@@ -67,6 +67,9 @@ class TodayViewModel(
             TodayAction.OpenRing -> Unit
             is TodayAction.SelectDay -> select(action.day)
             TodayAction.ShowToday -> select(today())
+            is TodayAction.OpenDetail -> saved[DETAIL] = action.metric.name
+            TodayAction.CloseDetail -> saved[DETAIL] = null
+            is TodayAction.DetailRange -> if (action.days in TileDetailPresenter.RANGES) saved[DETAIL_DAYS] = action.days
         }
     }
 
@@ -87,16 +90,23 @@ class TodayViewModel(
         val picked: Flow<LocalDate?> = saved.getStateFlow<Long?>(PICKED_DAY, null).map { it?.let(LocalDate::ofEpochDay) }
         // The day on screen: the picked one, or today — re-read on every tick, so Today turns over at local midnight.
         val shown = combine(picked, ticks) { p, _ -> p ?: today() }.distinctUntilChanged()
+        // The open detail (a metric name) and its range; an unknown name (an older build's) is no detail.
+        val detail: Flow<Pair<TodayTile.Metric, Int>?> = combine(
+            saved.getStateFlow<String?>(DETAIL, null),
+            saved.getStateFlow(DETAIL_DAYS, TodayTiles.WINDOW_DAYS),
+        ) { name, days -> TodayTile.Metric.entries.firstOrNull { it.name == name }?.let { it to days } }.distinctUntilChanged()
+        // The tiles read two weeks; an open 30-day trend widens the one load to thirty days.
+        val window = detail.map { maxOf(TodayTiles.WINDOW_DAYS, it?.second ?: 0) }.distinctUntilChanged()
         var previous: TodayStored? = null
-        // One load per revision and per day shown; a new request cancels the one it replaces.
-        val stored: Flow<TodayStored?> = combine(source?.revisions() ?: flowOf(0L), shown) { _, day -> day }
-            .transformLatest<LocalDate, TodayStored?> { day ->
+        // One load per revision, day shown and window; a new request cancels the one it replaces.
+        val stored: Flow<TodayStored?> = combine(source?.revisions() ?: flowOf(0L), shown, window) { _, day, w -> day to w }
+            .transformLatest<Pair<LocalDate, Int>, TodayStored?> { (day, w) ->
                 if (source == null) {
                     emit(TodayStored())
                 } else {
                     try {
                         val z = zone()
-                        val loaded = source.load(day, z)
+                        val loaded = source.load(day, z, w)
                         marks.update { (it + DayMarks.landed(previous, loaded, z)) - day }
                         previous = loaded
                         emit(loaded)
@@ -117,15 +127,29 @@ class TodayViewModel(
         val parts = session.shareIn(scope, SharingStarted.Eagerly, replay = 1)
         val facts = parts.map(DashboardFacts::of).distinctUntilChanged()
         val dashboard = combine(loads, facts, ticks) { s, f, _ -> TodayPresenter.dashboard(s, f, wallClock(), zone()) }
-        val browsing = combine(picked, marks) { p, m -> p to m }
-        uiState = combine(loads, parts, dashboard, ticks, browsing) { s, parts, built, _, (p, m) ->
-            TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built, picked = p, marked = m))
+        // The detail is built from a load for its day and at least its window; until one lands it waits, never shows another day's.
+        val detailUi = combine(loads, detail, shown, ticks) { s, open, day, _ ->
+            open?.let { (metric, days) ->
+                val ready = s != null && s.day == day && s.windowDays >= days
+                TileDetailPresenter.present(if (ready) s!!.trends else TodayTrends(), metric, days, day, wallClock(), zone())
+                    .copy(loading = !ready)
+            }
+        }
+        val browsing = combine(picked, marks, detailUi) { p, m, d -> Triple(p, m, d) }
+        uiState = combine(loads, parts, dashboard, ticks, browsing) { s, parts, built, _, (p, m, d) ->
+            TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built, picked = p, marked = m)).copy(detail = d)
         }.stateIn(scope, SharingStarted.Eagerly, TodayUiState())
     }
 
     private companion object {
-        /** The picked past day's epoch day in the saved state; absent on Today. */
+        /** The picked past day's epoch day in the saved state; null on Today. */
         const val PICKED_DAY = "today.pickedDay"
+
+        /** The open tile detail's metric name; null with none open. */
+        const val DETAIL = "today.detail"
+
+        /** The open detail's range in days (14 or 30). */
+        const val DETAIL_DAYS = "today.detailDays"
     }
 }
 
