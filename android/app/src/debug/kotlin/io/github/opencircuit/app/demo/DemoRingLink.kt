@@ -45,7 +45,8 @@ import java.time.ZoneOffset
  * `d0 00 00`, as the ring does; [disconnect] stops them, tears the connection down once and
  * goes [LinkState.Idle]. [close] does the same and retires the link, as the real link's does.
  *
- * It answers the live measure like a worn ring: after `06 01 00` / `06 02 00` and `07 00 00`,
+ * It answers the live measure like a worn ring: each `06 xx 00` mode write gets `86 00 86`
+ * (accepted, PROTOCOL.md §4); after `06 01 00` / `06 02 00` and `07 00 00`,
  * each `95 00 00` poll gets one `0x15` frame. Heart rate sends the warm-up value 8 for the first
  * two polls after an entry, then made-up resting values; SpO₂ sends one frame without a valid
  * reading, then made-up values in the high 90s. A poll before any mode was chosen gets nothing.
@@ -174,7 +175,11 @@ class DemoRingLink(
         when {
             // The ring answers the status query with its descriptor (PROTOCOL.md §5.4).
             opcode == 0xd0 -> frameChannel.trySend(demoDescriptor())
-            opcode == 0x06 && (sub == HEART_RATE_MODE || sub == SPO2_MODE) -> liveMode = sub
+            // Each mode write is answered `86 00 86`, accepted (PROTOCOL.md §4); idle `06 00 00` too.
+            opcode == 0x06 -> {
+                if (sub == HEART_RATE_MODE || sub == SPO2_MODE) liveMode = sub
+                frameChannel.trySend(MODE_ACCEPTED.copyOf())
+            }
             // A sync open `02 00 <cursor> <channel> 01 00`; the ring answers after the `07 00 00`.
             opcode == 0x02 && command.size == SYNC_OPEN_LENGTH -> openedChannel = command[SYNC_OPEN_CHANNEL].toInt() and 0xFF
             opcode == 0x07 -> {
@@ -286,6 +291,9 @@ class DemoRingLink(
 
         /** The ring's answer to a sync open that pages follow (PROTOCOL.md §3). */
         private val SYNC_ACK = byteArrayOf(0x82.toByte(), 0x00, 0x00, 0x82.toByte())
+
+        /** `86 00 86`: a mode write accepted (PROTOCOL.md §4). */
+        private val MODE_ACCEPTED = byteArrayOf(0x86.toByte(), 0x00, 0x86.toByte())
 
         /** The end-of-history report's 12-byte form (PROTOCOL.md §5.5.1); its cursors are not read by the app. */
         private val END_OF_HISTORY = byteArrayOf(0x50, 0x00, 0x00, 0x12, 0x0c, 0x22, 0xaa.toByte(), 0xe4.toByte(), 0x0c, 0x22, 0xac.toByte(), 0xb5.toByte())

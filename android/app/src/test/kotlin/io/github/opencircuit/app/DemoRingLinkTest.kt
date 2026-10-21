@@ -344,6 +344,25 @@ class DemoRingLinkTest {
         assertFailsWith<IllegalStateException> { withTimeout(1_000) { link.teardowns.collect() } }
     }
 
+    /** The ring answers each live-mode write with `86 00 86` (PROTOCOL.md §4), before any poll. */
+    @Test
+    fun theDemoRingAnswersEachLiveModeWriteAsTheRingDoes() = runTest {
+        val link = DemoRingLink(backgroundScope)
+        val received = mutableListOf<ByteArray>()
+        backgroundScope.launch { link.frames.collect { received += it } }
+        link.connect()
+        runCurrent()
+        received.clear()
+        for (cmd in listOf("060100", "060200")) link.send(hex(cmd))
+        runCurrent()
+        val answers = received.filter { it[0] == 0x86.toByte() }
+        assertEquals(2, answers.size)
+        assertTrue(answers.all { it.contentEquals(hex("860086")) })
+        link.send(hex("060000")) // back to idle: also answered
+        runCurrent()
+        assertEquals(3, received.count { it[0] == 0x86.toByte() })
+    }
+
     @Test
     fun aReconnectedDemoRingAnswersNoPollUntilAModeIsChosenAgain() = runTest {
         val link = DemoRingLink(backgroundScope)
