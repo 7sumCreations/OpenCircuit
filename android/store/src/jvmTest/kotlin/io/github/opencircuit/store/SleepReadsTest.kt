@@ -49,6 +49,31 @@ class SleepReadsTest {
         }
     }
 
+    /**
+     * Counting the nights of a range answers what the list's size would, over the same half-open
+     * range, without reading a night: every night is kept for good, so the Ring data card's count
+     * must not grow with the history it counts.
+     */
+    @Test
+    fun nightCountCountsTheNightsOfAHalfOpenRangeWithoutReadingAny() = runBlocking<Unit> {
+        withInMemoryStore { db ->
+            val writer = SleepStore(db)
+            for (day in listOf(d3, d1, d2)) writer.saveNightEndingOn(day)
+            val real = db.sleepDao()
+            val noRowReads = object : SleepDao by real {
+                override suspend fun summaries(from: Instant, to: Instant): List<StoredSleepSummaryEntity> = error("read the nights")
+                override suspend fun allSummaries(): List<StoredSleepSummaryEntity> = error("read the nights")
+            }
+            val store = SleepStore(db, noRowReads)
+
+            assertEquals(3, store.nightCount(Instant.EPOCH, Instant.ofEpochMilli(Long.MAX_VALUE)))
+            assertEquals(2, store.nightCount(from = d1, to = d3))
+            assertEquals(0, store.nightCount(from = d2, to = d2))
+            assertEquals(0, store.nightCount(from = d3.plusSeconds(86_400), to = Instant.ofEpochMilli(Long.MAX_VALUE)))
+            assertEquals(writer.sleepSummaries(d1, d3).size, store.nightCount(d1, d3))
+        }
+    }
+
     @Test
     fun recentAndLatestAreNewestFirstAndBounded() = runBlocking<Unit> {
         withInMemoryStore { db ->

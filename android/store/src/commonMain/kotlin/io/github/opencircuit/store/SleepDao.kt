@@ -41,6 +41,10 @@ internal interface SleepDao {
     @Query("SELECT * FROM stored_sleep_summary WHERE night >= :from AND night < :to ORDER BY night, id")
     suspend fun summaries(from: Instant, to: Instant): List<StoredSleepSummaryEntity>
 
+    /** How many rows have `from <= night < to`, counted on the `night` index without reading one. */
+    @Query("SELECT COUNT(*) FROM stored_sleep_summary WHERE night >= :from AND night < :to")
+    suspend fun countSummaries(from: Instant, to: Instant): Int
+
     /**
      * Rows with a known recorded in-bed window (`in_bed_end > in_bed_start`) that window overlapping
      * `(start, end)` by more than zero, oldest night first. The caller measures each overlap.
