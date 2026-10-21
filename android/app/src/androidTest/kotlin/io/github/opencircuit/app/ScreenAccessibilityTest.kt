@@ -5,6 +5,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
@@ -213,6 +214,15 @@ class ScreenAccessibilityTest {
         val expected = listOf("Measure", "Sync now", "Dismiss", "Open Settings", TODAY_PREVIOUS_DAY_TAG, TODAY_NEXT_DAY_TAG, TODAY_PICK_DAY_TAG, TODAY_EDIT_ORDER_TAG) +
             TodayTile.Metric.entries.map(::todayTileTag)
         assertEquals(emptyList<String>(), expected - checked)
+    }
+
+    /** The day strip's arrows say only "Previous day" / "Next day": the arrow characters are not read out too. */
+    @Test
+    fun theDayArrowsSayOnlyTheirLabels() {
+        compose.setContent { OpenCircuitTheme { TodayScreen(full(today.minusDays(2)), onAction = {}) } }
+        for (tag in listOf(TODAY_PREVIOUS_DAY_TAG, TODAY_NEXT_DAY_TAG)) {
+            compose.onNodeWithTag(tag).assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Text))
+        }
     }
 
     @Test

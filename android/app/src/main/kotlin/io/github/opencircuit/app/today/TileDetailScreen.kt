@@ -76,7 +76,7 @@ internal fun TileDetailScreen(detail: TileDetailUi, state: TodayUiState, onActio
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = { onAction(TodayAction.CloseDetail) }, modifier = Modifier.semantics { contentDescription = "Back to $backTo" }) {
-                        Text("←", style = MaterialTheme.typography.titleLarge)
+                        Text("←", style = MaterialTheme.typography.titleLarge, modifier = Modifier.clearAndSetSemantics { })
                     }
                 },
                 title = {

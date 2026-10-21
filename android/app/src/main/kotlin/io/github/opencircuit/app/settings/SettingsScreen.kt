@@ -68,7 +68,15 @@ fun SettingsScreen(state: SettingsUiState, onAction: (SettingsAction) -> Unit, m
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     )
-                    state.saveError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                    // Shown after a tap, away from the focus: announced, so a screen reader hears it where it is.
+                    state.saveError?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
                     Text(
                         "Turning it off later stops new copies. What was already written stays in Health Connect until you remove it there.",
                         style = MaterialTheme.typography.bodySmall,

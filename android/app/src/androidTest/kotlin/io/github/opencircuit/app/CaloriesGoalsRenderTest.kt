@@ -1,5 +1,7 @@
 package io.github.opencircuit.app
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
@@ -9,6 +11,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -17,6 +20,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.opencircuit.app.today.TODAY_CALORIES_TAG
@@ -41,6 +45,7 @@ import io.github.opencircuit.ringkit.GoalHistory
 import io.github.opencircuit.ringkit.HRSample
 import io.github.opencircuit.store.DayActivityInputs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -83,6 +88,38 @@ class CaloriesGoalsRenderTest {
         compose.onNodeWithTag(todayGoalTag(GoalHistory.Ring.STEPS)).assertIsDisplayed().assert(description("Steps 6,240 of 8,000, 78 %"))
         for (ring in s.goals!!.rings) compose.onNodeWithTag(todayGoalTag(ring.ring)).assert(description(ring.description))
         compose.onNodeWithText("Steps: connected time only").assertIsDisplayed()
+    }
+
+    /** At twice the font the four rings go two to a row, each grown with the font, so the number inside still fits. */
+    @Test
+    fun atTwiceTheFontTheGoalRingsGoTwoToARowAndGrow() {
+        val s = state(steps = 10_432)
+        compose.setContent {
+            val d = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = 2f)) { OpenCircuitTheme { TodayScreen(s, onAction = {}) } }
+        }
+        val rings = s.goals!!.rings
+        compose.onNodeWithTag(TODAY_LIST_TAG).performScrollToNode(hasTestTag(todayGoalTag(rings[3].ring)))
+        val first = compose.onNodeWithTag(todayGoalTag(rings[0].ring)).getBoundsInRoot()
+        val second = compose.onNodeWithTag(todayGoalTag(rings[1].ring)).getBoundsInRoot()
+        val third = compose.onNodeWithTag(todayGoalTag(rings[2].ring)).getBoundsInRoot()
+        assertEquals("the second ring beside the first", first.top.value, second.top.value, 1f)
+        assertTrue("the third ring starts a second row", third.top >= first.bottom)
+        assertTrue("each ring grew with the font", (first.right - first.left).value >= 128f)
+    }
+
+    /** Edit order's move buttons say where the row now is, so a screen reader hears a move land. */
+    @Test
+    fun editOrderMoveButtonsSayTheRowsPlace() {
+        val s = state(steps = 6_240, editing = true)
+        compose.setContent { OpenCircuitTheme { TodayScreen(s, onAction = {}) } }
+
+        compose.onNodeWithTag(TODAY_LIST_TAG).performScrollToNode(hasTestTag(todayOrderRowTag("readiness")))
+        compose.onNodeWithContentDescription("Move Readiness down")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "1 of ${s.sections.size}"))
+        compose.onNodeWithTag(TODAY_LIST_TAG).performScrollToNode(hasContentDescription("Move HRV up"))
+        compose.onNodeWithContentDescription("Move HRV up")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "2 of ${s.tileOrder.size}"))
     }
 
     @Test

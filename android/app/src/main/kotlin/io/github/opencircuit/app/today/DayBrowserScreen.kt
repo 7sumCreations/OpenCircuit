@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -77,6 +78,9 @@ const val TODAY_PREVIOUS_DAY_TAG = "today.day.previous"
 /** The tag of the next-day button. */
 const val TODAY_NEXT_DAY_TAG = "today.day.next"
 
+/** The tag of Today's top bar (the heading, the chip and Pick a day). */
+const val TODAY_TOP_BAR_TAG = "today.topBar"
+
 /** The tag of the "Today" chip. */
 const val TODAY_CHIP_TAG = "today.chip"
 
@@ -95,6 +99,7 @@ fun todayDayTag(day: LocalDate): String = "today.day.$day"
 internal fun DayTopBar(browser: DayBrowserUi, onAction: (TodayAction) -> Unit) {
     var picking by rememberSaveable { mutableStateOf(false) }
     TopAppBar(
+        modifier = Modifier.testTag(TODAY_TOP_BAR_TAG),
         title = {
             Column(Modifier.semantics(mergeDescendants = true) { heading() }) {
                 Text(browser.title)
@@ -163,7 +168,7 @@ internal fun DayStrip(browser: DayBrowserUi, days: BrowsableDays, onAction: (Tod
             onClick = { previous?.let { onAction(TodayAction.SelectDay(it)) } },
             enabled = previous != null,
             modifier = Modifier.testTag(TODAY_PREVIOUS_DAY_TAG).semantics { contentDescription = "Previous day" },
-        ) { Text("‹", style = MaterialTheme.typography.headlineSmall) }
+        ) { Text("‹", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.clearAndSetSemantics { }) }
         LazyRow(
             state = list,
             modifier = Modifier.weight(1f).testTag(TODAY_DAY_STRIP_TAG),
@@ -179,7 +184,7 @@ internal fun DayStrip(browser: DayBrowserUi, days: BrowsableDays, onAction: (Tod
             onClick = { next?.let { onAction(TodayAction.SelectDay(it)) } },
             enabled = next != null,
             modifier = Modifier.testTag(TODAY_NEXT_DAY_TAG).semantics { contentDescription = "Next day" },
-        ) { Text("›", style = MaterialTheme.typography.headlineSmall) }
+        ) { Text("›", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.clearAndSetSemantics { }) }
     }
 }
 
@@ -256,8 +261,10 @@ internal fun DayPager(
 @Composable
 internal fun PastDayCard(hero: PastDayHeroUi?, animate: Boolean) {
     val tones = LocalTones.current
+    // Grown with the font, as the tiles are, so the bar and its scale are never cut off.
+    val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
     Card(
-        modifier = Modifier.fillMaxWidth().height(PAST_DAY_HEIGHT).testTag(TODAY_PAST_DAY_TAG)
+        modifier = Modifier.fillMaxWidth().height(PAST_DAY_HEIGHT * fontScale).testTag(TODAY_PAST_DAY_TAG)
             .clearAndSetSemantics { hero?.let { contentDescription = it.description } },
         shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -298,5 +305,5 @@ internal fun PastDayCard(hero: PastDayHeroUi?, animate: Boolean) {
     }
 }
 
-/** The past-day card's height: the same whether its load has landed or not. */
+/** The past-day card's height at the default font: the same whether its load has landed or not. */
 private val PAST_DAY_HEIGHT = 196.dp

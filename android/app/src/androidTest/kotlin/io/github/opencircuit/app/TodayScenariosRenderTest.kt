@@ -1,5 +1,7 @@
 package io.github.opencircuit.app
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -8,12 +10,14 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.opencircuit.app.ring.LinkStatePresenter
 import io.github.opencircuit.app.today.BrowsableDays
@@ -21,11 +25,13 @@ import io.github.opencircuit.app.today.DayBrowser
 import io.github.opencircuit.app.today.MeasureButtonUi
 import io.github.opencircuit.app.today.PastDayHeroUi
 import io.github.opencircuit.app.today.ReadingUi
+import io.github.opencircuit.app.today.SyncStripUi
 import io.github.opencircuit.app.today.TODAY_CHIP_TAG
 import io.github.opencircuit.app.today.TODAY_HERO_TAG
 import io.github.opencircuit.app.today.TODAY_OVERDUE_TAG
 import io.github.opencircuit.app.today.TODAY_PAST_DAY_TAG
 import io.github.opencircuit.app.today.TODAY_STRIP_TAG
+import io.github.opencircuit.app.today.TODAY_TOP_BAR_TAG
 import io.github.opencircuit.app.today.TodayAction
 import io.github.opencircuit.app.today.TodayAlertLevel
 import io.github.opencircuit.app.today.TodayInput
@@ -79,16 +85,52 @@ class TodayScenariosRenderTest {
     }
 
     @Test
-    fun liveTheHeroShowsTheLiveNumberAsOneNodeAScreenReaderHearsPolitely() {
-        val live = stored.copy(heartRate = stored.heartRate.copy(value = "71", note = "Live now"), heartRateLive = true)
+    fun liveTheHeroShowsTheLiveNumberAsOneNodeAndAnnouncesOnlyItsStateChanges() {
+        val live = stored.copy(heartRate = stored.heartRate.copy(value = "71", note = "Live now", status = "Live · warming up"), heartRateLive = true)
         show(live)
         compose.onNodeWithText("71").assertIsDisplayed()
         compose.onNodeWithText("Live now").assertIsDisplayed()
         compose.onNodeWithText("Last synced 2 min ago").assertIsDisplayed()
         compose.onNodeWithText("Measure").assertIsEnabled()
-        // The label, the number, the unit and "Live now" are one node, and its changes are announced politely.
+        // The label, the number, the unit and "Live now" are one node, read on demand: a number that
+        // changes every 2 s is never announced by itself.
         compose.onNode(hasText("Heart rate") and hasText("71") and hasText("Live now"))
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.LiveRegion))
+        // The live state line changes only when the state does: that is what is announced, politely.
+        compose.onNodeWithText("Live · warming up").assertIsDisplayed()
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+    }
+
+    /** The sync strip's line moves with every page and "Last synced" with every minute: neither is announced by itself. */
+    @Test
+    fun theSyncStripIsReadOnDemandNeverAnnouncedOnEachChange() {
+        show(stored.copy(strip = SyncStripUi("Syncing · Sleep channel 120 records so far", null)))
+        compose.onNode(hasText("Syncing · Sleep channel 120 records so far") and hasText("Last synced 2 min ago"))
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.LiveRegion))
+    }
+
+    /** At twice the font the past day's card grows with it, as the tiles do, so its bar and scale are not cut off. */
+    @Test
+    fun atTwiceTheFontThePastDayCardGrowsWithIt() {
+        val today = LocalDate.parse("2026-10-21")
+        val past = today.minusDays(2)
+        val browser = DayBrowser.present(BrowsableDays(today.minusDays(9), today), past, today, emptySet())
+        val range = PastDayHeroUi(
+            title = "Heart rate on Mon 19 Oct", range = "52–112", detail = "average 72 · resting 55",
+            low = 0.1f, average = 0.27f, high = 0.6f, description = "Heart rate on Monday 19 October.",
+        )
+        val s = stored.copy(browser = browser, day = past, pastDay = range)
+        compose.setContent {
+            val d = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = 2f)) { OpenCircuitTheme { TodayScreen(s, onAction = {}) } }
+        }
+        val card = compose.onNodeWithTag(TODAY_PAST_DAY_TAG).getBoundsInRoot()
+        assertEquals("the card grew with the font", 392f, (card.bottom - card.top).value, 1f)
+        // The bar grows too: the day's name and its date line both fit inside it.
+        val bar = compose.onNodeWithTag(TODAY_TOP_BAR_TAG).getBoundsInRoot()
+        val heading = compose.onNode(isHeading() and hasText("Monday")).getBoundsInRoot()
+        assertTrue("the heading (${heading.top}–${heading.bottom}) fits in the bar (${bar.top}–${bar.bottom})", heading.bottom <= bar.bottom && heading.top >= bar.top)
     }
 
     @Test

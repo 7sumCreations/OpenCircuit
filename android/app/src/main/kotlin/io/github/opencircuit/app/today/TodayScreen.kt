@@ -63,6 +63,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.opencircuit.app.ui.LocalTones
@@ -278,7 +279,7 @@ private fun LazyGridScope.editOrder(state: TodayUiState, onAction: (TodayAction)
         val name = sectionName(section)
         wide("edit.section.${section.rawValue}") {
             OrderRow(
-                name, indent = false, tag = todayOrderRowTag(section.rawValue),
+                name, indent = false, tag = todayOrderRowTag(section.rawValue), place = "${i + 1} of ${state.sections.size}",
                 canUp = i > 0, canDown = i < state.sections.size - 1,
                 onUp = { onAction(TodayAction.MoveSection(section, -1)) }, onDown = { onAction(TodayAction.MoveSection(section, +1)) },
             )
@@ -288,7 +289,7 @@ private fun LazyGridScope.editOrder(state: TodayUiState, onAction: (TodayAction)
                 val title = TodayTiles.title(metric)
                 wide("edit.tile.${metric.name}") {
                     OrderRow(
-                        title, indent = true, tag = todayOrderRowTag(metric.name.lowercase(Locale.ROOT)),
+                        title, indent = true, tag = todayOrderRowTag(metric.name.lowercase(Locale.ROOT)), place = "${j + 1} of ${state.tileOrder.size}",
                         canUp = j > 0, canDown = j < state.tileOrder.size - 1,
                         onUp = { onAction(TodayAction.MoveTile(metric, -1)) }, onDown = { onAction(TodayAction.MoveTile(metric, +1)) },
                     )
@@ -301,9 +302,13 @@ private fun LazyGridScope.editOrder(state: TodayUiState, onAction: (TodayAction)
     }
 }
 
-/** One row of Edit order: the name, then Move up and Move down (48 dp each, labelled with the name). */
+/**
+ * One row of Edit order: the name, then Move up and Move down (48 dp each, labelled with the name).
+ * Each button also states the row's [place] ("2 of 8"): the row is keyed, so after a move the
+ * button keeps its focus and a screen reader hears the new place.
+ */
 @Composable
-private fun OrderRow(name: String, indent: Boolean, tag: String, canUp: Boolean, canDown: Boolean, onUp: () -> Unit, onDown: () -> Unit) {
+private fun OrderRow(name: String, indent: Boolean, tag: String, place: String, canUp: Boolean, canDown: Boolean, onUp: () -> Unit, onDown: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(start = if (indent) 24.dp else 0.dp).testTag(tag),
         shape = RoundedCornerShape(12.dp),
@@ -311,18 +316,21 @@ private fun OrderRow(name: String, indent: Boolean, tag: String, canUp: Boolean,
     ) {
         Row(Modifier.padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(name, style = if (indent) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            OrderButton("↑", "Move $name up", canUp, onUp)
-            OrderButton("↓", "Move $name down", canDown, onDown)
+            OrderButton("↑", "Move $name up", place, canUp, onUp)
+            OrderButton("↓", "Move $name down", place, canDown, onDown)
         }
     }
 }
 
 @Composable
-private fun OrderButton(arrow: String, label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun OrderButton(arrow: String, label: String, place: String, enabled: Boolean, onClick: () -> Unit) {
     TextButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.size(48.dp).semantics { contentDescription = label },
+        modifier = Modifier.size(48.dp).semantics {
+            contentDescription = label
+            stateDescription = place
+        },
         contentPadding = PaddingValues(0.dp),
     ) {
         Text(arrow, style = MaterialTheme.typography.titleMedium, modifier = Modifier.clearAndSetSemantics { })
@@ -396,9 +404,12 @@ private fun GoalsCard(goals: GoalsUi?) {
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Goals", style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val rings = goals?.rings
-                for (i in 0 until GOAL_RINGS) {
+            // The ring grows with the font so its number stays inside; past a large font, two to a row.
+            val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+            val perRow = if (fontScale > GOALS_TWO_PER_ROW_FONT) 2 else GOAL_RINGS
+            val rings = goals?.rings
+            for (row in (0 until GOAL_RINGS).chunked(perRow)) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (i in row) {
                     val ring = rings?.getOrNull(i)
                     Column(
                         Modifier.weight(1f).then(if (ring != null) Modifier.testTag(todayGoalTag(ring.ring)) else Modifier)
@@ -408,7 +419,7 @@ private fun GoalsCard(goals: GoalsUi?) {
                     ) {
                         val track = Color(tones.tonal)
                         val arc = MaterialTheme.colorScheme.primary
-                        Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(GOAL_RING_SIZE * fontScale), contentAlignment = Alignment.Center) {
                             Canvas(Modifier.fillMaxSize()) {
                                 val stroke = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
                                 val inset = stroke.width / 2
@@ -445,6 +456,12 @@ const val TODAY_GOALS_TAG = "today.goals"
 fun todayGoalTag(ring: GoalHistory.Ring): String = "today.goal." + ring.rawValue
 
 private const val GOAL_RINGS = 4
+
+/** A goal ring's size at the default font; it grows with the font. */
+private val GOAL_RING_SIZE = 64.dp
+
+/** Above this font scale the goal rings go two to a row (four grown rings do not fit across a phone). */
+private const val GOALS_TWO_PER_ROW_FONT = 1.3f
 private const val CALORIES_FOOTNOTE = "An estimate from heart rate, steps and a standard body profile."
 
 /** An item across the whole grid width. */
@@ -477,26 +494,35 @@ private fun Hero(state: TodayUiState, onAction: (TodayAction) -> Unit, animate: 
     }
 }
 
-/** One reading, one node for a screen reader: its label, number, unit, when it was taken and its live state, in that order. */
+/**
+ * One reading: its label, number, unit and when it was taken are one node for a screen reader, read
+ * when the user reaches it — a live number changes every 2 s and is never announced by itself. The
+ * live state line under it ("Live · warming up", "Measuring", a failure) changes only when the
+ * state does, and is the part announced, politely.
+ */
 @Composable
 internal fun HeroReading(reading: ReadingUi, modifier: Modifier = Modifier, live: Boolean = false) {
-    Column(
-        modifier.semantics(mergeDescendants = true) {
-            // A live number changes every 2 s: announced politely, never interrupting.
-            if (live) liveRegion = LiveRegionMode.Polite
-        },
-    ) {
-        Text(reading.label, style = MaterialTheme.typography.labelLarge)
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                reading.value ?: "—",
-                style = MaterialTheme.typography.displayMedium,
-                color = if (live) MaterialTheme.colorScheme.primary else Color.Unspecified,
-            )
-            Text(" ${reading.unit}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+    Column(modifier) {
+        Column(Modifier.semantics(mergeDescendants = true) { }) {
+            Text(reading.label, style = MaterialTheme.typography.labelLarge)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    reading.value ?: "—",
+                    style = MaterialTheme.typography.displayMedium,
+                    color = if (live) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                )
+                Text(" ${reading.unit}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+            }
+            if (reading.note.isNotEmpty()) Text(reading.note, style = MaterialTheme.typography.bodySmall)
         }
-        if (reading.note.isNotEmpty()) Text(reading.note, style = MaterialTheme.typography.bodySmall)
-        reading.status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
+        reading.status?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
     }
 }
 
@@ -515,12 +541,14 @@ internal fun HeroMeasureButton(button: MeasureButtonUi, onAction: (TodayAction) 
 
 /**
  * The sync strip: while a sync runs, its line and a slim bar (determinate once the channel's count
- * is known); "Last synced …" under it, always. In the layout, never over the content.
+ * is known); "Last synced …" under it, always. In the layout, never over the content. One node a
+ * screen reader reads on demand, never a live region: its line moves with every page and "Last
+ * synced" with every minute, so announcing each change would talk over everything else.
  */
 @Composable
 private fun SyncStrip(state: TodayUiState) {
     Column(
-        Modifier.fillMaxWidth().semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        Modifier.fillMaxWidth().semantics(mergeDescendants = true) { },
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         state.strip?.let { strip ->

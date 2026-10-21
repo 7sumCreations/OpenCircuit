@@ -1,5 +1,6 @@
 package io.github.opencircuit.app
 
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -86,6 +87,8 @@ class HealthSwitchRenderTest {
         compose.setContent { SettingsScreen(SettingsUiState(saveError = SettingsPresenter.ON_NOT_SAVED), onAction = {}) }
         compose.onNodeWithTag(SETTINGS_HEALTH_SWITCH_TAG).assertIsOff()
         compose.onNodeWithText("Could not save the setting, so it stays off. Try again.").assertIsDisplayed()
+            // It appears after a tap, away from the focus: a screen reader hears it without moving there.
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
     }
 
     /** Turned ON before Health Connect has been read: "Checking…", and no button to tap. */

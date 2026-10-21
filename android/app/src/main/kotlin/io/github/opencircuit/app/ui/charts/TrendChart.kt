@@ -58,8 +58,8 @@ fun TrendChart(
                 }
             },
     ) {
-        val right = RIGHT_GUTTER.dp.toPx()
-        val bottom = BOTTOM_GUTTER.dp.toPx()
+        val right = TrendChartGutters.rightDp(fontScale).dp.toPx()
+        val bottom = TrendChartGutters.bottomDp(fontScale).dp.toPx()
         val w = (size.width - right).coerceAtLeast(1f)
         val h = (size.height - bottom).coerceAtLeast(1f)
         fun at(p: ChartPoint) = Offset(p.x * w, p.y * h)
@@ -100,14 +100,25 @@ fun TrendChart(
     }
 }
 
-/** The right-hand gutter for the tick labels, in dp. */
-private const val RIGHT_GUTTER = 40
+/**
+ * The chart's label gutters, in dp: the tick values at the right and the day labels underneath.
+ * The labels are text and grow with the font, so the gutters grow with it too (never below their
+ * designed size); otherwise a large font pushes the labels off the chart.
+ */
+object TrendChartGutters {
+    /** The right-hand gutter for the tick labels at the default font. */
+    private const val RIGHT = 40f
 
-/** The bottom gutter for the day labels, in dp. */
-private const val BOTTOM_GUTTER = 22
+    /** The bottom gutter for the day labels at the default font. */
+    private const val BOTTOM = 22f
+
+    fun rightDp(fontScale: Float): Float = RIGHT * fontScale.coerceAtLeast(1f)
+
+    fun bottomDp(fontScale: Float): Float = BOTTOM * fontScale.coerceAtLeast(1f)
+}
 
 /** A touch's x over the whole width, rescaled to the plot (the width less the right gutter). */
 private fun androidx.compose.ui.input.pointer.PointerInputScope.plotFraction(width: Float): Float {
-    val plot = (width - RIGHT_GUTTER.dp.toPx()).coerceAtLeast(1f)
+    val plot = (width - TrendChartGutters.rightDp(fontScale).dp.toPx()).coerceAtLeast(1f)
     return width / plot
 }

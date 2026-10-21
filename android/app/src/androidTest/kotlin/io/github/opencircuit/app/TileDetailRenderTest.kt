@@ -83,6 +83,14 @@ class TileDetailRenderTest {
         return actions
     }
 
+    /** The back button says only its label: the arrow drawn in it is not read out as a character too. */
+    @Test
+    fun theBackButtonSaysOnlyItsLabel() {
+        show(state(14))
+        compose.onNodeWithContentDescription("Back to Today").assertIsDisplayed()
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Text))
+    }
+
     @Test
     fun aTileTapAsksForItsTrend() {
         val actions = show(state(null))
