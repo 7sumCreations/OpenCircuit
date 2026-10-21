@@ -164,6 +164,135 @@ class AutoLiveTest {
         }
     }
 
+    /** Today → Ring → Today: the screen comes back on the held link, after this connection's committed sync. */
+    @Test
+    fun todayComingBackAfterACommittedSyncStartsLiveHeartRateAgain() = runTest {
+        val visible = MutableStateFlow(true)
+        val w = build(world(visible = visible))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 10_000)
+            visible.value = false
+            runCurrent()
+            assertNull(w.session.liveMeasure.state.value.mode)
+            advanceTo(end + 70_000)
+            visible.value = true
+            runCurrent()
+            val back = testScheduler.currentTime
+            advanceTo(back + 1_000)
+            val mode = w.timesOf(heartRateMode, back).firstOrNull()
+            assertNotNull(mode, "Today came back: live heart rate starts again")
+            assertTrue(mode - back <= 300, "heart-rate mode written ${mode - back} ms after Today came back")
+            advanceTo(back + 15_000)
+            val live = w.session.liveMeasure.state.value
+            assertEquals(LiveMode.HEART_RATE, live.mode)
+            assertTrue(live.auto)
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aSyncThatEndedWhileTodayWasAwayStartsLiveHeartRateWhenTodayComesOnScreen() = runTest {
+        val visible = MutableStateFlow(false)
+        val w = build(world(visible = visible))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 20_000)
+            assertEquals(emptyList(), w.timesOf(heartRateMode))
+            visible.value = true
+            runCurrent()
+            advanceTo(end + 21_000)
+            assertEquals(LiveMode.HEART_RATE, w.session.liveMeasure.state.value.mode, "Today on screen after a committed sync: live")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun afterTheUserStoppedItTodayComingBackStartsNothing() = runTest {
+        val visible = MutableStateFlow(true)
+        val w = build(world(visible = visible))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 10_000)
+            w.session.liveMeasure.stop()
+            runCurrent()
+            visible.value = false
+            runCurrent()
+            visible.value = true
+            runCurrent()
+            val back = testScheduler.currentTime
+            advanceTo(back + 200_000)
+            assertEquals(emptyList(), w.timesOf(heartRateMode, back), "the user's Stop holds until the next sync")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aSyncWithNoCommitLeavesTodayComingBackWithNothingToStart() = runTest {
+        val visible = MutableStateFlow(true)
+        val w = build(world(visible = visible, failCommit = true))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 5_000)
+            visible.value = false
+            runCurrent()
+            visible.value = true
+            runCurrent()
+            advanceTo(end + 30_000)
+            assertEquals(emptyList(), w.timesOf(heartRateMode))
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aNewConnectionWithoutItsOwnSyncStartsNothingWhenTodayComesBack() = runTest {
+        val visible = MutableStateFlow(true)
+        val w = build(world(visible = visible))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 10_000)
+            visible.value = false
+            runCurrent()
+            // The link drops and comes back; this connection has had no sync yet.
+            w.session.link.disconnect()
+            runCurrent()
+            assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value)
+            w.session.connect()
+            val until = testScheduler.currentTime + 120_000
+            while (w.session.state.value != io.github.opencircuit.ble.LinkState.Authenticated) {
+                check(testScheduler.currentTime < until) { "the link did not come back" }
+                advanceTimeBy(100)
+                runCurrent()
+            }
+            val up = testScheduler.currentTime
+            visible.value = true
+            runCurrent()
+            advanceTo(up + 20_000)
+            assertEquals(emptyList(), w.timesOf(heartRateMode, end + 10_001), "no live heart rate before this connection's own sync")
+        } finally {
+            w.db.close()
+        }
+    }
+
     @Test
     fun whileTodayStaysVisibleEachBudgetEndStartsTheMeasureAgain() = runTest {
         val w = build(world())

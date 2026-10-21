@@ -142,6 +142,7 @@ class RingSessionController(
         nightQuiet = { triggers?.nightQuietNow() == true },
         scope = scope,
         log = log,
+        linkState = link.state,
     )
 
     /** The idle `d0 00 00` keepalive and the status refresh after a measure; paused for a whole sync. */
