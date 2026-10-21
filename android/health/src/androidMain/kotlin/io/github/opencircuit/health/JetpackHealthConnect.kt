@@ -118,7 +118,7 @@ class JetpackHealthConnect(context: Context) : HealthConnectPort {
         } catch (e: HealthCallFailedException) {
             throw e
         } catch (e: SecurityException) {
-            if (type != null) throw HealthNotGrantedException(type.permission, "${type.permission.permission} is not granted")
+            if (type != null) throw HealthErrors.notGranted(type.permission, e)
             throw HealthCallFailedException("Health Connect refused the call", e)
         } catch (e: IllegalArgumentException) {
             throw HealthInvalidRecordException(e.message ?: "a record breaks a platform rule")

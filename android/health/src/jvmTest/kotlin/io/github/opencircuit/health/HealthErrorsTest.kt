@@ -3,6 +3,7 @@ package io.github.opencircuit.health
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 
 /**
  * Which `IllegalStateException`s from Health Connect mean "call again later" (a quiet "catching up",
@@ -14,6 +15,22 @@ import kotlin.test.assertNull
  * asks Android whether the app's user is in the foreground instead of reading the message.
  */
 class HealthErrorsTest {
+
+    /** A refused grant keeps the platform's own exception: its message is what names the real cause. */
+    @Test
+    fun aMissingGrantKeepsThePlatformsExceptionAsItsCause() {
+        val platform = SecurityException("Caller doesn't have android.permission.health.WRITE_HEART_RATE")
+        val mapped = HealthErrors.notGranted(HealthPermission.HEART_RATE, platform)
+        assertEquals(HealthPermission.HEART_RATE, mapped.permission)
+        assertSame(platform, mapped.cause)
+        assertEquals("Caller doesn't have android.permission.health.WRITE_HEART_RATE", mapped.cause?.message)
+        assertEquals("android.permission.health.WRITE_HEART_RATE is not granted", mapped.message)
+    }
+
+    @Test
+    fun aMissingGrantWithNoPlatformExceptionHasNoCause() {
+        assertNull(HealthNotGrantedException(HealthPermission.HEART_RATE, "not granted").cause)
+    }
 
     @Test
     fun theWriteQuotaIsRetryableWhoeverIsInFront() {

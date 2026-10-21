@@ -38,6 +38,8 @@ class JetpackAdapterSourceTest {
         val unclassified = adapter.replace("HealthErrors.retryReason(", "listOf(")
         assertEquals(listOf("state errors classified"), AdapterScan.missing(unclassified))
         assertEquals(listOf("foreground user asked"), AdapterScan.missing(adapter.replace("isUserForeground", "isSystemUser")))
+        val causeDropped = adapter.replace("throw HealthErrors.notGranted(type.permission, e)", "throw HealthNotGrantedException(type.permission, \"not granted\")")
+        assertEquals(listOf("missing grant keeps its cause"), AdapterScan.missing(causeDropped))
     }
 
     @Test
@@ -56,6 +58,8 @@ object AdapterScan {
         "page size 1000" to "const val PAGE_SIZE = 1000",
         "id and version on ring records" to "meta.clientRecordId, meta.version)",
         "missing grant mapped" to "catch (e: SecurityException)",
+        // The platform's own exception stays the cause: its message names what was refused.
+        "missing grant keeps its cause" to "throw HealthErrors.notGranted(type.permission, e)",
         "request contract" to "PermissionController.createRequestPermissionResultContract()",
         "state errors classified" to "HealthErrors.retryReason(",
         "foreground user asked" to "isUserForeground",

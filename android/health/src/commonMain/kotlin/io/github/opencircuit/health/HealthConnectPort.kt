@@ -58,8 +58,8 @@ interface HealthConnectPort {
 sealed interface HealthCallException
 
 /** The call needed a WRITE permission the user has not granted. Nothing of the call was stored. */
-class HealthNotGrantedException(val permission: HealthPermission, message: String) :
-    SecurityException(message), HealthCallException
+class HealthNotGrantedException(val permission: HealthPermission, message: String, cause: Throwable? = null) :
+    SecurityException(message, cause), HealthCallException
 
 /** A record broke one of the platform's record rules. Nothing of the call was stored. */
 class HealthInvalidRecordException(message: String) :
@@ -106,6 +106,13 @@ object HealthErrors {
         PlatformError.DATA_SYNC_IN_PROGRESS -> RetryReason.DATA_SYNC_IN_PROGRESS
         PlatformError.OTHER -> if (userInForeground) null else RetryReason.NOT_FOREGROUND_USER
     }
+
+    /**
+     * The platform refused a call for a missing grant: the port's exception, with the platform's own
+     * kept as its cause (its message names what was refused — a permission, never a health value).
+     */
+    fun notGranted(permission: HealthPermission, platform: SecurityException): HealthNotGrantedException =
+        HealthNotGrantedException(permission, "${permission.permission} is not granted", platform)
 }
 
 /** The call was refused for now, for [reason]; nothing of it was stored. Try again later. */
