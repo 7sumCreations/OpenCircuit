@@ -50,6 +50,18 @@ class SchemaHistoryGuardTest {
         assertEquals(emptyList(), SchemaHistory.problems(schemas, database, migrationTestSource(), liveVersion()))
     }
 
+    /**
+     * Version 1 has shipped in a GitHub Release, so the pin file's header must not still invite a
+     * re-pin: a released schema file never changes. The header says it is released.
+     */
+    @Test
+    fun thePinFileSaysVersionOneHasShippedAndNeverOffersARePin() {
+        val header = File(storeDir(), "schemas/RELEASED.sha256").readLines().takeWhile { it.startsWith("#") }
+        assertTrue(header.isNotEmpty(), "the pin file has its comment header")
+        assertTrue(header.none { "re-pin" in it.lowercase() || "pre-release" in it.lowercase() }, "a stale pre-release line: $header")
+        assertTrue(header.any { "version 1 is released" in it.lowercase() }, "the header names the release: $header")
+    }
+
     @Test
     fun aCommittedVersionWithNoMigrationTestFails() = withSchemaCopy { schemas ->
         File(schemas, "$database/2.json").writeText(versionTwoOf(File(schemas, "$database/1.json")))
