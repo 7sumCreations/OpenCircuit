@@ -74,12 +74,15 @@ class RingSessionController(
     /** Keeps what the ring measures live: each descriptor's steps and skin temperature, each measure's reading. */
     val liveReadings = LiveReadings(history.live, scope, history.wallClock, history.zone, log)
 
+    /** Who holds the link: the sync and the live measure each start only by claiming it, so never both. */
+    private val linkOwner = LinkOwner()
+
     /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames; none starts during a sync. */
     val liveMeasure: LiveMeasureController = LiveMeasureController(
         send = link::send,
         scope = scope,
         monotonicMillis = monotonicMillis,
-        isSyncing = { sync.isSyncing.value },
+        owner = linkOwner,
         wallClock = history.wallClock,
         onMeasured = liveReadings::onMeasured,
     )
@@ -109,7 +112,8 @@ class RingSessionController(
         disconnectAfterSync = history.disconnectAfterSync,
         scope = scope,
         log = log,
-        isMeasuring = { liveMeasure.isMeasuring.value },
+        owner = linkOwner,
+        yieldAutoThen = liveMeasure::yieldAutoThen,
         awaitStatusQuiet = statusQueries::awaitQuiet,
         nightWindow = { triggers?.nightWindow()?.window },
         record = syncRecords::record,
@@ -134,7 +138,6 @@ class RingSessionController(
             disconnect = link::disconnect,
             takeUserLinkUp = ::takeUserLinkUp,
             autoMeasuring = { liveMeasure.state.value.let { it.mode != null && it.auto } },
-            yieldAutoMeasure = liveMeasure::yieldAuto,
             disconnectSwitch = history.disconnectSwitch,
         )
     }
@@ -276,13 +279,11 @@ class RingSessionController(
 
     /**
      * The user's Sync now (the Ring tab, Today's pull to refresh): the automatic heart-rate measure
-     * stands down first — a sync never starts while a measure runs — then the sync. A measure the
-     * user started is left alone, and the sync then refuses. False when no sync started.
+     * stands down first — a sync never starts while a measure runs — then the sync, in one step
+     * ([HistoryDrainController.syncNow]). A measure the user started is left alone, and the sync then
+     * refuses. False when no sync started.
      */
-    fun syncNow(): Boolean {
-        liveMeasure.yieldAuto()
-        return sync.syncNow()
-    }
+    fun syncNow(): Boolean = sync.syncNow()
 
     /**
      * The user asked for the link (Scan & connect, Try again, Sync now): starts collecting if not

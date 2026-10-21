@@ -1,5 +1,6 @@
 package io.github.opencircuit.app.sync
 
+import io.github.opencircuit.app.session.LinkOwner
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
 import io.github.opencircuit.ble.RingLink
@@ -216,8 +217,10 @@ data class SyncState(
  *    never after a NOT_CONNECTED sync while the link is still coming up ([isComingUp]): that link
  *    may authenticate yet, and its link-up syncs.
  *
- * One sync at a time, and none while a live measure runs ([isMeasuring]): [syncNow] then does
- * nothing. [isSyncing] is true from [syncNow] until the sync's report is published. Runs in
+ * One sync at a time, and none while the user's live measure runs: [syncNow] then does nothing.
+ * The sync and the measure each start only by claiming the link ([owner]) in one atomic step, so
+ * the two can never both start; an automatic measure stands down for the sync first
+ * ([yieldAutoThen]). [isSyncing] is true from [syncNow] until the sync's report is published. Runs in
  * [scope] on [wallClock] (the sync cursor, the drain id, the stored times) and [monotonicMillis]
  * (every wait, on the scheduler's time).
  */
@@ -231,8 +234,18 @@ class HistoryDrainController(
     private val disconnectAfterSync: () -> Boolean,
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
-    /** True while a live measure runs: no sync starts then. */
-    private val isMeasuring: () -> Boolean = { false },
+    /**
+     * Who holds the link, shared with the live measure: a sync starts only by claiming it, so none
+     * starts while a measure holds it, and no measure can start between this check and the sync's
+     * start. Released once, just before the sync's report is published (or when it stops without one).
+     */
+    private val owner: LinkOwner = LinkOwner(),
+    /**
+     * Makes the automatic live measure stand down and runs the claim in the same step
+     * (`LiveMeasureController.yieldAutoThen`), so none restarts in between; false without claiming
+     * while the user's measure runs. Every sync outranks the automatic measure; a user's measure blocks it.
+     */
+    private val yieldAutoThen: (claim: () -> Boolean) -> Boolean = { claim -> claim() },
     /** Returns once no status query (`d0 00 00`) is waiting for its answer, or after at most 2 s. */
     private val awaitStatusQuiet: suspend () -> Unit = {},
     /**
@@ -281,26 +294,36 @@ class HistoryDrainController(
     /** True from [syncNow] until the sync's report is published: the keepalive and the live measure stay quiet meanwhile. */
     val isSyncing: StateFlow<Boolean> = syncingFlow.asStateFlow()
 
-    /** Starts a sync; false (and nothing done) when one is already running or a live measure runs. */
+    /**
+     * Starts a sync; false (and nothing done) when one is already running or the user's live measure
+     * runs. An automatic live measure stands down for it first.
+     */
     fun syncNow(): Boolean {
-        if (isMeasuring()) {
-            log("Sync now not started: a live measure is running")
+        var claimed: LinkOwner.Claim? = null
+        if (!yieldAutoThen { owner.claim(LinkOwner.Kind.SYNC)?.also { claimed = it } != null }) {
+            if (owner.current?.kind != LinkOwner.Kind.SYNC) log("Sync now not started: a live measure is running")
             return false
         }
+        val claim = claimed ?: return false
         var started = false
         stateFlow.update { current ->
             started = !current.syncing
             if (started) current.copy(syncing = true, pagesThisSync = 0, channels = emptyList()) else current
         }
-        if (!started) return false
+        if (!started) {
+            // The last sync freed the link and is publishing its report: it is still the one running.
+            owner.release(claim)
+            return false
+        }
         pauseRequested.value = false
         pausedAt.set(null)
         resumeAfterPause.set(false)
         syncingFlow.value = true
         val teardowns = MutableStateFlow<List<LinkTeardown>>(emptyList())
         tally.set(teardowns)
-        scope.launch {
+        val job = scope.launch {
             fun release() {
+                owner.release(claim)
                 tally.compareAndSet(teardowns, null)
                 stateFlow.update { it.copy(syncing = false, channels = emptyList()) }
                 syncingFlow.value = false
@@ -325,6 +348,8 @@ class HistoryDrainController(
             } catch (e: Exception) {
                 log("The sync's log entry could not be kept: ${e::class.java.simpleName}")
             }
+            // Freed before the report is published: live heart rate, started by the report, finds the link free.
+            owner.release(claim)
             stateFlow.update { SyncState(syncing = false, pagesThisSync = it.pagesThisSync, last = report) }
             syncingFlow.value = false
             if (report.commit != null) {
@@ -339,6 +364,8 @@ class HistoryDrainController(
             // The user came back while the pause was finishing.
             if (report.paused && resumeAfterPause.getAndSet(false)) syncNow()
         }
+        // A sync cancelled before it ran at all frees the link too (a second release changes nothing).
+        job.invokeOnCompletion { owner.release(claim) }
         return true
     }
 

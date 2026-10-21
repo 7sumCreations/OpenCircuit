@@ -1,5 +1,6 @@
 package io.github.opencircuit.app.live
 
+import io.github.opencircuit.app.session.LinkOwner
 import io.github.opencircuit.ble.RefusalReason
 import io.github.opencircuit.ble.SendFailure
 import io.github.opencircuit.ble.SendResult
@@ -145,8 +146,12 @@ class LiveMeasureController(
     private val send: suspend (ByteArray) -> SendResult,
     private val scope: CoroutineScope,
     private val monotonicMillis: () -> Long,
-    /** True while a history sync runs: no measure starts then (its writes would land mid-drain). */
-    private val isSyncing: () -> Boolean = { false },
+    /**
+     * Who holds the link, shared with the history sync: a measure starts only by claiming it, so
+     * none starts while a sync holds it (its writes would land mid-drain), and a sync cannot start
+     * between this controller's check and its start. Released when the measure ends.
+     */
+    private val owner: LinkOwner = LinkOwner(),
     /** The phone's wall clock: when a reading was measured. */
     private val wallClock: () -> Instant = { Instant.EPOCH },
     /**
@@ -166,6 +171,9 @@ class LiveMeasureController(
     private var staleJob: Job? = null
     private var deadline = Long.MAX_VALUE
     private var reset = false
+
+    /** The running measure's hold on the link ([owner]); null when no measure runs. */
+    private var held: LinkOwner.Claim? = null
     private val awaitedAnswers = ArrayDeque<Awaited>()
     private val trend = ArrayList<Int>()
     private val session = LiveSession()
@@ -190,7 +198,6 @@ class LiveMeasureController(
      * stops and a fresh measure the user owns starts ([LiveMeasureOwnership.decide]).
      */
     fun start(mode: LiveMode) = synchronized(lock) {
-        if (isSyncing()) return@synchronized
         val current = stateFlow.value
         val measuring = current.mode != null
         val action = LiveMeasureOwnership.decide(
@@ -201,20 +208,26 @@ class LiveMeasureController(
             sameMode = current.mode == mode,
         )
         when (action) {
-            is LiveMeasureOwnership.Action.Start, LiveMeasureOwnership.Action.Takeover -> begin(mode, auto = false)
+            // Nothing measures: the link is claimed, or a sync holds it and the tap does nothing.
+            is LiveMeasureOwnership.Action.Start -> owner.claim(LinkOwner.Kind.MEASURE_USER)?.let { begin(mode, auto = false, claim = it) }
+            // The automatic measure's hold passes to the user's with no instant free for a sync to take.
+            LiveMeasureOwnership.Action.Takeover ->
+                held?.let { owner.transfer(it, LinkOwner.Kind.MEASURE_USER) }?.let { begin(mode, auto = false, claim = it) }
             LiveMeasureOwnership.Action.Rearm -> if (!current.preparing) reArm(mode)
-            is LiveMeasureOwnership.Action.SwitchMode -> if (current.preparing) begin(mode, auto = false) else reArm(mode)
+            is LiveMeasureOwnership.Action.SwitchMode ->
+                if (current.preparing) held?.let { begin(mode, auto = false, claim = it) } else reArm(mode)
             LiveMeasureOwnership.Action.Ignore -> Unit
         }
     }
 
     /**
      * An automatic measure of [mode] (the dashboard's live heart rate after a sync). Starts only when
-     * nothing is measured and no history sync runs; never takes a measure over. True when it started.
+     * nothing is measured and no history sync holds the link; never takes a measure over. True when it started.
      */
     fun startAuto(mode: LiveMode): Boolean = synchronized(lock) {
-        if (isSyncing() || stateFlow.value.mode != null) return@synchronized false
-        begin(mode, auto = true)
+        if (stateFlow.value.mode != null) return@synchronized false
+        val claim = owner.claim(LinkOwner.Kind.MEASURE_AUTO) ?: return@synchronized false
+        begin(mode, auto = true, claim = claim)
         true
     }
 
@@ -222,10 +235,17 @@ class LiveMeasureController(
      * Stops the running measure if it is an automatic one, so a sync can run; a measure the user
      * started is left alone. True when no measure runs afterwards.
      */
-    fun yieldAuto(): Boolean = synchronized(lock) {
+    fun yieldAuto(): Boolean = yieldAutoThen { true }
+
+    /**
+     * As [yieldAuto], then [claim] (a sync taking the link) in the same step under this controller's
+     * lock: no automatic measure can start between the stand-down and the claim. Returns [claim]'s
+     * answer; false without calling it when the user's measure runs (it keeps the link).
+     */
+    fun yieldAutoThen(claim: () -> Boolean): Boolean = synchronized(lock) {
         val current = stateFlow.value
         if (current.mode != null && current.auto) finish(cycle, failure = null, reason = MeasureEndReason.YIELDED)
-        stateFlow.value.mode == null
+        stateFlow.value.mode == null && claim()
     }
 
     /** The user tapped Stop. Not a failure; the row keeps what was read. */
@@ -302,9 +322,12 @@ class LiveMeasureController(
 
     // Everything below runs with `lock` held, except inside the launched coroutines.
 
-    private fun begin(mode: LiveMode, auto: Boolean) {
-        // A takeover ends the automatic measure first, so its end is seen as such.
+    /** Starts a measure holding the link by [claim] (already taken, or handed over from the automatic measure). */
+    private fun begin(mode: LiveMode, auto: Boolean, claim: LinkOwner.Claim) {
+        // A takeover ends the automatic measure first, so its end is seen as such. Its claim was
+        // already handed to [claim], so the release in finish frees nothing.
         if (stateFlow.value.mode != null && stateFlow.value.auto) finish(cycle, failure = null, reason = MeasureEndReason.YIELDED)
+        held = claim
         cancelJobs()
         val myCycle = ++cycle
         trend.clear()
@@ -452,6 +475,9 @@ class LiveMeasureController(
         if (myCycle != cycle) return
         cancelJobs()
         cycle++
+        // The one exit of every measure (budget, Stop, yield, failure, lost link): the link is free again.
+        held?.let(owner::release)
+        held = null
         val reading = if (mode == LiveMode.HEART_RATE) current.settledHeartRate else current.newest
         // Kept only when this run measured it, stamped when it was measured (upstream RS:3449-3474):
         // a half-measured heart rate (no settled value) is not a reading and is not kept.

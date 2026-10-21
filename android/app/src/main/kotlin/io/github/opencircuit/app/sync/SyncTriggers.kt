@@ -85,9 +85,10 @@ data class AutoSyncSkip(
  * - **While the link is held.** With "Disconnect after syncing" OFF, a sync whenever
  *   [HistoryDrainCadence] is due (1 h after the last sync finished, by day) and the night is not
  *   quiet. After a night that is hours, so the first evaluation past the quiet drains once.
- * - **Never two at once, never during a measure**: a trigger that finds a sync or a measure running
- *   does nothing (the controller refuses as well). Sync now is the controller's own and bypasses
- *   every rule here.
+ * - **Never two at once, never during the user's measure**: a trigger that finds a sync or the
+ *   user's measure running does nothing (the controller refuses as well; the automatic measure
+ *   stands down instead). A link-up whose sync the user's measure refused is owed on that link and
+ *   runs the moment the measure ends. Sync now is the controller's own and bypasses every rule here.
  *
  * The window is resolved again at every evaluation from [SyncTriggerSources.storedNights]. A
  * `0x10` / `0x87` descriptor whose quarter-hour step bucket is above 0 at or after the learned wake
@@ -110,13 +111,22 @@ class SyncTriggers(
      * Sync now), taking the mark (`RingSessionController.takeUserLinkUp`). Read once per link-up.
      */
     private val takeUserLinkUp: () -> Boolean,
-    /** The running measure is an automatic one (the dashboard's live heart rate): it never holds a sync back. */
+    /**
+     * The running measure is an automatic one (the dashboard's live heart rate): it never holds a
+     * sync back — the controller's start makes it stand down ([HistoryDrainController.syncNow]).
+     */
     private val autoMeasuring: () -> Boolean = { false },
-    /** Stops an automatic measure so a sync can start (`LiveMeasureController.yieldAuto`); a user's measure is left alone. */
-    private val yieldAutoMeasure: () -> Boolean = { true },
     /** The "Disconnect after syncing" switch itself, in front or not: an owed catch-up off the link follows it. */
     private val disconnectSwitch: () -> Boolean = disconnectAfterSync,
 ) {
+    /**
+     * This link's link-up sync was refused because the user's measure held the link: owed on this
+     * link, evaluated again the moment a measure ends, served by any sync that starts. The link
+     * going down drops it (the next link-up decides afresh).
+     */
+    @Volatile
+    private var linkUpOwed = false
+
     /** A link-up sync held back by the night, owed once the quiet ends. Touched only by the link's one collection (one block at a time). */
     @Volatile
     private var catchUpOwed = false
@@ -149,7 +159,9 @@ class SyncTriggers(
 
     /** Starts following the link and the syncs. Called once, by the session's start. */
     fun start() {
-        scope.launch { sync.isSyncing.collect { syncing -> if (!syncing) ownSync.set(false) } }
+        scope.launch { sync.isSyncing.collect { syncing -> if (syncing) linkUpOwed = false else ownSync.set(false) } }
+        // An owed link-up runs as soon as the measure that refused it ends, not a tick later.
+        scope.launch { isMeasuring.collect { measuring -> if (!measuring && linkUpOwed) pokes.trySend(Unit) } }
         scope.launch {
             sync.state.collect { state ->
                 val report = state.last ?: return@collect
@@ -163,6 +175,7 @@ class SyncTriggers(
             // collectLatest joins the cancelled block before the next starts: the blocks never overlap.
             linkState.collectLatest { state ->
                 if (state != LinkState.Authenticated) {
+                    linkUpOwed = false
                     catchUpOffLink()
                     return@collectLatest
                 }
@@ -215,9 +228,12 @@ class SyncTriggers(
         // Taken first, on every path: the mark belongs to this link-up and no later one.
         val byUser = takeUserLinkUp()
         val now = wallClock()
+        linkUpOwed = false
         busyReason()?.let { reason ->
             // The catch-up's own connect brings this link-up: the sync running is the one wanted.
             if (!(reason == AutoSyncSkipReason.ALREADY_SYNCING && ownSync.get())) skipped(now, AutoSyncTrigger.LINK_UP, reason)
+            // The user's measure holds the link: this link-up's sync runs once it ends (evaluateHeld).
+            if (reason == AutoSyncSkipReason.MEASURING) linkUpOwed = true
             return true
         }
         val lastComplete = sources.marks.lastCompleteSync.notAfter(now)
@@ -320,6 +336,11 @@ class SyncTriggers(
             val ends = if (window.learned) window.quietCeiling else window.window.end
             return untilOrTick(now, ends)
         }
+        if (linkUpOwed) {
+            // The link-up's sync the user's measure refused; refused again, it stays owed (start).
+            if (start(AutoSyncTrigger.LINK_UP, "link-up, after the measure that held it back")) linkUpOwed = false
+            return TICK_MILLIS
+        }
         if (catchUpOwed) {
             // Owed until a sync serves it: a refused start (a measure began meanwhile) is evaluated again.
             if (start(AutoSyncTrigger.CATCH_UP, "catch-up after the night")) catchUpOwed = false
@@ -355,12 +376,12 @@ class SyncTriggers(
     /**
      * Starts the [trigger]'s sync; returns whether a sync now serves it: this one started, or the
      * controller refused because another sync started since the check (it drains the same ring).
-     * False when no sync runs after the refusal (a measure refused it, even one that has ended
-     * since): the trigger is not served.
+     * False when no sync runs after the refusal (the user's measure refused it, even one that has
+     * ended since): the trigger is not served, and a refused link-up is owed ([linkUpOwed]).
      */
     private fun start(trigger: AutoSyncTrigger, reason: String): Boolean {
-        // A sync outranks the dashboard's automatic live measure; its drain's end starts it again.
-        yieldAutoMeasure()
+        // A sync outranks the dashboard's automatic live measure: the controller makes it stand down
+        // and claims the link in one step; the drain's end starts it again.
         if (sync.syncNow()) {
             ownSync.set(true)
             log("sync-trigger: $reason")
@@ -371,6 +392,7 @@ class SyncTriggers(
         val served = sync.state.value.syncing || sync.isSyncing.value
         val why = if (served) AutoSyncSkipReason.ALREADY_SYNCING else AutoSyncSkipReason.MEASURING
         skipped(wallClock(), trigger, why)
+        if (!served && trigger == AutoSyncTrigger.LINK_UP) linkUpOwed = true
         return served
     }
 
