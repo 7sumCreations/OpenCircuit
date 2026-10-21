@@ -579,6 +579,46 @@ class AutoLiveTest {
         }
     }
 
+    /** The link the switch closed when the user left comes back when they return; one the user disconnected does not. */
+    @Test
+    fun comingBackToTheAppReconnectsTheLinkTheSwitchClosedButNotOneTheUserClosed() = runTest {
+        val foreground = MutableStateFlow(true)
+        val w = build(world(foreground = foreground, wallStart = Instant.parse("2026-10-08T14:00:00Z")))
+        fun TestScope.until(state: io.github.opencircuit.ble.LinkState) {
+            val limit = testScheduler.currentTime + 120_000
+            while (w.session.state.value != state) {
+                check(testScheduler.currentTime < limit) { "the link did not reach $state" }
+                advanceTimeBy(100)
+                runCurrent()
+            }
+        }
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            untilSyncEnds(w)
+            foreground.value = false
+            w.session.onAppLeft(switchOn = true, changingConfigurations = false)
+            runCurrent()
+            assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value)
+            foreground.value = true
+            w.session.onAppReturned()
+            until(io.github.opencircuit.ble.LinkState.Authenticated)
+
+            // The user's own Disconnect, then leaving and coming back: it stays closed.
+            w.session.link.disconnect()
+            runCurrent()
+            foreground.value = false
+            w.session.onAppLeft(switchOn = true, changingConfigurations = false)
+            foreground.value = true
+            w.session.onAppReturned()
+            advanceTo(testScheduler.currentTime + 10_000)
+            assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value, "the user's own Disconnect holds")
+        } finally {
+            w.db.close()
+        }
+    }
+
     @Test
     fun withTheAppNotInFrontTheSwitchClosesTheLinkAfterTheSync() = runTest {
         val w = build(world(visible = MutableStateFlow(false), foreground = MutableStateFlow(false), wallStart = Instant.parse("2026-10-08T14:00:00Z")))

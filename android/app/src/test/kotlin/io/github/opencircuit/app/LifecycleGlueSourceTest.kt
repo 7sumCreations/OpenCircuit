@@ -28,6 +28,8 @@ class LifecycleGlueSourceTest {
     fun theActivitysStopAndStartReachTheSessionsSync() {
         assertTrue("container.ringSessions.current.value?.sync?.onAppStopped(isChangingConfigurations)" in body("onStop"))
         assertTrue("container.ringSessions.current.value?.sync?.onAppStarted()" in body("onStart"))
+        // The link the switch closed when the user left comes back with the app.
+        assertTrue("container.ringSessions.current.value?.onAppReturned()" in body("onStart"))
         assertEquals(1, Regex("""onAppStopped\(""").findAll(activity).count(), "one place pauses")
         assertEquals(1, Regex("""onAppStarted\(""").findAll(activity).count(), "one place resumes")
     }

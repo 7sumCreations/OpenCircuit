@@ -197,6 +197,8 @@ class MainActivity : ComponentActivity() {
         container.appInForeground.value = true
         container.adapterStates.start()
         container.ringSessions.current.value?.sync?.onAppStarted()
+        // A link the switch closed when the user left comes back with them.
+        container.ringSessions.current.value?.onAppReturned()
     }
 
     // Out of front first, so a sync this stop pauses closes the link at its end when the switch says

@@ -177,6 +177,9 @@ class RingSessionController(
 
     private val started = AtomicBoolean(false)
 
+    /** The user left with the link up (or a sync running) and the switch on: their return connects it again. */
+    private val reconnectOnReturn = AtomicBoolean(false)
+
     /**
      * The connection attempt the user asked for ([connect]), or null: taken at that attempt's
      * link-up ([takeUserLinkUp]), and dropped when the attempt ends without one ([settleUserLinkUp]).
@@ -241,6 +244,8 @@ class RingSessionController(
      */
     fun onAppLeft(switchOn: Boolean, changingConfigurations: Boolean) {
         val linkUp = link.state.value == LinkState.Authenticated
+        // The switch closes it because the user left: it comes back with them ([onAppReturned]).
+        if (switchOn && !changingConfigurations) reconnectOnReturn.set(linkUp || sync.isSyncing.value)
         if (switchOn && !changingConfigurations && sync.isSyncing.value) {
             scope.launch {
                 sync.isSyncing.first { !it }
@@ -253,6 +258,15 @@ class RingSessionController(
         if (!SyncLifecycle.disconnectOnStop(switchOn, linkUp, sync.isSyncing.value, changingConfigurations)) return
         liveMeasure.stop()
         link.disconnect()
+    }
+
+    /**
+     * The user came back to the app: a link "Disconnect after syncing" closed because they left
+     * ([onAppLeft] found it up, or a sync running on it) connects again — automatically, so the
+     * link-up's own rules apply. A link the user had closed themselves before leaving stays closed.
+     */
+    fun onAppReturned() {
+        if (reconnectOnReturn.getAndSet(false) && link.state.value == LinkState.Idle) reconnect()
     }
 
     /**
