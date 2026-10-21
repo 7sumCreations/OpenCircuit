@@ -3,6 +3,7 @@ package io.github.opencircuit.app.today
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.store.LocalStore
+import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.StoreDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -22,6 +23,8 @@ import kotlin.time.Duration.Companion.milliseconds
 data class TodayStored(
     val heartRate: QuantitySample? = null,
     val spo2: QuantitySample? = null,
+    /** The two-week window ending on the day loaded: the tiles', readiness card's and synthesis line's data. */
+    val trends: TodayTrends = TodayTrends(),
 )
 
 /** Where Today's stored readings come from, and when they changed. */
@@ -54,8 +57,37 @@ class TodayRepository(
     override fun revisions(): Flow<Long> = revisions(storeChanges(database), settle)
 
     override suspend fun load(day: LocalDate, zone: ZoneId): TodayStored = withContext(io) {
-        val store = LocalStore(database())
-        TodayStored(heartRate = store.latestSample(MetricKind.HEART_RATE), spo2 = store.latestSample(MetricKind.SPO2))
+        val db = database()
+        val store = LocalStore(db)
+        TodayStored(
+            heartRate = store.latestSample(MetricKind.HEART_RATE),
+            spo2 = store.latestSample(MetricKind.SPO2),
+            trends = TodayTrends.of(window(store, SleepStore(db), day, zone), zone),
+        )
+    }
+
+    /**
+     * The [TodayTiles.WINDOW_DAYS] days ending on [day]: the nights keyed on them, their step totals,
+     * and the readings from the evening before the first (its night's in-bed window starts there) to
+     * the end of [day] — each a range read on its table's time index, so the cost is the window's,
+     * never the history's.
+     */
+    private suspend fun window(store: LocalStore, sleep: SleepStore, day: LocalDate, zone: ZoneId): TodayWindowInputs {
+        val first = day.minusDays(TodayTiles.WINDOW_DAYS - 1L).atStartOfDay(zone).toInstant()
+        val readingsFrom = day.minusDays(TodayTiles.WINDOW_DAYS.toLong()).atStartOfDay(zone).toInstant()
+        val end = day.plusDays(1).atStartOfDay(zone).toInstant()
+        return TodayWindowInputs(
+            nights = sleep.sleepSummaries(first, end).map {
+                TodayNight(it.night, it.asleepMin, it.sleepScore, it.stressScore, it.skinTempC, it.inBedStart, it.inBedEnd)
+            },
+            dailies = store.dailies(first, end),
+            hr = store.samples(MetricKind.HEART_RATE, readingsFrom, end),
+            hrv = store.samples(MetricKind.HRV_SDNN, readingsFrom, end),
+            spo2 = store.samples(MetricKind.SPO2, readingsFrom, end),
+            rr = store.samples(MetricKind.RESPIRATORY_RATE, readingsFrom, end),
+            dayTemps = store.daytimeTemperatures(readingsFrom, end),
+            stepDeltas = store.stepSamples(readingsFrom, end),
+        )
     }
 
     companion object {
