@@ -382,4 +382,33 @@ class DemoRingLinkTest {
 
         assertEquals(0, received.count { it[0] == 0x15.toByte() }, "a new connection starts with no mode, as a real ring's does")
     }
+
+    /**
+     * How far back a Demo sync's history reaches: its first record is the first night's bedtime,
+     * the evening three local days before today once the morning's wake (08:27:41) is an hour past,
+     * four days before it earlier in the morning — never further, and nothing after now. So a Demo
+     * sync adds days in front of a store whose first day is later than that (a fresh install, a
+     * store holding only today's live readings), and none in front of an older one.
+     */
+    @Test
+    fun aDemoSyncsHistoryReachesThreeOrFourLocalDaysBackAndNoFurther() {
+        fun reach(now: Instant, zone: java.time.ZoneId): Pair<Instant, Instant> {
+            val counters = DemoRingLink.demoBacklog(now.toEpochMilli(), zone).values.flatten().flatMap { page ->
+                // A 0x4c page: header (3 bytes), 23-byte records, the XOR trailer.
+                (3 until page.size - 1 step 23).map { i -> (0 until 4).fold(0L) { acc, b -> (acc shl 8) or (page[i + b].toLong() and 0xff) } }
+            }
+            return Instant.ofEpochSecond(Command.SYNC_EPOCH + counters.min()) to Instant.ofEpochSecond(Command.SYNC_EPOCH + counters.max())
+        }
+        for (zone in listOf(ZoneOffset.UTC, java.time.ZoneId.of("America/Los_Angeles"))) {
+            val today = java.time.LocalDate.of(2026, 10, 8)
+            val late = today.atTime(12, 0).atZone(zone).toInstant()
+            val early = today.atTime(9, 0).atZone(zone).toInstant()
+            val (lateFirst, lateLast) = reach(late, zone)
+            val (earlyFirst, earlyLast) = reach(early, zone)
+            assertEquals(today.minusDays(3), lateFirst.atZone(zone).toLocalDate(), "at noon: the evening three days back ($zone)")
+            assertEquals(today.minusDays(4), earlyFirst.atZone(zone).toLocalDate(), "before the wake + 1 h: four days back ($zone)")
+            assertEquals(java.time.LocalTime.of(21, 55, 11), lateFirst.atZone(zone).toLocalTime())
+            assertTrue(!lateLast.isAfter(late) && !earlyLast.isAfter(early), "nothing after now")
+        }
+    }
 }
