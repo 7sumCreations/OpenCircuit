@@ -36,6 +36,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -122,30 +123,34 @@ const val TODAY_OVERDUE_TAG = "today.overdue"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TodayScreen(state: TodayUiState, onAction: (TodayAction) -> Unit, modifier: Modifier = Modifier, animate: Boolean = false) {
-    state.detail?.let {
-        TileDetailScreen(it, state, onAction, modifier, animate)
-        return
-    }
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = { DayTopBar(state.browser, onAction) },
-    ) { padding ->
-        Column(Modifier.padding(padding)) {
-            state.browser.days?.let { days -> DayStrip(state.browser, days, onAction) }
-            // Released at once: the strip, in the layout, shows the sync.
-            PullToRefreshBox(isRefreshing = false, onRefresh = { onAction(TodayAction.Refresh) }) {
-                // The arc's fill lives here, not in a page or grid item: scrolling or paging away and
-                // back must not empty it and fill it again.
-                val readinessSweep = remember { Animatable(0f) }
-                val days = state.browser.days
-                val selected = state.browser.selected
-                if (days == null || selected == null) {
-                    DayPage(state, null, onAction, readinessSweep, animate)
-                } else {
-                    DayPager(days, selected, onAction, animate) { day -> DayPage(state, day, onAction, readinessSweep, animate) }
+    val detail = state.detail
+    Box(modifier.fillMaxSize()) {
+        // Today stays composed under an open trend, so closing it returns to the same day, scroll
+        // position and readiness fill; hidden from a screen reader while covered.
+        Scaffold(
+            modifier = Modifier.fillMaxSize().then(if (detail != null) Modifier.clearAndSetSemantics { } else Modifier),
+            topBar = { DayTopBar(state.browser, onAction) },
+        ) { padding ->
+            Column(Modifier.padding(padding)) {
+                state.browser.days?.let { days -> DayStrip(state.browser, days, onAction) }
+                // Released at once: the strip, in the layout, shows the sync.
+                PullToRefreshBox(isRefreshing = false, onRefresh = { onAction(TodayAction.Refresh) }) {
+                    // Each day's arc fill lives here, not in a page or grid item: scrolling or paging away
+                    // and back must not empty it and fill it again, and one page never drives another's.
+                    val sweeps = remember { HashMap<LocalDate?, Animatable<Float, AnimationVector1D>>() }
+                    fun sweep(day: LocalDate?) = sweeps.getOrPut(day) { Animatable(0f) }
+                    val days = state.browser.days
+                    val selected = state.browser.selected
+                    if (days == null || selected == null) {
+                        DayPage(state, null, onAction, sweep(null), animate)
+                    } else {
+                        DayPager(days, selected, onAction, animate) { day -> DayPage(state, day, onAction, sweep(day), animate) }
+                    }
                 }
             }
         }
+        // A surface over Today: it takes every touch, so none reaches the page beneath.
+        if (detail != null) Surface(Modifier.fillMaxSize()) { TileDetailScreen(detail, state, onAction, Modifier, animate) }
     }
 }
 

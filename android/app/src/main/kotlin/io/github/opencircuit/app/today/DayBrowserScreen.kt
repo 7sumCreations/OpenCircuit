@@ -185,7 +185,7 @@ internal fun DayStrip(browser: DayBrowserUi, days: BrowsableDays, onAction: (Tod
 
 @Composable
 private fun DayCell(cell: DayCellUi, picked: Boolean, tag: String, onClick: () -> Unit) {
-    val marked = cell.spoken.endsWith(MARK_WORDS)
+    val marked = cell.marked
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
@@ -206,9 +206,6 @@ private fun DayCell(cell: DayCellUi, picked: Boolean, tag: String, onClick: () -
         }
     }
 }
-
-/** What a marked cell's spoken label ends with ([DayBrowser.cell]). */
-private const val MARK_WORDS = ", new data just arrived"
 
 /**
  * One page per stored day, keyed by its epoch day, oldest first. The picked date is the truth: when

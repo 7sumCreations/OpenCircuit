@@ -100,8 +100,9 @@ class DayListTest {
     @Test
     fun theStripSaysEachDayAndItsMark() {
         val today = LocalDate.of(2026, 10, 21)
-        assertEquals(DayCellUi("Today", "21", "Wednesday 21 October, today"), DayBrowser.cell(today, today, marked = false))
-        assertEquals(DayCellUi("M", "19", "Monday 19 October, new data just arrived"), DayBrowser.cell(today.minusDays(2), today, marked = true))
+        assertEquals(DayCellUi("Today", "21", "Wednesday 21 October, today", marked = false), DayBrowser.cell(today, today, marked = false))
+        // The dot and the words come from one flag.
+        assertEquals(DayCellUi("M", "19", "Monday 19 October, new data just arrived", marked = true), DayBrowser.cell(today.minusDays(2), today, marked = true))
     }
 
     @Test

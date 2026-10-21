@@ -88,6 +88,28 @@ class TileDetailPresenterTest {
     }
 
     @Test
+    fun todaysStepsDetailReadsTodaysRunningTotalNotNoReading() {
+        val steps = (0 until 14).map { back ->
+            val d = today.minusDays(back.toLong())
+            io.github.opencircuit.store.DailySteps(d.atStartOfDay(zone).toInstant(), if (back == 0) 8_432 else 11_000L + back * 100, now)
+        }
+        val ui = TileDetailPresenter.present(TodayTrends.of(TodayWindowInputs(dailies = steps), zone), TodayTile.Metric.STEPS, 14, today, now, zone)
+        assertEquals("8,432", ui.value)
+        // The chart keeps complete days only (a growing total would plot as a cliff); its words do not deny today's steps.
+        assertEquals("Wed 21 Oct: 8,432 so far", ui.rows.last().readout)
+        assertEquals("8,432", ui.rows.last().value)
+        assertTrue(ui.description.endsWith("Wednesday 21 October: 8,432 steps so far."), ui.description)
+        // Tick labels in the tile's own format: grouped thousands.
+        assertTrue(ui.tickLabels.all { (_, text) -> text.contains(",") }, ui.tickLabels.toString())
+    }
+
+    @Test
+    fun tickLabelsUseTheTilesOwnNumberFormat() {
+        val ui = TileDetailPresenter.present(trends(), TodayTile.Metric.HEART_RATE, 30, today, now, zone)
+        assertEquals(ui.chart.ticks.map { it.y to TileNumber.WHOLE.format(it.value) }, ui.tickLabels)
+    }
+
+    @Test
     fun theChartIsDescribedInWordsWithItsLastDay() {
         val ui = TileDetailPresenter.present(trends(), TodayTile.Metric.HEART_RATE, 14, today, now, zone)
         assertTrue(ui.description.startsWith("Heart rate over the last 14 days, 4 days with data, ranging from 60 to 63 beats per minute"), ui.description)

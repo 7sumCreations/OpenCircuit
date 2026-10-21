@@ -171,7 +171,8 @@ object TodayPresenter {
             readiness = dashboard.readiness,
             synthesis = dashboard.synthesis,
             dateLine = dashboard.dateLine,
-            day = stored?.let { it.day ?: LocalDate.ofInstant(input.now, input.zone) },
+            // From the dashboard, not the load: the two can be one emission apart, and the day must name the values shown.
+            day = dashboard.day,
             pastDay = dashboard.pastDay,
             browser = browser(input),
             loading = stored == null,

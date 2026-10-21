@@ -48,6 +48,8 @@ data class TileDetailUi(
     val measure: DetailMeasure?,
     /** The window this detail needs is still loading: the chart and figures wait for it. */
     val loading: Boolean = false,
+    /** The chart's tick heights (0 at the top) and their labels, in the tile's own number format. */
+    val tickLabels: List<Pair<Float, String>> = emptyList(),
 )
 
 /** Builds a tile's trend screen, as upstream `MetricDetailView` (MIT `2d07e550`) does: the tile rebuilt over the chosen window. */
@@ -70,10 +72,17 @@ object TileDetailPresenter {
         val usual = tile.trend?.usualRange
         val unitWords = tile.unit.takeIf(String::isNotEmpty)
         fun withUnit(v: String) = listOfNotNull(v, unitWords).joinToString(" ")
+        // Today's steps are a running total: the chart keeps complete days only (a growing total would
+        // plot as a cliff), but the day's row and words carry the total so far, never "no reading".
+        val runningTotal = tile.valueText?.takeIf { metric == TodayTile.Metric.STEPS && isToday && tile.valueDate == day.atStartOfDay(zone).toInstant() }
         val rows = tile.days.zip(tile.values) { start, v ->
             val d = LocalDate.ofInstant(start, zone)
             val label = SHORT.format(d)
-            DetailRow(d, label, v?.let(tile::format), "$label: ${v?.let { withUnit(tile.format(it)) } ?: "no reading"}")
+            if (runningTotal != null && d == day) {
+                DetailRow(d, label, runningTotal, "$label: $runningTotal so far")
+            } else {
+                DetailRow(d, label, v?.let(tile::format), "$label: ${v?.let { withUnit(tile.format(it)) } ?: "no reading"}")
+            }
         }
         val present = tile.values.filterNotNull()
         val stats = if (present.isEmpty()) emptyList() else listOf(
@@ -82,6 +91,12 @@ object TileDetailPresenter {
             "MAX" to "Highest" to present.max(),
         ).map { (labels, v) -> DetailStat(labels.first, tile.format(v), "${labels.second} ${listOf(tile.format(v), tile.spokenUnit).filter(String::isNotEmpty).joinToString(" ")}") }
         val freshness = tile.freshnessText(now, zone)
+        val chart = TrendGeometry.of(tile.values, usual, mean = tile.trend?.baselineMean)
+        val description = TrendGeometry.describeTrend(
+            tile.title, tile.values, tile.spokenUnit, usual, tile::format, LONG.format(day), tile.values.lastOrNull(),
+        ).let { words ->
+            if (runningTotal == null) words else words.substringBeforeLast("${LONG.format(day)}: ") + "${LONG.format(day)}: $runningTotal ${tile.spokenUnit} so far."
+        }
         return TileDetailUi(
             metric = metric,
             days = days,
@@ -98,21 +113,21 @@ object TileDetailPresenter {
                     BaselineTrend.Direction.BELOW -> TileDirection.DOWN
                 }
             },
-            chart = TrendGeometry.of(tile.values, usual, mean = tile.trend?.baselineMean),
+            chart = chart,
             xLabels = xLabels(rows, isToday),
             rows = rows,
             stats = stats,
             count = "${present.size} of ${tile.values.size} days",
             usual = tile.rangeText,
             about = TodayTiles.what(metric),
-            description = TrendGeometry.describeTrend(
-                tile.title, tile.values, tile.spokenUnit, usual, tile::format, LONG.format(day), tile.values.lastOrNull(),
-            ),
+            description = description,
             measure = when (metric) {
                 TodayTile.Metric.HEART_RATE -> DetailMeasure.HEART_RATE
                 TodayTile.Metric.SPO2 -> DetailMeasure.SPO2
                 else -> null
             },
+            // The axis speaks the tile's own number format (grouped steps, durations for sleep).
+            tickLabels = chart.ticks.map { it.y to tile.format(it.value) },
         )
     }
 

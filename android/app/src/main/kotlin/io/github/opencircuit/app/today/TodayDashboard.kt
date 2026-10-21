@@ -89,6 +89,8 @@ data class DashboardUi(
     val dateLine: String = "",
     /** On a past day, its heart-rate range in place of the live hero; null on today. */
     val pastDay: PastDayHeroUi? = null,
+    /** The day all of the above is for; null before the first load. The screen's day comes from here, so it can never name one day over another day's values. */
+    val day: LocalDate? = null,
 )
 
 /**
@@ -124,7 +126,7 @@ object TodayDashboard {
             null
         }
         val pastDay = if (isToday) null else pastDayHero(trends, day, zone)
-        return DashboardUi(tiles.map { tileUi(it, now, zone) }, readiness, synthesis, dateLine(day), pastDay)
+        return DashboardUi(tiles.map { tileUi(it, now, zone) }, readiness, synthesis, dateLine(day), pastDay, day)
     }
 
     /** "Wednesday 30 September". */

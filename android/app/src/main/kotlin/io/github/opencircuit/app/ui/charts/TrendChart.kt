@@ -38,7 +38,8 @@ fun TrendChart(
     geometry: TrendGeometry,
     slots: Int,
     xLabels: List<Pair<Float, String>>,
-    tickLabel: (Double) -> String,
+    /** Each grid line's height (0 at the top, as [Tick.y]) and its label. */
+    tickLabels: List<Pair<Float, String>>,
     colours: TrendChartColours,
     description: String,
     selected: Int?,
@@ -63,10 +64,10 @@ fun TrendChart(
         val h = (size.height - bottom).coerceAtLeast(1f)
         fun at(p: ChartPoint) = Offset(p.x * w, p.y * h)
 
-        for (tick in geometry.ticks) {
-            val y = tick.y * h
+        for ((fy, label) in tickLabels) {
+            val y = fy * h
             drawLine(colours.grid, Offset(0f, y), Offset(w, y), strokeWidth = 1.dp.toPx())
-            val text = measurer.measure(tickLabel(tick.value), labelStyle)
+            val text = measurer.measure(label, labelStyle)
             drawText(text, topLeft = Offset(w + 6.dp.toPx(), y - text.size.height / 2f))
         }
         geometry.band?.let { b -> drawRect(colours.band, topLeft = Offset(0f, b.top * h), size = Size(w, (b.bottom - b.top) * h)) }

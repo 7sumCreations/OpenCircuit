@@ -1,6 +1,12 @@
 package io.github.opencircuit.app
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
+import io.github.opencircuit.app.today.TODAY_LIST_TAG
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
@@ -105,6 +111,25 @@ class TileDetailRenderTest {
         compose.onNodeWithText("Fri 16 Oct").assertExists()
         compose.onNodeWithContentDescription("Back to Today").performClick()
         assertEquals(listOf(TodayAction.DetailRange(30), TodayAction.CloseDetail), actions)
+    }
+
+    @Test
+    fun closingATrendReturnsToTodayWhereTheUserLeftIt() {
+        val today = state(null)
+        var shown by mutableStateOf(today)
+        compose.setContent { OpenCircuitTheme { TodayScreen(shown, onAction = { }) } }
+        val steps = todayTileTag(TodayTile.Metric.STEPS)
+        compose.onNodeWithTag(TODAY_LIST_TAG).performScrollToNode(hasTestTag(steps))
+        compose.onNodeWithTag(steps).assertIsDisplayed()
+
+        shown = state(14)
+        compose.onNodeWithTag(TODAY_DETAIL_TAG).assertIsDisplayed()
+        // Covered, and out of a screen reader's reach while it is.
+        compose.onNodeWithTag(steps).assertDoesNotExist()
+        shown = today
+        compose.onNodeWithTag(TODAY_DETAIL_TAG).assertDoesNotExist()
+        // Not scrolled back to the top: the list kept its place under the trend.
+        compose.onNodeWithTag(steps).assertIsDisplayed()
     }
 
     @Test

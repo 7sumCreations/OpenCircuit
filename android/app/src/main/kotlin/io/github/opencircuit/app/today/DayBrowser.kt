@@ -50,7 +50,10 @@ data class BrowsableDays(val first: LocalDate, val last: LocalDate) {
  * and the dates marked because data landed on them while another day was open.
  */
 data class DayBrowserUi(
-    /** Null before the first load: one page, today. */
+    /**
+     * The presenter always fills it (today alone before the first load). Null only in a state built
+     * by hand (a render test): the screen then draws one page of whatever the state holds, no strip.
+     */
     val days: BrowsableDays? = null,
     val selected: LocalDate? = null,
     val isToday: Boolean = true,
@@ -61,8 +64,8 @@ data class DayBrowserUi(
     val marked: Set<LocalDate> = emptySet(),
 )
 
-/** One date in the date strip: its short weekday (or "Today"), its day of the month, and what a screen reader says for it. */
-data class DayCellUi(val top: String, val number: String, val spoken: String)
+/** One date in the date strip: its short weekday (or "Today"), its day of the month, what a screen reader says for it, and its new-data mark. */
+data class DayCellUi(val top: String, val number: String, val spoken: String, val marked: Boolean = false)
 
 internal const val TODAY = "Today"
 
@@ -89,7 +92,7 @@ object DayBrowser {
             if (day == today) append(", today")
             if (marked) append(", new data just arrived")
         }
-        return DayCellUi(if (day == today) TODAY else NARROW.format(day), day.dayOfMonth.toString(), spoken)
+        return DayCellUi(if (day == today) TODAY else NARROW.format(day), day.dayOfMonth.toString(), spoken, marked)
     }
 
     /** The date picker's value for [day]: midnight UTC of that date, as Material's picker counts days. */

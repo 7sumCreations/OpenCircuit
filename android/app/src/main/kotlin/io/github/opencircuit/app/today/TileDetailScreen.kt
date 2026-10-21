@@ -136,7 +136,8 @@ private fun Headline(detail: TileDetailUi, animate: Boolean) {
 @Composable
 private fun ChartCard(detail: TileDetailUi) {
     val tones = LocalTones.current
-    var picked by rememberSaveable(detail.metric, detail.days) { mutableStateOf<Int?>(null) }
+    // Keyed by the window's last day too: when the window moves (a new local day), a slot is another date.
+    var picked by rememberSaveable(detail.metric, detail.days, detail.rows.lastOrNull()?.day?.toEpochDay()) { mutableStateOf<Int?>(null) }
     Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
@@ -158,7 +159,7 @@ private fun ChartCard(detail: TileDetailUi) {
                     geometry = detail.chart,
                     slots = detail.rows.size,
                     xLabels = detail.xLabels.map { it.x to it.text },
-                    tickLabel = { v -> TileNumberFor.label(detail, v) },
+                    tickLabels = detail.tickLabels,
                     colours = TrendChartColours(
                         line = Color(tones.ink3),
                         band = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
@@ -179,15 +180,6 @@ private fun ChartCard(detail: TileDetailUi) {
                 Text(detail.count, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-    }
-}
-
-/** A tick's label in the tile's own number format (sleep in whole hours). */
-private object TileNumberFor {
-    fun label(detail: TileDetailUi, v: Double): String = when (detail.metric) {
-        TodayTile.Metric.SLEEP -> "${Math.round(v / 60)} h"
-        TodayTile.Metric.RESPIRATORY_RATE, TodayTile.Metric.SKIN_TEMP -> TileNumber.ONE_DECIMAL.format(v)
-        else -> TileNumber.WHOLE.format(v)
     }
 }
 

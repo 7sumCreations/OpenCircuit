@@ -6,7 +6,9 @@ import io.github.opencircuit.ringkit.QuantitySample
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -175,6 +177,24 @@ class TodayDayBrowserTest {
         runCurrent()
         assertEquals(today.minusDays(4), vm.uiState.value.day)
         assertNull(vm.uiState.value.tiles.single { it.metric == TodayTile.Metric.HEART_RATE }.value, "nothing stored that day")
+    }
+
+    @Test
+    fun noStateEverCallsOneDaysValuesAnotherDays() = runTest {
+        val source = DaySource()
+        source.hrByDay[today] = listOf(hr(today, 8, 71.0))
+        source.hrByDay[today.minusDays(3)] = listOf(hr(today.minusDays(3), 8, 55.0))
+        val vm = open(source)
+        val seen = mutableListOf<TodayUiState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect { seen += it } }
+        vm.onAction(TodayAction.SelectDay(today.minusDays(3)))
+        runCurrent()
+        vm.onAction(TodayAction.ShowToday)
+        runCurrent()
+        fun hrOf(s: TodayUiState) = s.tiles.singleOrNull { it.metric == TodayTile.Metric.HEART_RATE }?.value
+        val wrong = seen.filter { (it.day == today.minusDays(3) && hrOf(it) == "71") || (it.day == today && hrOf(it) == "55") }
+        assertEquals(emptyList(), wrong.map { it.day to hrOf(it) }, "a state whose day and values disagree")
+        assertTrue(seen.any { it.day == today.minusDays(3) && hrOf(it) == "55" })
     }
 
     @Test
