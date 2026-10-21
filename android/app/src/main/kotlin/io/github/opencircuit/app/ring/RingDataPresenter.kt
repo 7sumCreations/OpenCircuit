@@ -88,15 +88,22 @@ const val STEPS_HELP = "Steps and skin temperature are only recorded while the r
 object RingDataPresenter {
 
     /**
-     * The card from [input]. While a sync runs: its progress and the keep-the-app-open help. Else,
-     * from the sync log's newest entry (so the same after a relaunch): when, the result, what went
-     * wrong, what was left for later (held-back records and the channel that held them, nights
-     * waiting); what is stored; and the overdue warning, measured from the least-drained channel
-     * (PORTING.md D-273). Sync now is enabled with a ring and no live measure.
+     * The card from [input]. What is stored (range, nights, last night) and the overdue warning,
+     * measured from the least-drained channel (PORTING.md D-273), always show — a running sync
+     * never hides them. While a sync runs: its progress and the keep-the-app-open help beside them.
+     * Else, from the sync log's newest entry (so the same after a relaunch): when, the result, what
+     * went wrong, what was left for later (held-back records and the channel that held them, nights
+     * waiting). Sync now is enabled with a ring and no live measure.
      */
     fun present(input: RingDataInput): RingDataUi {
         val sync = input.sync
         val disconnectAfterSync = input.disconnectAfterSync
+        val overdue = SyncMeasurement.overdue(SyncLogEntries.generation(input.liveFirmware, input.log), SyncLogEntries.oldestOnRing(input.log), input.now)
+        val stored = input.stored
+        val storedRange = stored?.let { range(it.oldest, it.newest, input.zone) }
+        val nights = stored?.let { count(it.nights) }
+        val lastNight = stored?.lastNight?.let { lastNight(it, input.zone) }
+        val overdueText = overdue?.let { "Your ring keeps about ${it.keepsDays} days of data. Sync ${if (it.level == SyncMeasurement.OverdueLevel.RED) "now" else "soon"} so nothing is lost." }
         if (sync?.syncing == true) {
             return RingDataUi(
                 headline = SYNCING,
@@ -107,12 +114,15 @@ object RingDataPresenter {
                 disconnectAfterSync = disconnectAfterSync,
                 help = if (disconnectAfterSync) KEEP_OPEN_THEN_DISCONNECT else KEEP_OPEN,
                 progress = sync.channels.map(::progressLine),
+                storedRange = storedRange,
+                nights = nights,
+                lastNight = lastNight,
+                overdue = overdueText,
+                overdueLevel = overdue?.level,
             )
         }
         val last = input.log.lastOrNull()
         val outcome = last?.let { entry -> SyncOutcome.entries.firstOrNull { it.name == entry.outcome } }
-        val overdue = SyncMeasurement.overdue(SyncLogEntries.generation(input.liveFirmware, input.log), SyncLogEntries.oldestOnRing(input.log), input.now)
-        val stored = input.stored
         return RingDataUi(
             headline = when {
                 last == null -> NOT_SYNCED
@@ -126,10 +136,10 @@ object RingDataPresenter {
             syncEnabled = sync != null && !input.measuring,
             syncBlockedBy = if (sync != null && input.measuring) STOP_MEASURING_TO_SYNC else null,
             disconnectAfterSync = disconnectAfterSync,
-            storedRange = stored?.let { range(it.oldest, it.newest, input.zone) },
-            nights = stored?.let { count(it.nights) },
-            lastNight = stored?.lastNight?.let { lastNight(it, input.zone) },
-            overdue = overdue?.let { "Your ring keeps about ${it.keepsDays} days of data. Sync ${if (it.level == SyncMeasurement.OverdueLevel.RED) "now" else "soon"} so nothing is lost." },
+            storedRange = storedRange,
+            nights = nights,
+            lastNight = lastNight,
+            overdue = overdueText,
             overdueLevel = overdue?.level,
         )
     }

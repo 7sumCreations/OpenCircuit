@@ -287,12 +287,38 @@ class RingDataCardStateTest {
     }
 
     @Test
-    fun noWarningWhileSyncing() {
-        val ui = card(log = listOf(drainedAt(8.0)), sync = SyncState(syncing = true, channels = listOf(ChannelProgress("sleep", 6, 30, null, false))))
+    fun whileSyncingWhatIsStoredAndTheOverdueWarningStayBesideTheProgress() {
+        val zone = ZoneId.of("Europe/London")
+        val stored = StoredData(
+            oldest = Instant.parse("2026-09-12T06:00:00Z"),
+            newest = Instant.parse("2026-10-08T07:30:00Z"),
+            nights = 21,
+            lastNight = StoredLastNight(Instant.parse("2026-10-07T22:41:00Z"), Instant.parse("2026-10-08T06:02:00Z"), asleepMinutes = 441),
+        )
+        val ui = card(log = listOf(drainedAt(8.0)), stored = stored, zone = zone, sync = SyncState(syncing = true, channels = listOf(ChannelProgress("sleep", 6, 30, null, false))))
+
         assertEquals("Syncing…", ui.headline)
-        assertNull(ui.overdue)
+        assertTrue(ui.syncing)
         assertEquals(listOf("Sleep channel 6 of 30 records"), ui.progress)
         assertFalse(ui.syncEnabled)
+        assertEquals("Syncing…", ui.syncLabel)
+        assertEquals("12 Sep – 8 Oct", ui.storedRange)
+        assertEquals("21", ui.nights)
+        assertEquals("23:41 → 07:02 · 7 h 21 m", ui.lastNight)
+        assertEquals("Your ring keeps about 7 days of data. Sync now so nothing is lost.", ui.overdue)
+        assertEquals(OverdueLevel.RED, ui.overdueLevel)
+        // The running sync replaces the last one's result row: it is not the latest word any more.
+        assertNull(ui.lastSync)
+    }
+
+    @Test
+    fun whileSyncingWithNothingStoredYetTheStoredRowsAreEmpty() {
+        val ui = card(sync = SyncState(syncing = true))
+        assertEquals("Syncing…", ui.headline)
+        assertNull(ui.storedRange)
+        assertNull(ui.nights)
+        assertNull(ui.lastNight)
+        assertNull(ui.overdue)
     }
 
     @Test

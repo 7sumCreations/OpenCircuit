@@ -140,6 +140,22 @@ class RingDataCardRenderTest {
     }
 
     @Test
+    fun syncingKeepsWhatIsStoredOnScreenBesideTheProgress() {
+        val stored = StoredData(
+            oldest = Instant.parse("2026-09-12T06:00:00Z"),
+            newest = Instant.parse("2026-10-08T07:30:00Z"),
+            nights = 21,
+            lastNight = StoredLastNight(Instant.parse("2026-10-07T22:41:00Z"), Instant.parse("2026-10-08T06:02:00Z"), asleepMinutes = 441),
+        )
+        show(present(emptyList(), stored, sync = SyncState(syncing = true, channels = listOf(ChannelProgress("all-day", 120, 723, null, false)))))
+
+        compose.onNodeWithText("All-day channel 120 of 723 records").assertIsDisplayed()
+        compose.onNodeWithText("Stored on this phone").assertIsDisplayed()
+        compose.onNodeWithText("12 Sep – 8 Oct").assertIsDisplayed()
+        compose.onNodeWithText("21").assertIsDisplayed()
+    }
+
+    @Test
     fun aCompleteSyncShowsWhatIsStoredTheNightsAndLastNight() {
         val stored = StoredData(
             oldest = Instant.parse("2026-09-12T06:00:00Z"),
