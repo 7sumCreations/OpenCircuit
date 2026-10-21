@@ -238,14 +238,15 @@ class HistoryDrainController(
      * Who holds the link, shared with the live measure: a sync starts only by claiming it, so none
      * starts while a measure holds it, and no measure can start between this check and the sync's
      * start. Released once, just before the sync's report is published (or when it stops without one).
+     * Required, with [yieldAutoThen]: a controller left with an owner of its own would exclude nothing.
      */
-    private val owner: LinkOwner = LinkOwner(),
+    private val owner: LinkOwner,
     /**
      * Makes the automatic live measure stand down and runs the claim in the same step
-     * (`LiveMeasureController.yieldAutoThen`), so none restarts in between; false without claiming
+     * (`LiveMeasureController.yieldAutoThen`), so none restarts in between; null without claiming
      * while the user's measure runs. Every sync outranks the automatic measure; a user's measure blocks it.
      */
-    private val yieldAutoThen: (claim: () -> Boolean) -> Boolean = { claim -> claim() },
+    private val yieldAutoThen: (claim: () -> LinkOwner.Claim?) -> LinkOwner.Claim?,
     /** Returns once no status query (`d0 00 00`) is waiting for its answer, or after at most 2 s. */
     private val awaitStatusQuiet: suspend () -> Unit = {},
     /**
@@ -295,16 +296,21 @@ class HistoryDrainController(
     val isSyncing: StateFlow<Boolean> = syncingFlow.asStateFlow()
 
     /**
+     * A sync is running now, from the instant it claims the link (before [state] says so) until its
+     * report is published: a refused [syncNow] that reads this true was refused by that sync, not by a measure.
+     */
+    val running: Boolean get() = owner.current?.kind == LinkOwner.Kind.SYNC || stateFlow.value.syncing || syncingFlow.value
+
+    /**
      * Starts a sync; false (and nothing done) when one is already running or the user's live measure
      * runs. An automatic live measure stands down for it first.
      */
     fun syncNow(): Boolean {
-        var claimed: LinkOwner.Claim? = null
-        if (!yieldAutoThen { owner.claim(LinkOwner.Kind.SYNC)?.also { claimed = it } != null }) {
-            if (owner.current?.kind != LinkOwner.Kind.SYNC) log("Sync now not started: a live measure is running")
+        val claim = yieldAutoThen { owner.claim(LinkOwner.Kind.SYNC) }
+        if (claim == null) {
+            if (owner.current?.kind?.let { it != LinkOwner.Kind.SYNC } == true) log("Sync now not started: a live measure is running")
             return false
         }
-        val claim = claimed ?: return false
         var started = false
         stateFlow.update { current ->
             started = !current.syncing
@@ -321,23 +327,28 @@ class HistoryDrainController(
         syncingFlow.value = true
         val teardowns = MutableStateFlow<List<LinkTeardown>>(emptyList())
         tally.set(teardowns)
+        /**
+         * The sync ends with no report — an unexpected error, a cancellation, or cancelled before it
+         * ran: the link and the flags are let go together, so the keepalive, the measure and the next
+         * sync are not held off for good. Only the first call (the claim's one release) does anything,
+         * and none after the report was published (the claim was released for that).
+         */
+        fun endWithoutReport() {
+            if (!owner.release(claim)) return
+            tally.compareAndSet(teardowns, null)
+            stateFlow.update { it.copy(syncing = false, channels = emptyList()) }
+            syncingFlow.value = false
+        }
         val job = scope.launch {
-            fun release() {
-                owner.release(claim)
-                tally.compareAndSet(teardowns, null)
-                stateFlow.update { it.copy(syncing = false, channels = emptyList()) }
-                syncingFlow.value = false
-            }
             val report = try {
                 sync(teardowns)
             } catch (e: CancellationException) {
-                release()
+                endWithoutReport()
                 throw e
             } catch (e: Exception) {
-                // A defect, not an outcome: whatever was stored stays journaled for the next sync, and the
-                // flag is released so the keepalive, the measure and the next sync are not held off for good.
+                // A defect, not an outcome: whatever was stored stays journaled for the next sync.
                 log("The sync stopped on an unexpected error: ${e::class.java.simpleName}; the stored pages stay for the next sync")
-                release()
+                endWithoutReport()
                 return@launch
             }
             tally.compareAndSet(teardowns, null)
@@ -364,8 +375,9 @@ class HistoryDrainController(
             // The user came back while the pause was finishing.
             if (report.paused && resumeAfterPause.getAndSet(false)) syncNow()
         }
-        // A sync cancelled before it ran at all frees the link too (a second release changes nothing).
-        job.invokeOnCompletion { owner.release(claim) }
+        // Every other way the coroutine can end — cancelled before it ran, or while its log entry was
+        // kept — lands here; after a published report this changes nothing.
+        job.invokeOnCompletion { endWithoutReport() }
         return true
     }
 

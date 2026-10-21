@@ -13,6 +13,7 @@ import io.github.opencircuit.app.sync.SyncTriggers
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
 import io.github.opencircuit.ble.RingLink
+import io.github.opencircuit.ringkit.Command
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -77,18 +78,22 @@ class RingSessionController(
     /** Who holds the link: the sync and the live measure each start only by claiming it, so never both. */
     private val linkOwner = LinkOwner()
 
+    /** Whether a status query waits for its answer: the drain's first open waits for it (or 2 s). */
+    private val statusQueries = StatusQueries(monotonicMillis)
+
     /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames; none starts during a sync. */
     val liveMeasure: LiveMeasureController = LiveMeasureController(
-        send = link::send,
+        send = { command ->
+            // The entry's status query too: a sync the measure stands down for waits for its answer.
+            if (command.contentEquals(Command.statusQuery)) statusQueries.onQuery()
+            link.send(command)
+        },
         scope = scope,
         monotonicMillis = monotonicMillis,
         owner = linkOwner,
         wallClock = history.wallClock,
         onMeasured = liveReadings::onMeasured,
     )
-
-    /** Whether a status query waits for its answer: the drain's first open waits for it (or 2 s). */
-    private val statusQueries = StatusQueries(monotonicMillis)
 
     /** The history frames: each page stored, then acknowledged; the sync answer and end report passed to the drain. */
     val historyPages = HistoryPages(history.store, link::acknowledge, scope, history.wallClock, log, monotonicMillis)

@@ -77,7 +77,7 @@ class LinkOwnerReleaseTest {
         assertTrue(measure.startAuto(LiveMode.HEART_RATE))
         measure.start(LiveMode.SPO2)
         assertEquals(LinkOwner.Kind.MEASURE_USER, owner.current?.kind)
-        assertFalse(measure.yieldAutoThen { owner.claim(LinkOwner.Kind.SYNC) != null }, "the user's measure keeps the link from a sync")
+        assertNull(measure.yieldAutoThen { owner.claim(LinkOwner.Kind.SYNC) }, "the user's measure keeps the link from a sync")
         assertEquals(LiveMode.SPO2, measure.state.value.mode)
         measure.stop()
         assertNull(owner.current)
@@ -95,13 +95,16 @@ class LinkOwnerReleaseTest {
     }
 
     @Test
-    fun aSyncCancelledBeforeItRanFreesTheLink() = runTest {
+    fun aSyncCancelledBeforeItRanFreesTheLinkAndNoLongerSaysSyncing() = runTest {
         val scope = CoroutineScope(Job() + StandardTestDispatcher(testScheduler))
         val session = RingSessionController(FakeRingLink(testRing), scope, monotonicMillis = { testScheduler.currentTime }, log = {})
         assertTrue(session.sync.syncNow())
         // The session's scope ends before the sync's coroutine ever ran.
         scope.cancel()
         runCurrent()
+        // The claim and the flags agree: no "syncing" left behind to hold the keepalive, the button and the next sync off.
+        assertFalse(session.sync.isSyncing.value, "isSyncing is released")
+        assertFalse(session.sync.state.value.syncing, "the card no longer says syncing")
         assertTrue(session.liveMeasure.startAuto(LiveMode.HEART_RATE), "the link is free for a measure")
     }
 }

@@ -235,17 +235,17 @@ class LiveMeasureController(
      * Stops the running measure if it is an automatic one, so a sync can run; a measure the user
      * started is left alone. True when no measure runs afterwards.
      */
-    fun yieldAuto(): Boolean = yieldAutoThen { true }
+    fun yieldAuto(): Boolean = yieldAutoThen { Unit } != null
 
     /**
      * As [yieldAuto], then [claim] (a sync taking the link) in the same step under this controller's
      * lock: no automatic measure can start between the stand-down and the claim. Returns [claim]'s
-     * answer; false without calling it when the user's measure runs (it keeps the link).
+     * answer; null without calling it when the user's measure runs (it keeps the link).
      */
-    fun yieldAutoThen(claim: () -> Boolean): Boolean = synchronized(lock) {
+    fun <T : Any> yieldAutoThen(claim: () -> T?): T? = synchronized(lock) {
         val current = stateFlow.value
         if (current.mode != null && current.auto) finish(cycle, failure = null, reason = MeasureEndReason.YIELDED)
-        stateFlow.value.mode == null && claim()
+        if (stateFlow.value.mode == null) claim() else null
     }
 
     /** The user tapped Stop. Not a failure; the row keeps what was read. */

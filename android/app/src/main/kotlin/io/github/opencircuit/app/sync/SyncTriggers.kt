@@ -229,21 +229,23 @@ class SyncTriggers(
         val byUser = takeUserLinkUp()
         val now = wallClock()
         linkUpOwed = false
+        val lastComplete = sources.marks.lastCompleteSync.notAfter(now)
+        // Unfinished: paused, or ended NOT_CONNECTED on a link that was left to come up — this link-up is its sync.
+        val unfinished = sync.state.value.last?.let { it.paused || it.outcome == SyncOutcome.NOT_CONNECTED } == true
+        val throttled = lastComplete != null && !unfinished && Duration.between(lastComplete, now) < THROTTLE
         busyReason()?.let { reason ->
             // The catch-up's own connect brings this link-up: the sync running is the one wanted.
             if (!(reason == AutoSyncSkipReason.ALREADY_SYNCING && ownSync.get())) skipped(now, AutoSyncTrigger.LINK_UP, reason)
-            // The user's measure holds the link: this link-up's sync runs once it ends (evaluateHeld).
-            if (reason == AutoSyncSkipReason.MEASURING) linkUpOwed = true
+            // The user's measure holds the link: a sync this link-up would have run (not throttled, not
+            // in the night's quiet) runs once that measure ends (evaluateHeld).
+            if (reason == AutoSyncSkipReason.MEASURING && !throttled && !nightQuietNow()) linkUpOwed = true
             return true
         }
-        val lastComplete = sources.marks.lastCompleteSync.notAfter(now)
         if (lastComplete == null) {
             start(AutoSyncTrigger.LINK_UP, "link-up, no complete sync yet")
             return true
         }
-        // Unfinished: paused, or ended NOT_CONNECTED on a link that was left to come up — this link-up is its sync.
-        val unfinished = sync.state.value.last?.let { it.paused || it.outcome == SyncOutcome.NOT_CONNECTED } == true
-        if (!unfinished && Duration.between(lastComplete, now) < THROTTLE) {
+        if (throttled) {
             // The sync-and-disconnect mode holds no idle link it brought up itself; a link the user
             // asked for is theirs (a measure may be about to start on it), and a running measure
             // was already a skip above.
@@ -388,8 +390,8 @@ class SyncTriggers(
             return true
         }
         // The controller refused: a sync or a measure started since the check. Served only by a sync
-        // that is running now; the controller marks it running before it publishes isSyncing.
-        val served = sync.state.value.syncing || sync.isSyncing.value
+        // that is running now (one that has claimed the link counts).
+        val served = sync.running
         val why = if (served) AutoSyncSkipReason.ALREADY_SYNCING else AutoSyncSkipReason.MEASURING
         skipped(wallClock(), trigger, why)
         if (!served && trigger == AutoSyncTrigger.LINK_UP) linkUpOwed = true

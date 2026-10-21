@@ -8,10 +8,16 @@ import io.github.opencircuit.app.sync.AutoSyncSkipReason
 import io.github.opencircuit.app.sync.AutoSyncTrigger
 import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.ble.FakeRingLink
+import io.github.opencircuit.ble.LinkState
+import io.github.opencircuit.ringkit.Command
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
@@ -106,6 +112,21 @@ class MeasureSyncStartRaceTest {
         )
     }
 
+    /**
+     * Two syncs started together: the one refused reads the other as running, never as a measure —
+     * the link is claimed a moment before the sync is marked running, and a refusal read in that
+     * moment would be kept as a "measure running" skip that never happened.
+     */
+    @Test
+    fun aSyncRefusedByAnotherStartingTogetherSeesThatSyncRunning() {
+        val outcomes = race(
+            { it.syncNow() },
+            { session -> session.sync.syncNow() || session.sync.running },
+        )
+        val misread = outcomes.count { !it.second }
+        assertEquals("refusals misread 0", "refusals misread $misread", "over $ITERATIONS starts together")
+    }
+
     private val wallStart = Instant.parse("2026-10-08T14:00:00Z")
     private val linkUp = wallStart.plusMillis(500)
 
@@ -180,6 +201,59 @@ class MeasureSyncStartRaceTest {
             assertEquals(SyncOutcome.COMPLETE, w.session.sync.state.value.last?.outcome)
             assertEquals(emptyList(), w.session.triggers!!.skips.value, "nothing held it back")
             assertEquals(emptyList(), duringFirstDrain(w))
+        } finally {
+            w.db.close()
+        }
+    }
+
+    /**
+     * A link-up the throttle would have held back (the last complete sync a minute old) while the
+     * user measures: kept as a "measure running" skip, and nothing is owed — no sync runs when the
+     * measure ends, as none would have run without it.
+     */
+    @Test
+    fun aThrottledLinkUpDuringTheUsersMeasureOwesNoSync() = runTest {
+        val kv = InMemoryKeyValues()
+        PrefsSyncMarks(kv, TEST_RING_ID).setLastCompleteSync(linkUp.minusSeconds(60))
+        val w = syncWorld(triggers = true, keyValues = kv, wallStart = wallStart, makeRing = ringWith(HistoryTestPages.backlog(3)))
+        try {
+            // The tap lands the instant the link authenticates, before the link-up is evaluated.
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                w.session.state.first { it == LinkState.Authenticated }
+                w.session.liveMeasure.start(LiveMode.HEART_RATE)
+            }
+            advanceTo(20_000)
+            assertTrue(w.session.liveMeasure.isMeasuring.value)
+            assertEquals(listOf(AutoSyncSkip(linkUp, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.MEASURING)), w.session.triggers!!.skips.value)
+            w.session.liveMeasure.stop()
+            advanceTo(200_000)
+            assertEquals(emptyList(), w.sleepOpens(), "the throttle holds as it would have without the measure")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    /**
+     * The automatic measure's entry has just written its status query when a sync makes it stand
+     * down: the ring's answer is still to come, and a `0x50` answer read after the open could end
+     * the history early. The sync's first open waits for that answer, as it does for the keepalive's.
+     */
+    @Test
+    fun aSyncThatMadeTheAutomaticMeasureStandDownWaitsForItsStatusQuery() = runTest {
+        // The ring answers a d0 1.5 s after it.
+        val w = syncWorld { scope, now ->
+            RingFake(scope, now, mapOf(Command.SYNC_CHANNEL_SLEEP to HistoryTestPages.backlog(1)), statusReplyMillis = 1_500)
+        }
+        try {
+            advanceTo(10_000)
+            assertTrue(w.session.liveMeasure.startAuto(LiveMode.HEART_RATE))
+            runCurrent()
+            assertEquals(listOf(10_000L), w.ring.writes.filter { it.hex == "d00000" && it.atMillis >= 10_000 }.map { it.atMillis }, "the entry's d0")
+            assertTrue(w.session.syncNow())
+            advanceTo(11_499)
+            assertEquals(emptyList(), w.ring.writes.filter { it.hex.startsWith("02") }, "no open before the d0's answer")
+            advanceTo(11_500)
+            assertEquals(listOf(11_500L), w.ring.writes.filter { it.hex.startsWith("02") }.map { it.atMillis })
         } finally {
             w.db.close()
         }
