@@ -105,6 +105,9 @@ internal class RingFake(
     val fake: FakeRingLink = FakeRingLink(testRing),
 ) : RingLink by fake {
 
+    /** Settable at any time: live modes (`06 <mode> 00`) the ring refuses, answering `86 01 87` (PROTOCOL.md 4). */
+    @Volatile var refusedModes: Set<Int> = emptySet()
+
     /** One thing the app or the ring did, at virtual time [atMillis]. */
     data class Event(val atMillis: Long, val what: String)
 
@@ -166,9 +169,11 @@ internal class RingFake(
                 }
                 hex == "d00000" -> statusReply?.let { reply -> scope.launch { delay(statusReplyMillis); emit(reply, "status reply") } }
                 hex == "060000" || hex == "060100" || hex == "060200" -> {
-                    liveMode = (command[1].toInt() and 0xFF).takeIf { it != 0 }
+                    val mode = command[1].toInt() and 0xFF
+                    val refused = mode in refusedModes
+                    liveMode = mode.takeIf { it != 0 && !refused }
                     liveFrameIndex = 0
-                    scope.launch { delay(modeReplyMillis); emit(MODE_ACCEPTED, "mode reply") }
+                    scope.launch { delay(modeReplyMillis); emit(if (refused) MODE_REFUSED else MODE_ACCEPTED, "mode reply") }
                 }
                 hex == "950000" -> livePollReply()?.let { frame -> scope.launch { delay(pollReplyMillis); emit(frame, "live sample") } }
             }
@@ -385,6 +390,9 @@ internal class RingFake(
 
         /** The ring's answer to a mode write it accepts: `86 00 86` (PROTOCOL.md §4). */
         val MODE_ACCEPTED: ByteArray = hex("860086")
+
+        /** An answer to a mode write the ring refuses: a non-zero status, `86 01 87` (PROTOCOL.md §4, PORTING.md D-255). */
+        val MODE_REFUSED: ByteArray = hex("860187")
 
         private const val LIVE_HEART_RATE = 0x01
         private const val LIVE_SPO2 = 0x02

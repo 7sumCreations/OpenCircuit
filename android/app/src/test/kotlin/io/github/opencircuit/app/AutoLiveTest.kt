@@ -294,6 +294,106 @@ class AutoLiveTest {
     }
 
     @Test
+    fun aSyncThatClosedTheLinkDoesNotArmTheNextConnection() = runTest {
+        // Switch ON (its default) and the app not in front: the sync disconnects, then publishes its report.
+        val visible = MutableStateFlow(false)
+        val w = build(world(visible = visible, foreground = MutableStateFlow(false)))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value)
+            w.session.connect()
+            val until = testScheduler.currentTime + 120_000
+            while (w.session.state.value != io.github.opencircuit.ble.LinkState.Authenticated) {
+                check(testScheduler.currentTime < until) { "the link did not come back" }
+                advanceTimeBy(100)
+                runCurrent()
+            }
+            visible.value = true
+            runCurrent()
+            advanceTo(testScheduler.currentTime + 20_000)
+            assertEquals(emptyList(), w.timesOf(heartRateMode, end), "this connection has had no sync")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aPausedSyncStartsNothingAndItsResumedEndStartsLiveHeartRate() = runTest {
+        val w = build(world())
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            while (w.session.sync.state.value.pagesThisSync < 1) {
+                advanceTimeBy(50)
+                runCurrent()
+            }
+            w.session.sync.pause()
+            runCurrent()
+            val paused = untilSyncEnds(w, before = null)
+            val report = w.session.sync.state.value.last!!
+            assertTrue(report.paused, "the pause cut the sync short")
+            advanceTo(paused + 20_000)
+            assertEquals(emptyList(), w.timesOf(heartRateMode), "a paused sync is not finished: no live heart rate on it")
+            w.session.sync.resume()
+            runCurrent()
+            val done = untilSyncEnds(w, before = report)
+            assertTrue(!w.session.sync.state.value.last!!.paused)
+            advanceTo(done + 15_000)
+            assertEquals(LiveMode.HEART_RATE, w.session.liveMeasure.state.value.mode, "the resumed sync's end starts it")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun aFailedSpO2MeasureOfTheUsersStillHandsBackToHeartRate() = runTest {
+        val w = build(world())
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 10_000)
+            w.ring.refusedModes = setOf(2)
+            w.session.liveMeasure.start(LiveMode.SPO2)
+            runCurrent()
+            val tapped = testScheduler.currentTime
+            advanceTo(tapped + 10_000)
+            assertNotNull(w.session.liveMeasure.state.value.spo2.failure, "the ring refused SpO₂ twice")
+            assertTrue(w.timesOf(heartRateMode, tapped).isNotEmpty(), "heart rate came back after the user's failed measure")
+            assertEquals(LiveMode.HEART_RATE, w.session.liveMeasure.state.value.mode)
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun leavingTodayAndComingBackKeepsTheNotWornBackOff() = runTest {
+        val visible = MutableStateFlow(true)
+        val w = build(world(visible = visible, worn = false))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            // Two misses (at about +90 s and +180 s): the next try waits 180 s, to about +360 s.
+            advanceTo(end + 200_000)
+            visible.value = false
+            runCurrent()
+            visible.value = true
+            runCurrent()
+            advanceTo(end + 355_000)
+            assertEquals(emptyList(), w.timesOf(heartRateMode, end + 200_000), "coming back does not skip the not-worn wait")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
     fun whileTodayStaysVisibleEachBudgetEndStartsTheMeasureAgain() = runTest {
         val w = build(world())
         try {

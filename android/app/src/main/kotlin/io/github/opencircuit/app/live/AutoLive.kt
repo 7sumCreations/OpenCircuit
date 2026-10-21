@@ -107,7 +107,10 @@ class AutoLive(
     }
 
     private suspend fun onSyncEnded(report: SyncReport) {
-        if (report.commit == null) return
+        // A paused sync is not finished: its resume's end decides.
+        if (report.commit == null || report.paused) return
+        // A sync that closed the link (or lost it) arms nothing: the next connection waits for its own sync.
+        if (linkState.value != LinkState.Authenticated) return
         armed = true
         if (!todayVisible.value) {
             log("auto-live: a sync ended while Today was not on screen; live heart rate waits for Today")
@@ -124,9 +127,8 @@ class AutoLive(
         if (!armed || active) return
         if (linkState.value != LinkState.Authenticated) return
         active = true
-        noLock = 0
-        cancelBackoff()
-        tryStart()
+        // The not-worn count carries over: coming back waits out the back-off rather than skipping it.
+        startOrBackOff()
     }
 
     private fun onHidden() {
@@ -142,32 +144,41 @@ class AutoLive(
         if (!active) return
         when {
             end.reason == MeasureEndReason.YIELDED -> Unit // a sync or the user took the link; what follows decides
-            end.reason == MeasureEndReason.FAILED -> stop("the measure failed")
+            end.auto && end.reason == MeasureEndReason.FAILED -> stop("the measure failed")
             end.auto && end.reason == MeasureEndReason.STOPPED -> stop("the user stopped it")
-            !end.auto -> tryStart() // the user's own measure ended: back to heart rate
+            // The user's own measure ended, however (a failure of theirs too): back to heart rate.
+            !end.auto -> tryStart()
             end.locked -> {
                 noLock = 0
                 tryStart()
             }
             else -> {
                 noLock++
-                val temperature = skinTemperatureC()
-                if (AutoMeasureGate.appearsNotWorn(noLock, temperature)) {
-                    val wait = AutoMeasureGate.interval(BACKOFF_BASE, BACKOFF_CAP, noLock, temperature)
-                    log("auto-live: no lock $noLock times; the ring seems off a finger, next try in ${wait.seconds} s")
-                    backoff = scope.launch {
-                        delay(wait.toMillis())
-                        backoffOver.send(Event.BackoffOver)
-                    }
-                } else {
-                    tryStart()
-                }
+                startOrBackOff()
             }
+        }
+    }
+
+    /** Starts at once, or — once the ring seems off a finger (the ported not-worn rule) — after its back-off. */
+    private suspend fun startOrBackOff() {
+        cancelBackoff()
+        val temperature = skinTemperatureC()
+        if (!AutoMeasureGate.appearsNotWorn(noLock, temperature)) {
+            tryStart()
+            return
+        }
+        val wait = AutoMeasureGate.interval(BACKOFF_BASE, BACKOFF_CAP, noLock, temperature)
+        log("auto-live: no lock $noLock times; the ring seems off a finger, next try in ${wait.seconds} s")
+        backoff = scope.launch {
+            delay(wait.toMillis())
+            backoffOver.send(Event.BackoffOver)
         }
     }
 
     private suspend fun tryStart() {
         if (!active || !todayVisible.value) return
+        // No link, no measure: every write would be refused (a dropped link waits for the next connection's sync).
+        if (linkState.value != LinkState.Authenticated) return
         // A user's measure runs: its end brings heart rate back.
         if (measure.isMeasuring.value) return
         if (nightQuiet()) {
