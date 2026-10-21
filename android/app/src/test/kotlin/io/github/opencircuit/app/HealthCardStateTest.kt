@@ -7,9 +7,11 @@ import io.github.opencircuit.app.health.HealthCardAction
 import io.github.opencircuit.app.health.HealthCardInput
 import io.github.opencircuit.app.health.HealthCardPresenter
 import io.github.opencircuit.app.health.HealthCardSources
+import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.health.HealthFlushState
-import io.github.opencircuit.app.ring.RingAction
-import io.github.opencircuit.app.ring.RingViewModel
+import io.github.opencircuit.app.health.HealthSwitch
+import io.github.opencircuit.app.settings.SettingsAction
+import io.github.opencircuit.app.settings.SettingsViewModel
 import io.github.opencircuit.health.FakeHealthConnect
 import io.github.opencircuit.health.FlushResult
 import io.github.opencircuit.health.HealthConnectPort
@@ -28,7 +30,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The Ring screen's Health Connect card, from what Health Connect says (available, which WRITE
+ * The Settings tab's Health Connect card, from what Health Connect says (available, which WRITE
  * permissions are granted) and what the writes did. Copy as in the mockup. The partial (amber)
  * and write-failed (amber) states are `HealthCardAmberTest`'s.
  */
@@ -136,33 +138,29 @@ class HealthCardStateTest {
         assertTrue(logs.any { "IllegalStateException" in it })
     }
 
+    /** The card follows its sources on the Settings tab, where it lives (while "Send to Health Connect" is ON). */
     @Test
-    fun theRingScreenShowsTheCardAndWriteNowAsksForAWrite() = runTest {
+    fun theSettingsTabShowsTheCardAndWriteNowAsksForAWrite() = runTest {
         val access = MutableStateFlow(HealthAccessState(available = true, granted = all))
         val flush = MutableStateFlow(HealthFlushState())
         var writes = 0
-        val vm = RingViewModel(
-            sessions = null,
-            title = "Ring",
-            scope = backgroundScope,
+        val values = InMemoryKeyValues().apply { putRaw("health.write.enabled.v1", true) }
+        val vm = SettingsViewModel(
+            switch = HealthSwitch(PrefsAppPrefs(values), log = {}),
             health = HealthCardSources(access, flush, writeNow = { writes++ }),
+            scope = backgroundScope,
             wallClock = { now },
             clockTicks = flowOf(Unit),
         )
         runCurrent()
-        assertEquals("Connected", vm.uiState.value.health?.headline)
+        assertEquals("Connected", vm.uiState.value.healthCard?.headline)
 
-        vm.onAction(RingAction.WriteHealthNow)
+        vm.onAction(SettingsAction.WriteHealthNow)
         assertEquals(1, writes)
 
         flush.value = HealthFlushState(last = FlushResult(finishedAt = now, written = mapOf(RecordType.HEART_RATE to 2)))
         access.value = HealthAccessState(available = true, granted = emptySet())
         runCurrent()
-        assertEquals("Not connected", vm.uiState.value.health?.headline)
-
-        // Without the Health Connect sources (the earlier screens' tests) there is no card.
-        val bare = RingViewModel(sessions = null, title = "Ring", scope = backgroundScope, wallClock = { now }, clockTicks = flowOf(Unit))
-        runCurrent()
-        assertNull(bare.uiState.value.health)
+        assertEquals("Not connected", vm.uiState.value.healthCard?.headline)
     }
 }

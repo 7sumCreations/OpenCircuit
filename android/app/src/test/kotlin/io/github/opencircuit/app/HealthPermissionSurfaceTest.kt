@@ -38,8 +38,10 @@ class HealthPermissionSurfaceTest {
         // on a phone without it — HealthShare.requested), and the answer is remembered and read back.
         assertTrue("healthPermissionRequest.launch(container.healthAccess.requested().map(HealthPermission::permission).toSet())" in activity, "the one permission set")
         assertTrue(Regex("""registerForActivityResult\(JetpackHealthConnect\.permissionRequestContract\(\)\) \{\s*container\.healthAccess\.permissionScreenAnswered\(\)""").containsMatchIn(activity), "the answer is remembered")
-        // Only behind the card's button.
-        assertTrue(Regex("""RingAction\.ConnectHealth -> \{?\s*askForHealthConnect\(\)""").containsMatchIn(activity))
+        // Only behind the card's button (on the Settings tab), and only while "Send to Health Connect" is ON.
+        assertTrue(Regex("""SettingsAction\.ConnectHealth -> \{?\s*askForHealthConnect\(\)""").containsMatchIn(activity))
+        val ask = activity.substringAfter("private fun askForHealthConnect() {").substringBefore("\n    }\n")
+        assertTrue(ask.trimStart().startsWith("if (!container.healthSwitch.isOn()) return"), "asks the switch first: $ask")
     }
 
     @Test

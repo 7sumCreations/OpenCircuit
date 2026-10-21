@@ -42,7 +42,9 @@ import io.github.opencircuit.app.ring.LinkAction
 import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingScreen
 import io.github.opencircuit.app.ring.RingViewModel
+import io.github.opencircuit.app.settings.SettingsAction
 import io.github.opencircuit.app.settings.SettingsScreen
+import io.github.opencircuit.app.settings.SettingsViewModel
 import io.github.opencircuit.app.today.TodayAction
 import io.github.opencircuit.app.today.TodayScreen
 import io.github.opencircuit.app.today.TodayViewModel
@@ -91,7 +93,19 @@ class MainActivity : ComponentActivity() {
                     container.detailsSources,
                     prefs = container.appPrefs,
                     wallClock = { java.time.Instant.ofEpochMilli(container.clock.nowMillis()) },
+                )
+            }
+        }
+    }
+
+    private val settingsViewModel: SettingsViewModel by viewModels {
+        viewModelFactory {
+            initializer {
+                SettingsViewModel(
+                    switch = container.healthSwitch,
                     health = HealthCardSources(container.healthAccess.state, container.healthFlush.state, writeNow = container.healthFlush::request),
+                    scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+                    wallClock = { java.time.Instant.ofEpochMilli(container.clock.nowMillis()) },
                 )
             }
         }
@@ -186,7 +200,10 @@ class MainActivity : ComponentActivity() {
                                     detailsTools = VariantLinks.detailsTools,
                                 )
                             }
-                            Destination.Settings -> SettingsScreen(modifier = inner)
+                            Destination.Settings -> {
+                                val state by settingsViewModel.uiState.collectAsStateWithLifecycle()
+                                SettingsScreen(state = state, onAction = ::onSettingsAction, modifier = inner)
+                            }
                             Destination.Onboarding -> Unit
                         }
                     }
@@ -217,21 +234,19 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    /** The Health Connect card's permission screen and settings page are the activity's; the rest is the view model's. */
+    private fun onSettingsAction(action: SettingsAction) {
+        when (action) {
+            SettingsAction.ConnectHealth -> askForHealthConnect()
+            SettingsAction.OpenHealthSettings -> openHealthConnectSettings()
+            else -> settingsViewModel.onAction(action)
+        }
+    }
+
     private fun onRingAction(action: RingAction) {
         if (action == RingAction.CopyDetails) {
             copyConnectionDetails()
             return
-        }
-        when (action) {
-            RingAction.ConnectHealth -> {
-                askForHealthConnect()
-                return
-            }
-            RingAction.OpenHealthSettings -> {
-                openHealthConnectSettings()
-                return
-            }
-            else -> Unit
         }
         if (action !is RingAction.Link) {
             ringViewModel.onAction(action)
@@ -280,9 +295,11 @@ class MainActivity : ComponentActivity() {
     /**
      * Health Connect's own permission screen for the WRITE permissions the app asks for (the
      * twelve, less skin temperature on a phone without it), at the user's tap only (never at
-     * launch). If Health Connect cannot show it, the card stays as it is.
+     * launch), and only while "Send to Health Connect" is ON (the card is not drawn while it is OFF;
+     * asked here anyway). If Health Connect cannot show it, the card stays as it is.
      */
     private fun askForHealthConnect() {
+        if (!container.healthSwitch.isOn()) return
         try {
             healthPermissionRequest.launch(container.healthAccess.requested().map(HealthPermission::permission).toSet())
         } catch (_: ActivityNotFoundException) {
@@ -294,9 +311,10 @@ class MainActivity : ComponentActivity() {
     /**
      * Health Connect's own permission page for this app, at the user's tap only. What changed there
      * is read back when the screen resumes. If nothing on the phone takes the link, the card stays
-     * as it is.
+     * as it is. Only while "Send to Health Connect" is ON, like the permission screen.
      */
     private fun openHealthConnectSettings() {
+        if (!container.healthSwitch.isOn()) return
         try {
             startActivity(HealthSettingsLink.intent(packageName))
         } catch (_: ActivityNotFoundException) {

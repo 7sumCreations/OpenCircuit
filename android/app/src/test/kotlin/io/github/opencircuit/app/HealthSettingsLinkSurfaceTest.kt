@@ -21,13 +21,17 @@ class HealthSettingsLinkSurfaceTest {
 
     @Test
     fun manageOpensHealthConnectsSettingsAndConnectStillAsks() {
-        val screen = source("ring/RingScreen.kt")
-        assertTrue(Regex("""HealthCardAction\.MANAGE -> onAction\(RingAction\.OpenHealthSettings\)""").containsMatchIn(screen))
-        assertTrue(Regex("""HealthCardAction\.CONNECT -> onAction\(RingAction\.ConnectHealth\)""").containsMatchIn(screen))
+        // The card lives on the Settings tab (only while "Send to Health Connect" is ON).
+        val screen = source("settings/SettingsScreen.kt")
+        assertTrue(Regex("""HealthCardAction\.MANAGE -> onAction\(SettingsAction\.OpenHealthSettings\)""").containsMatchIn(screen))
+        assertTrue(Regex("""HealthCardAction\.CONNECT -> onAction\(SettingsAction\.ConnectHealth\)""").containsMatchIn(screen))
         assertTrue("HealthCardAction.CONNECT, HealthCardAction.MANAGE" !in screen, "MANAGE no longer re-asks")
+        assertTrue("HealthConnectCard" !in source("ring/RingScreen.kt"), "the Ring screen no longer draws the card")
 
         val activity = source("MainActivity.kt")
-        assertTrue(Regex("""RingAction\.OpenHealthSettings -> \{?\s*openHealthConnectSettings\(\)""").containsMatchIn(activity))
+        assertTrue(Regex("""SettingsAction\.OpenHealthSettings -> \{?\s*openHealthConnectSettings\(\)""").containsMatchIn(activity))
+        val open = activity.substringAfter("private fun openHealthConnectSettings() {").substringBefore("\n    }\n")
+        assertTrue(open.trimStart().startsWith("if (!container.healthSwitch.isOn()) return"), "asks the switch first: $open")
     }
 
     @Test

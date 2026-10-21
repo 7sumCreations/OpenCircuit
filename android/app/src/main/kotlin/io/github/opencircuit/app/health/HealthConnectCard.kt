@@ -27,7 +27,8 @@ import androidx.compose.ui.unit.dp
 const val HEALTH_CONNECT_CARD_TAG = "health-connect-card"
 
 /**
- * The Ring screen's "Health Connect" card, under the Ring data card: whether the app may write to
+ * The Settings tab's "Health Connect" card, under the "Send to Health Connect" switch and drawn only
+ * while it is ON: whether the app may write to
  * Health Connect, when it last wrote and how much, an amber warning when types are not allowed or
  * their writes fail, and the buttons the state calls for (Connect Health Connect, or Write to
  * Health Connect now / Try again, and Change in Health Connect). Drawn from [ui] alone.
