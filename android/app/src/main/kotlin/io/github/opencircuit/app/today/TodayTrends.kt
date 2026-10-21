@@ -71,7 +71,6 @@ data class TodayTrends(
             val ranges = mutableListOf<DayRange>()
             val points = allDays.map { day ->
                 val start = day.atStartOfDay(zone).toInstant()
-                val end = day.plusDays(1).atStartOfDay(zone).toInstant()
                 val s = nightsByDay[day]
                 // Both ends guarded: a legacy or partial row can carry a start with no end.
                 val window = s?.takeIf { it.inBedStart.isAfter(SleepEdit.DISTANT_PAST) && it.inBedEnd.isAfter(it.inBedStart) }
@@ -89,7 +88,9 @@ data class TodayTrends(
                     sleepHRVAvg = average(inputs.hrv, window),
                     sleepSpO2Avg = average(inputs.spo2, window),
                     sleepRRAvg = average(inputs.rr, window),
-                    dayHRAvg = average(inputs.hr, start to end, TrendsEngine.MIN_VALID_HR),
+                    // The day's own readings (its range's too): a reading at the next midnight is the
+                    // next day's only, where upstream's closed `DateInterval` counts it for both.
+                    dayHRAvg = if (dayHR.isEmpty()) null else dayHR.fold(0.0) { acc, v -> acc + v } / dayHR.size,
                 )
             }
             val restingHR = RestingHR.dailyValues(

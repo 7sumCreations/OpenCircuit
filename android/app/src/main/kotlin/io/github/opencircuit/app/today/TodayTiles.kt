@@ -183,17 +183,19 @@ data class TodayTile(
         } else {
             parts += if (metric == Metric.STEPS) STEPS_NOT_RECORDED.lowercase(Locale.ROOT) else "no data yet"
         }
+        // The unit after a range, only when there is one (the sleep tile's durations carry their own).
+        val unitWords = if (spokenUnit.isEmpty()) "" else " $spokenUnit"
         val stated = statedTrend
         val direction = stated?.direction
         val d = stated?.delta
         val r = stated?.usualRange
         if (direction != null && d != null && r != null) {
             val who = if (trendIsYesterday) "Yesterday was" else "That's"
-            parts += "$who ${direction.rawValue} your usual range of ${format(r.start)} to ${format(r.endInclusive)} $spokenUnit, ${formatDelta(d)} versus your average"
+            parts += "$who ${direction.rawValue} your usual range of ${format(r.start)} to ${format(r.endInclusive)}$unitWords, ${formatDelta(d)} versus your average"
         } else if (trend?.usualRange != null) {
             // A usual range, but no verdict to state about the headline (steps, yesterday missing).
             val usual = trend.usualRange!!
-            parts += "Your usual range is ${format(usual.start)} to ${format(usual.endInclusive)} $spokenUnit"
+            parts += "Your usual range is ${format(usual.start)} to ${format(usual.endInclusive)}$unitWords"
         } else if (valueText != null) {
             parts += "still learning your usual range"
         }

@@ -119,6 +119,19 @@ class TodayDashboardTest {
         assertEquals("Steps not recorded", state.tiles.single { it.metric == TodayTile.Metric.STEPS }.usual)
     }
 
+    /**
+     * Before the sync log has been read (or when reading it failed) an empty log proves nothing: an
+     * empty window then claims neither "never synced" (readiness) nor "no data yet" (the sentence).
+     */
+    @Test
+    fun anUnreadSyncLogIsNotANeverSyncedRing() {
+        val state = TodayPresenter.present(
+            TodayInput(TodayStored(trends = TodayTrends()), TodaySession(link = LinkState.Authenticated, logLoaded = false), now, zone),
+        )
+        assertEquals("Last night's sleep hasn't synced yet. Readiness appears once it does.", state.readiness?.empty)
+        assertNull(state.synthesis, "no sentence until the log says whether the ring ever synced")
+    }
+
     @Test
     fun beforeTheFirstLoadThereAreNoTilesReadinessOrSentence() {
         val state = present(null)

@@ -88,12 +88,24 @@ data class TodaySession(
     val logLoaded: Boolean = true,
 )
 
+/** What the dashboard reads from the session: the last logged sync's end, and whether the log has been read. */
+data class DashboardFacts(val lastSyncAt: Instant?, val syncKnown: Boolean) {
+    companion object {
+        fun of(session: TodaySession) = DashboardFacts(session.log.lastOrNull()?.finishedAt, session.logLoaded)
+    }
+}
+
 /** Everything [TodayPresenter.present] needs; [stored] is null until the first load finishes. */
 data class TodayInput(
     val stored: TodayStored?,
     val session: TodaySession,
     val now: Instant,
     val zone: ZoneId,
+    /**
+     * The dashboard already built from [stored] ([TodayPresenter.dashboard]), so a live frame or a
+     * sync's progress does not rebuild it; null to build it here.
+     */
+    val dashboard: DashboardUi? = null,
 )
 
 internal const val HEART_RATE = "Heart rate"
@@ -110,6 +122,16 @@ internal const val MEASURE = "Measure"
  */
 object TodayPresenter {
 
+    /**
+     * The dashboard (tiles, readiness, sentence) for today from what is stored and the two facts of
+     * the sync log it reads; placeholders' state (no tiles) before the first load.
+     */
+    fun dashboard(stored: TodayStored?, facts: DashboardFacts, now: Instant, zone: ZoneId): DashboardUi {
+        val today = LocalDate.ofInstant(now, zone)
+        return stored?.let { TodayDashboard.present(it.trends, today, now, zone, facts.lastSyncAt, facts.syncKnown) }
+            ?: DashboardUi(dateLine = TodayDashboard.dateLine(today))
+    }
+
     fun present(input: TodayInput): TodayUiState {
         val session = input.session
         val stored = input.stored
@@ -117,9 +139,7 @@ object TodayPresenter {
         val live = session.live
         val storedHr = reading(HEART_RATE, BPM, stored?.heartRate, stored != null, neverSynced, input) { it.roundToInt().toString() }
         val storedSpo2 = reading(SPO2, PERCENT, stored?.spo2, stored != null, neverSynced, input) { (it * 100).roundToInt().toString() }
-        val today = LocalDate.ofInstant(input.now, input.zone)
-        val dashboard = stored?.let { TodayDashboard.present(it.trends, today, input.now, input.zone, session.log.lastOrNull()?.finishedAt) }
-            ?: DashboardUi(dateLine = TodayDashboard.dateLine(today))
+        val dashboard = input.dashboard ?: dashboard(stored, DashboardFacts.of(session), input.now, input.zone)
         return TodayUiState(
             tiles = dashboard.tiles,
             readiness = dashboard.readiness,

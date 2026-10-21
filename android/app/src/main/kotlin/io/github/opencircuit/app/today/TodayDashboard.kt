@@ -76,7 +76,12 @@ data class DashboardUi(
  */
 object TodayDashboard {
 
-    fun present(trends: TodayTrends, day: LocalDate, now: Instant, zone: ZoneId, lastSyncAt: Instant?): DashboardUi {
+    /**
+     * [lastSyncAt] is the last logged sync's end; [syncKnown] whether the sync log has been read.
+     * Before it has (or when reading it failed) an empty log proves nothing, so nothing here claims
+     * the ring never synced.
+     */
+    fun present(trends: TodayTrends, day: LocalDate, now: Instant, zone: ZoneId, lastSyncAt: Instant?, syncKnown: Boolean = true): DashboardUi {
         val isToday = day == LocalDate.ofInstant(now, zone)
         val dayStart = day.atStartOfDay(zone).toInstant()
         val stepGoal = GoalDefaults.stepsGoal(dayStart, zone) { null }
@@ -84,8 +89,11 @@ object TodayDashboard {
             trends.points, trends.restingHR, TemperatureUnit.CELSIUS, now = now, zone = zone,
             heartRateRanges = trends.heartRateRanges, stepGoal = stepGoal,
         )
-        val (readiness, report) = readiness(trends, dayStart, isToday, neverSynced = lastSyncAt == null)
-        val synthesis = if (isToday) {
+        val (readiness, report) = readiness(trends, dayStart, isToday, neverSynced = syncKnown && lastSyncAt == null)
+        // With no data in the window and the log unread, the sentence would have to guess between
+        // "no data yet" and "more than two weeks old": it waits for the log.
+        val unsure = !syncKnown && lastSyncAt == null && trends.newestSampleAt == null
+        val synthesis = if (isToday && !unsure) {
             TodaySynthesis.sentence(TodaySynthesisInputs.input(trends, tiles, report, lastSyncAt = lastSyncAt, now = now, zone = zone))
         } else {
             null

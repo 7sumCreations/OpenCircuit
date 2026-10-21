@@ -86,6 +86,15 @@ class TodayTrendsTest {
         assertEquals(listOf(day("2026-09-30")), trends.restingHR.map { it.day })
     }
 
+    /** A reading at exactly the next midnight belongs to the next day only: its average and its range agree. */
+    @Test
+    fun aReadingAtMidnightCountsForOneDayOnly() {
+        val hr = listOf(sample(MetricKind.HEART_RATE, "2026-09-30T08:00:00Z", 60.0), sample(MetricKind.HEART_RATE, "2026-10-01T00:00:00Z", 100.0))
+        val trends = TodayTrends.of(TodayWindowInputs(hr = hr), zone)
+        assertEquals(listOf(60.0, 100.0), trends.points.map { it.dayHRAvg })
+        assertEquals(listOf(60.0, 100.0), trends.heartRateRanges.map { it.high })
+    }
+
     @Test
     fun stepsComeFromTheDailyTotals() {
         val trends = TodayTrends.of(

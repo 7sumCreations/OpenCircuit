@@ -119,6 +119,10 @@ class TodayTilesGuardTest {
         assertEquals("+1 h 00 m vs usual", t.deltaText)
         assertEquals("Usual 6 h 30 m–7 h 30 m", t.rangeText)
         assertEquals("45 m", TileNumber.DURATION.format(45.0))
+        // A tile with no spoken unit adds no stray space before a comma or at a sentence's end.
+        val label = t.accessibilityLabel(now, zone)
+        assertFalse(label.contains(" ,") || label.contains(" .") || label.contains("  "), label)
+        assertTrue(label.contains("of 6 h 30 m to 7 h 30 m, +1 h 00 m versus your average"), label)
     }
 
     @Test

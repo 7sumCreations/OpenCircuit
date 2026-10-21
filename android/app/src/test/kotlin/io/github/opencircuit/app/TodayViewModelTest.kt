@@ -187,4 +187,23 @@ class TodayViewModelTest {
         vm.onAction(io.github.opencircuit.app.today.TodayAction.OpenRing)
         assertEquals(listOf("refresh", "spo2", "stop"), calls)
     }
+
+    /**
+     * A live heart-rate frame or a sync's progress changes the hero and the strip, not the stored
+     * window: the dashboard (tiles, readiness, sentence) is the same object, so nothing rebuilds it
+     * and no tile redraws for it.
+     */
+    @Test
+    fun aSessionUpdateKeepsTheDashboardItBuiltFromTheStore() = runTest {
+        val session = MutableStateFlow(TodaySession(link = LinkState.Authenticated, log = listOf(entry(epoch.minusSeconds(600)))))
+        val vm = open(ScriptedSource(TodayStored(heartRate = hr("2026-10-21T16:00:00Z", 70.0))), session)
+        val before = vm.uiState.value
+        assertEquals(8, before.tiles.size)
+        session.value = session.value.copy(live = io.github.opencircuit.app.live.LiveMeasureState(mode = io.github.opencircuit.app.live.LiveMode.HEART_RATE))
+        runCurrent()
+        val after = vm.uiState.value
+        assertTrue(after.heartRateLive, "the session update reached the screen")
+        assertTrue(after.tiles === before.tiles, "the tiles are the ones already built")
+        assertTrue(after.readiness === before.readiness)
+    }
 }

@@ -36,4 +36,14 @@ class TodayMotionSourceTest {
         assertTrue("dynamic" !in theme.lowercase().replace("no dynamic colour", ""), "no dynamic colour scheme")
         assertTrue("Palette.DARK else Palette.LIGHT" in theme)
     }
+
+    /**
+     * The tier colours are checked as graphics (3:1, the arc), not as text (4.5:1): no text on
+     * Today is drawn in a tier colour; the tier word and glyph use the ink.
+     */
+    @Test
+    fun noTextIsDrawnInATierColour() {
+        val textCalls = Regex("""Text\([^\n]*color = tierColour""")
+        assertEquals(0, textCalls.findAll(screen).count(), "a tier colour on text")
+    }
 }

@@ -2,6 +2,7 @@ package io.github.opencircuit.app.today
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -107,6 +108,9 @@ fun TodayScreen(state: TodayUiState, onAction: (TodayAction) -> Unit, modifier: 
         PullToRefreshBox(isRefreshing = false, onRefresh = { onAction(TodayAction.Refresh) }, modifier = Modifier.padding(padding)) {
             // Tiles two to a row on a phone; at a large font each needs more room, so one to a row.
             val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+            // The arc's fill lives here, not in the grid item: scrolling the card away and back
+            // must not empty it and fill it again.
+            val readinessSweep = remember { Animatable(0f) }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(TILE_MIN_WIDTH * fontScale),
                 modifier = Modifier.fillMaxSize().testTag(TODAY_LIST_TAG),
@@ -118,7 +122,7 @@ fun TodayScreen(state: TodayUiState, onAction: (TodayAction) -> Unit, modifier: 
                 wide("strip") { SyncStrip(state) }
                 state.overdue?.let { overdue -> wide("overdue") { OverdueChip(overdue, onAction) } }
                 wide("synthesis") { SynthesisLine(state, animate) }
-                wide("readiness") { ReadinessCard(state.readiness, animate) }
+                wide("readiness") { ReadinessCard(state.readiness, readinessSweep, animate) }
                 if (state.tiles.isEmpty()) {
                     items(TodayTile.Metric.entries.size, key = { "placeholder.$it" }) { TilePlaceholder(fontScale) }
                 } else {
@@ -290,10 +294,12 @@ private fun SynthesisLine(state: TodayUiState, animate: Boolean) {
 /**
  * The readiness ring: an arc in the tier's colour with the score inside, the tier's word and glyph
  * beside it (the colour is never the only cue), and a bar per factor — or the reason there is no
- * score. The arc fills with the expressive spring the first time a score shows.
+ * score. The arc fills with the expressive spring when its score first shows or changes; [sweep]
+ * is held by the screen, so the card scrolling away and back keeps its fill. The tier word is in
+ * the ink: the tier colours are graphic colours (3:1), not text colours (4.5:1).
  */
 @Composable
-private fun ReadinessCard(readiness: ReadinessUi?, animate: Boolean) {
+private fun ReadinessCard(readiness: ReadinessUi?, sweep: Animatable<Float, AnimationVector1D>, animate: Boolean) {
     val tones = LocalTones.current
     Card(
         modifier = Modifier.fillMaxWidth().testTag(TODAY_READINESS_TAG)
@@ -308,7 +314,6 @@ private fun ReadinessCard(readiness: ReadinessUi?, animate: Boolean) {
                 WellnessBalance.Tier.NEEDS_IMPROVEMENT -> Color(tones.tierNeeds)
                 null -> Color(tones.ink3)
             }
-            val sweep = remember { Animatable(0f) }
             val target = readiness?.fraction ?: 0f
             LaunchedEffect(target) { sweep.animateTo(target, Motion.expressive(animate)) }
             val track = Color(tones.tonal)
@@ -325,7 +330,7 @@ private fun ReadinessCard(readiness: ReadinessUi?, animate: Boolean) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(readiness?.heading ?: "Readiness", style = MaterialTheme.typography.titleMedium)
                 if (readiness?.score != null) {
-                    Text("${readiness.glyph} ${readiness.tierWord}", style = MaterialTheme.typography.labelLarge, color = tierColour)
+                    Text("${readiness.glyph} ${readiness.tierWord}", style = MaterialTheme.typography.labelLarge)
                     for (factor in readiness.factors) {
                         Text("${factor.label} ${factor.percent}", style = MaterialTheme.typography.bodySmall)
                         LinearProgressIndicator(

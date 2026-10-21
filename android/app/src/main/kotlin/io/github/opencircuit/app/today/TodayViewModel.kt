@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onStart
@@ -76,8 +79,17 @@ class TodayViewModel(
             }
             .catch { e -> log("Today stopped watching the store: ${e::class.java.simpleName}") }
             .onStart { emit(null) }
-        uiState = combine(stored, session, clockTicks) { s, parts, _ -> TodayPresenter.present(TodayInput(s, parts, wallClock(), zone())) }
-            .stateIn(scope, SharingStarted.Eagerly, TodayUiState())
+        // The dashboard follows the store, the two sync-log facts it reads and the clock — never a
+        // live frame or a sync's progress, so those do not rebuild it or redraw a tile.
+        // Each read twice below, each run once: one load per revision, one session collection.
+        val loads = stored.shareIn(scope, SharingStarted.Eagerly, replay = 1)
+        val parts = session.shareIn(scope, SharingStarted.Eagerly, replay = 1)
+        val ticks = clockTicks.shareIn(scope, SharingStarted.Eagerly, replay = 1)
+        val facts = parts.map(DashboardFacts::of).distinctUntilChanged()
+        val dashboard = combine(loads, facts, ticks) { s, f, _ -> TodayPresenter.dashboard(s, f, wallClock(), zone()) }
+        uiState = combine(loads, parts, dashboard, ticks) { s, parts, built, _ ->
+            TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built))
+        }.stateIn(scope, SharingStarted.Eagerly, TodayUiState())
     }
 }
 
