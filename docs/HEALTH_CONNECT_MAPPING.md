@@ -66,9 +66,14 @@ The app has no screen for logging these yet; the writer is ready for the epics t
 
 ## How writing works
 
-- **When.** After every sync that stored something, and when you tap **Write to Health Connect
-  now** on the Ring screen. One write runs at a time; a tap during a write makes one more write
-  after it.
+- **Only while the switch is ON.** From 0.4.0, Settings → **Send to Health Connect** decides it,
+  OFF on a fresh install and after updating from 0.3.0. While it is OFF the app makes no Health
+  Connect call at all: nothing is written, nothing is read (not even which permissions it holds),
+  and no Health Connect prompt appears. Turning it OFF stops a write that is under way at its next
+  call; what was already written stays.
+- **When.** While the switch is ON: after every sync that stored something, and when you tap
+  **Write to Health Connect now** on the Health Connect card in Settings. One write runs at a time;
+  a tap during a write makes one more write after it.
 - **Nothing twice.** Every record has a fixed id (above) and a version that only grows, so writing
   the same item again replaces it. A night that is re-staged or edited replaces its own record.
 - **Bounded.** At most 1,000 records and about 4 MB per call, and at most 300 calls per write. If
@@ -91,8 +96,8 @@ The app has no screen for logging these yet; the writer is ready for the epics t
 
 Steps and skin temperature are not in the ring's history: the ring sends them only while it is
 connected. The app records them only for the time the ring was connected, so a ring that syncs and
-disconnects has none for the time in between. Turn **Disconnect after syncing** off to stay connected
-while the app is running. A **Measure** is stored the same way: its settled heart rate, or its last
+disconnects has none for the time in between. The ring stays connected while the app is open; turn
+**Disconnect after syncing** off to stay connected after you leave too, while the app is running. A **Measure** is stored the same way: its settled heart rate, or its last
 SpO₂, is kept when you stop the reading (a heart rate that never settled is not kept) and written as
 its ordinary record type. Every live reading is stored as it arrives, outside the sync's history
 position, so closing the app does not lose it and a later sync still brings the ring's older backlog.
@@ -107,8 +112,9 @@ app writes each 15-minute calorie bucket as a whole value rather than adding to 
 
 ## Permissions, settings and uninstalling
 
-- The Ring screen's **Health Connect** card asks for permission only when you tap **Connect Health
-  Connect**, never at launch. If you allowed nothing, the card offers **Open Health Connect
+- The **Health Connect** card, shown in Settings only while **Send to Health Connect** is ON, asks
+  for permission only when you tap **Connect Health Connect**, never at launch and never when you
+  turn the switch on. If you allowed nothing, the card offers **Open Health Connect
   settings** (Health Connect's own page for OpenCircuit) instead of asking again.
 - **The "why does this app want access" page.** Android 14 and later ask an app to explain its health
   permissions before granting any, and refuse them all to an app that cannot show one. OpenCircuit

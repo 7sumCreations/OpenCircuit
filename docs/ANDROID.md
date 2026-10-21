@@ -201,7 +201,9 @@ fork's GitHub Releases, as a **pre-release** while it is in early development. T
 `android-v0.1.0`: onboarding, finding and pairing the ring, the connection card (battery,
 charging, the ring's state) and a live heart-rate or SpO₂ reading. From `android-v0.2.0` the app
 also syncs the ring's history onto the phone (see "Syncing your ring"), and from `android-v0.3.0`
-it writes it to Health Connect (see "Health Connect"). Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
+it writes it to Health Connect (see "Health Connect"). The next release, 0.4.0, opens on a Today
+screen (see "Today"), keeps every reading on the phone for good, and makes Health Connect writing a
+switch you turn on yourself. Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
 and its SHA-256 checksum file, and the release notes give the signing certificate's digest.
 
 > **0.3.0 was built from `eca6a006`.** Nine commits have landed on the branch since, four of them
@@ -251,7 +253,8 @@ too).
 (`BLUETOOTH_SCAN`, declared never to be used for location, and `BLUETOOTH_CONNECT`), asked the
 first time you tap Scan & connect, never at install or during onboarding. From 0.3.0, Health
 Connect's 12 write permissions (no read permission), asked only when you tap Connect Health
-Connect. The app declares no
+Connect — and from 0.4.0 that button appears only after you turn on **Send to Health Connect** in
+Settings. The app declares no
 `INTERNET` permission, so it cannot reach any server. When it finds a ring, the app first explains
 Android's companion-device sheet ("Allow OpenCircuit to access …?"), whose wording is Android's
 generic text for any companion device. On the first real phone (GrapheneOS) the 0.1.0 sheet stayed
@@ -265,11 +268,68 @@ Bluetooth pairing is left alone.
 ## Using the app
 
 **First run.** Four short onboarding pages explain what the app does (no account, no subscription,
-no cloud), what it needs (Nearby devices, and Health Connect only when you tap **Connect Health
-Connect** later) and what it is not (not affiliated with RingConn, not a medical device). Nothing is
-requested during onboarding.
+no cloud; every reading stays on the phone, and nothing goes to Health Connect unless you turn that
+on in Settings), what it needs (Nearby devices; Health Connect only if you turn on **Send to Health
+Connect** in Settings and then tap **Connect Health Connect**) and what it is not (not affiliated
+with RingConn, not a medical device). Nothing is requested during onboarding. The app then opens on
+**Today**, and opens there every time after.
 
-**Pairing.** Tap **Scan & connect**. Android asks for "Nearby devices" the first time. If several
+**The three tabs.** **Today** (your day), **Ring** (pairing, the connection, syncing and Measure)
+and **Settings** (Health Connect and where your data lives). Back from Ring or Settings returns to
+Today; back on Today leaves the app. The ring reconnects and syncs whichever tab is open.
+
+**Today.** Today reads only the app's own store on the phone (never Health Connect) and shows what
+is stored the moment the app opens; it never blanks while the ring syncs.
+
+- **The hero.** Your latest stored heart rate and SpO₂, each with when it was taken ("as of 14:02 ·
+  3 h ago"), and the ring's state. With no ring paired it says so and offers **Open Ring**.
+- **Live heart rate, by itself.** Once a sync ends while Today is on screen (or the ring connects
+  and no sync is due because the last one was minutes ago), heart rate goes live: "Live · warming
+  up" until the ring locks on, then "Live now" with the number updating. It runs in 90-second
+  measures, one after another, for as long as Today is on screen; leaving Today stops it and
+  coming back starts it again. It never runs during a sync or during your night (the same window
+  the automatic syncs keep out of). If the ring seems to be off your finger, the next try waits
+  longer each time, up to 10 minutes. While a sync runs the hero says "Live heart rate after sync".
+- **SpO₂ by tap.** **Measure** under SpO₂ measures it (up to 45 seconds; **Stop** ends it early).
+  Live heart rate steps aside for it and starts again afterwards. Measure is off, with the reason
+  shown, while a sync runs or the ring is not connected.
+- **The sync strip.** While a sync runs, a line and a slim bar show its progress; new data drops
+  into the screen as each part lands. "Last synced …" is always shown. Pull down to sync now.
+- **The overdue warning.** When the ring has gone too long without a sync, an amber or red chip
+  shows the Ring data card's own warning with **Sync now** (see "The overdue warning" below). A
+  paired ring that has never synced shows a line saying so instead.
+- **Readiness.** A ring with a score from 0 to 100 and its word — Excellent, Good or Needs
+  improvement, with a mark beside it so the colour is never the only cue — and a bar for each
+  factor that went in (sleep, overnight recovery, vitals, activity). It needs a night of sleep with
+  the ring on; until then it says why there is none. Under it on today, one sentence reads how today
+  compares with your usual.
+- **Eight tiles.** Heart rate (the day's average and range), HRV, resting heart rate, SpO₂,
+  breathing rate, skin temperature, sleep (time asleep and the sleep score) and steps. Each shows
+  its value, how it compares with your own usual range, and a small chart of recent days over that
+  range; "Learning your usual · n/N days" until enough days are stored. Steps compare *yesterday*
+  with your usual (today is still growing), and count only the time the ring was connected; a day
+  with no step total says "Steps not recorded", never 0.
+- **A tile's trend.** Tap a tile for its 14- or 30-day trend: the chart with your usual range as a
+  band, the lowest, average and highest, how many days have a value, what the number is, and the
+  values as a table on request. Touch or drag the chart to read a day. The heart-rate trend also
+  shows the live heart rate; the SpO₂ trend has its own **Measure**. Back returns to the same
+  place on Today.
+- **Calories and goals.** The selected day's estimated calories (resting and active) and four goal
+  rings: steps, active calories, active minutes and sleep. A ring with nothing to show says so
+  instead of drawing 0 %.
+- **Edit order.** **Edit order** lists the sections (readiness, the tiles, calories, goals) and each
+  tile with up and down arrow buttons (one tap moves it one place; no dragging), plus **Reset to default order**; **Done** goes
+  back. The order is saved and survives a restart.
+
+**Browsing past days.** Swipe Today sideways, tap a date in the strip under the title, use the
+previous / next arrows, or **Pick a day** (it offers only the days the app has stored) to go back
+through every stored day. A past day shows that day's heart-rate range (lowest–highest, average and
+resting) in place of the live hero, "Readiness that day", its tiles, calories and goals; the
+**Today** chip returns. A sync can run while you browse: data that lands for another day marks
+that date with a dot, and you stay on the day you are on.
+
+**Pairing.** Tap **Scan & connect** on the Ring tab (Today's **Open Ring** takes you there while no
+ring is paired). Android asks for "Nearby devices" the first time. If several
 rings are found you pick one. The "Pair with …" card then offers **Continue** (Android's
 companion-device sheet), **Pair without the system sheet**, or **Cancel**. Hold the ring close and
 tap Allow when Android asks. A ring you have paired before reconnects automatically once it is back
@@ -282,28 +342,31 @@ the charger. Disconnect ends this connection; **Stop reconnecting** makes the ap
 **Measuring.** Measure starts a live heart-rate or SpO₂ reading ("Hold still" while the ring
 settles) with a chart; stop it at any time. The app asks the ring to start, reads the ring's answer,
 and stops the ring's mode again afterwards. If the ring refuses or stops answering, the card says so.
-A reading you stopped is kept on the phone — the settled heart rate, or the last SpO₂ — and written to
-Health Connect like any other reading; a heart rate that never settled is not kept.
+A reading you stopped is kept on the phone — the settled heart rate, or the last SpO₂ — and, with
+**Send to Health Connect** on, written there like any other reading; a heart rate that never settled
+is not kept.
 
 **Syncing your ring.** The **Ring data** card, under the connection card, keeps the ring's history
 on the phone. **Sync now** connects to the ring, downloads everything it recorded since the last
 sync — heart rate, HRV, blood oxygen, breathing and every night's sleep, from both of the ring's
-history channels — saves it, and with **Disconnect after syncing** on (the default) closes the
-connection once the data is saved. So you can sync once a day, or every few days, without keeping
-the ring connected. The card then shows when you last synced, what is stored on the phone (date
+history channels — and saves it. With **Disconnect after syncing** on (the default) the ring stays
+connected while the app is open (that is what lets Today's heart rate go live) and the connection
+closes once you leave the app, after any sync that is running. So you can sync once a day, or every
+few days, without keeping the ring connected. The card then shows when you last synced, what is stored on the phone (date
 range, nights, last night's sleep) and the last sync's result.
 
 - **When it syncs by itself.** Each time the ring connects (opening the app reconnects it), unless
   the last complete sync was under 5 minutes ago — but not during your night: the app learns your
   usual sleep window from the nights it has stored (21:30 to 10:00 until it has three), waits, and
-  syncs once you are up (the very first sync runs at any hour). With **Disconnect after syncing** off the ring stays connected and syncs
-  about every hour. **Sync now** always syncs, at any hour.
+  syncs once you are up (the very first sync runs at any hour). While the ring stays connected —
+  the app is open, or **Disconnect after syncing** is off — it syncs about every hour. **Sync now**
+  always syncs, at any hour.
 - **Why an automatic sync didn't run.** Connection details lists "Auto-sync skipped" rows, each with
   the trigger it held back (link-up, catch-up after the night, hourly) and the reason: too soon after
   the last complete sync, during your night, a sync already running, or a measurement running. With
-  **Disconnect after syncing** on, a skipped automatic sync (too soon, or during your night) closes
-  the connection, so the app never holds an idle link; the sync after the night connects the ring
-  itself while the app is still running. A connection you started yourself (Scan & connect, Try
+  **Disconnect after syncing** on and the app no longer on screen, a skipped automatic sync (too
+  soon, or during your night) closes the connection, so the app never holds an idle link behind
+  your back; the sync after the night connects the ring itself while the app is still running. A connection you started yourself (Scan & connect, Try
   again, Sync now) or one a measurement is using is never closed.
 - **A ring that is slow to answer.** Some rings do not answer the app's first request and send their
   first data frame on their own timer, up to about two minutes after connecting. A sync waits up to
@@ -319,26 +382,37 @@ range, nights, last night's sleep) and the last sync's result.
 - **"N records waiting — the all-day channel didn't answer".** A sync stores a record only once
   every channel has been drained past it, so nothing older is ever skipped; when a channel did not
   answer, did not finish or was not reached, newer records wait on the phone for the next sync.
-- **The overdue warning.** A ring keeps only a few days of history: a Gen 2 or Gen 2 Air about 7
-  days, a Gen 3 about 10. The card warns in amber at 4 days (Gen 3: 7) and in red at 5 days
-  (Gen 3: 9), counted from the oldest record the ring may still hold — a sync that left a channel
-  unfinished does not reset it.
+- **The overdue warning.** A ring holds only a limited stretch of history, and how much a ring
+  really keeps has not been measured yet. The card (and Today) warns in amber at 4 days (Gen 3: 7)
+  and in red at 5 days (Gen 3: 9), counted from the oldest record the ring may still hold — a sync
+  that left a channel unfinished does not reset it. Sync before then.
 - **Steps and skin temperature are only recorded while the ring is connected.** They are not in
   the ring's history (PROTOCOL.md §5.4): the ring sends them only live, and the app stores them
-  (and writes them to Health Connect) only for the time it was connected. A ring that syncs and
-  disconnects has no steps or skin temperature for the time it was disconnected, and nothing
-  fills that gap later. Turning **Disconnect after syncing** off keeps the ring connected while
-  the app is running, so they are recorded for that time only. Each reading is stored as it
+  (and, with sending on, writes them to Health Connect) only for the time it was connected. A ring
+  that syncs and disconnects has no steps or skin temperature for the time it was disconnected,
+  and nothing fills that gap later. The ring stays connected while the app is open; turning
+  **Disconnect after syncing** off keeps it connected after you leave too, for as long as the app
+  is running, so they are recorded for that time only. Each reading is stored as it
   arrives, so closing the app does not lose what was already measured, and the next write sends it.
 
-**Health Connect.** The **Health Connect** card, under the Ring data card, writes the ring's data
-to Health Connect on the phone — heart rate, resting heart rate, HRV, SpO₂, respiratory rate,
-skin temperature, steps, distance, active calories, basal metabolic rate and sleep (nights and
-naps). Nothing leaves the phone. What it writes is whatever the phone holds: what a sync stored, what
-the ring measured live while it was connected, and what **Measure** found. Tap **Connect Health
-Connect** and choose what to allow; the app
-asks only for write permissions. After that it writes after every sync that stored something, and
-**Write to Health Connect now** writes at once. The card shows when it last wrote and how many
+**Health Connect.** Writing to Health Connect is a switch you turn on yourself: Settings → **Send
+to Health Connect**, OFF on a fresh install and after updating from 0.3.0. While it is OFF the app
+makes no Health Connect call at all — it writes nothing, reads nothing (not even what it is
+allowed) and shows no Health Connect prompt; your readings stay only in the app. Turning it ON
+never opens a permission screen by itself: the **Health Connect** card appears under the switch
+(only while it is ON), first says "Checking Health Connect…" and then shows what is already
+allowed. Turning it OFF stops writing at once, even a write that is under way; what was already
+written stays in Health Connect until you remove it there. An install that had tapped **Connect
+Health Connect** before 0.4.0 sees a one-time notice on Today, "Health Connect export is now off", with **Dismiss**
+and **Open Settings**; using the switch dismisses it too.
+
+The card writes the ring's data to Health Connect on the phone — heart rate, resting heart rate,
+HRV, SpO₂, respiratory rate, skin temperature, steps, distance, active calories, basal metabolic
+rate and sleep (nights and naps). Nothing leaves the phone. What it writes is whatever the phone
+holds: what a sync stored, what the ring measured live while it was connected, and what **Measure**
+found. Tap **Connect Health Connect** and choose what to allow; the app asks only for write
+permissions. After that, while the switch is ON, it writes after every sync that stored something,
+and **Write to Health Connect now** writes at once. The card shows when it last wrote and how many
 records ("Written this sync"); amber names types you did not allow ("Not allowed: …", with
 **Change in Health Connect**) or whose write failed ("Could not write …", retried on the next
 sync); "Catching up" means Health Connect asked the app to slow down and the rest follows on the
@@ -364,14 +438,17 @@ the pairing prompt, and a **Last measure** row with what the ring answered to th
 request. **Last sync continuity** says whether the last sync's records joined the one before ("No
 gap since last sync", or how long is missing on which channel), and **Ring capacity** what the syncs
 so far say about how much the ring keeps (a lower bound, whether it overwrites its oldest records
-or stops when full, or why it cannot tell yet). The **Sync log** lists the last syncs, newest
+or stops when full, or why it cannot tell yet). Under **Show all**, **Storage** shows how much space
+the app's data takes on the phone and how many readings it holds, since every reading is kept. The
+**Sync log** lists the last syncs, newest
 first, with what each channel did. **Copy connection details** puts the text on the clipboard with
 the ring's address and name masked, so it is safe to paste into a bug report.
 
 **Privacy.** The app has no internet permission and sends nothing anywhere. Its data is excluded
-from both cloud backup and device-to-device transfer. The one place it writes to outside its own
-storage is Health Connect on the same phone, and only the types you allow there; it asks for write
-permissions only and reads no health data back out of Health Connect. It is not a medical device; talk
+from both cloud backup and device-to-device transfer. Every reading stays in its own store on the
+phone, which is all Today and the trends read. The one place it can write to outside that store is
+Health Connect on the same phone — only with **Send to Health Connect** on, and only the types you
+allow there; it asks for write permissions only and reads no health data back out of Health Connect. It is not a medical device; talk
 to a clinician about any health concern.
 
 ## Troubleshooting
