@@ -1,9 +1,9 @@
 package io.github.opencircuit.app.data
 
 /**
- * The app's two flags. Both are read synchronously (the launch decision must not wait), and a
- * damaged value reads as not set: onboarding shows again, the Nearby-devices dialog is asked for
- * again. Neither failure is harmful, so both read closed to "not yet".
+ * The app's small saved choices. Each is read synchronously (the launch decision and the first
+ * frame must not wait), and a damaged value reads as its safe default: onboarding shows again, the
+ * Nearby-devices dialog is asked for again, Health Connect writing is OFF.
  */
 interface AppPrefs {
     /** The user finished or skipped onboarding (`onboarding.completed.v1`; upstream's key, OB:18). */
@@ -45,6 +45,22 @@ interface AppPrefs {
 
     /** Saves Today's tile order; false when the file could not be written. */
     fun setTodayTileOrder(order: String): Boolean
+
+    /**
+     * Settings' "Send to Health Connect" switch (`health.write.enabled.v1`). OFF until the user turns
+     * it on — on a fresh install and on an install upgraded from a version without the switch alike —
+     * and a damaged value reads OFF: nothing leaves the app by accident.
+     */
+    val healthWriteEnabled: Boolean
+
+    /** Saves the switch; false when the file could not be written. */
+    fun setHealthWriteEnabled(on: Boolean): Boolean
+
+    /** Today's one-time "Health Connect export is now off" notice was dismissed (`health.upgradeNotice.dismissed.v1`); a damaged value reads not dismissed. */
+    val healthUpgradeNoticeDismissed: Boolean
+
+    /** Marks the notice dismissed; false when the file could not be written. */
+    fun setHealthUpgradeNoticeDismissed(): Boolean
 }
 
 /** [AppPrefs] over [KeyValues]. */
@@ -70,11 +86,22 @@ class PrefsAppPrefs(private val values: KeyValues) : AppPrefs {
 
     override fun setTodayTileOrder(order: String): Boolean = values.putString(TODAY_TILE_ORDER, order)
 
+    // Missing or damaged reads as OFF: data goes to Health Connect only after the user turned it on.
+    override val healthWriteEnabled: Boolean get() = values.boolean(HEALTH_WRITE_ENABLED) == true
+
+    override fun setHealthWriteEnabled(on: Boolean): Boolean = values.putBoolean(HEALTH_WRITE_ENABLED, on)
+
+    override val healthUpgradeNoticeDismissed: Boolean get() = values.boolean(HEALTH_UPGRADE_NOTICE_DISMISSED) == true
+
+    override fun setHealthUpgradeNoticeDismissed(): Boolean = values.putBoolean(HEALTH_UPGRADE_NOTICE_DISMISSED, true)
+
     private companion object {
         const val ONBOARDING_COMPLETED = "onboarding.completed.v1"
         const val PERMISSION_ASKED = "bt.permission.asked.v1"
         const val DISCONNECT_AFTER_SYNC = "sync.disconnectAfter.v1"
         const val TODAY_SECTION_ORDER = "today.sectionOrder.v1"
         const val TODAY_TILE_ORDER = "today.tileOrder.v1"
+        const val HEALTH_WRITE_ENABLED = "health.write.enabled.v1"
+        const val HEALTH_UPGRADE_NOTICE_DISMISSED = "health.upgradeNotice.dismissed.v1"
     }
 }

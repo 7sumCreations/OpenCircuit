@@ -89,11 +89,62 @@ class AppPrefsTest {
         assertNull(prefs.todayTileOrder)
     }
 
+    /**
+     * Sending to Health Connect: OFF when the key is absent — a fresh install and an install upgraded
+     * from a version without the switch alike — and OFF when the stored value is damaged, so nothing
+     * leaves the app unless the user turned it on.
+     */
+    @Test
+    fun healthWritingIsOffUntilTurnedOnAndADamagedValueReadsOff() {
+        assertFalse(prefs.healthWriteEnabled, "absent reads OFF")
+
+        assertTrue(prefs.setHealthWriteEnabled(true))
+        assertTrue(PrefsAppPrefs(values).healthWriteEnabled, "kept across a relaunch")
+        assertEquals(true, values.raw(HEALTH_WRITE))
+
+        assertTrue(prefs.setHealthWriteEnabled(false))
+        assertFalse(PrefsAppPrefs(values).healthWriteEnabled)
+        assertEquals(false, values.raw(HEALTH_WRITE))
+
+        values.putRaw(HEALTH_WRITE, "true")
+        assertFalse(prefs.healthWriteEnabled, "a string is damaged: OFF")
+        values.putRaw(HEALTH_WRITE, 1)
+        assertFalse(prefs.healthWriteEnabled, "a number is damaged: OFF")
+    }
+
+    @Test
+    fun aFailedSwitchWriteIsReportedAndWritingStaysOff() {
+        values.failWrites = true
+
+        assertFalse(prefs.setHealthWriteEnabled(true))
+        assertFalse(prefs.healthWriteEnabled)
+    }
+
+    /** The upgrade notice's "dismissed" flag: unset at first, kept once set, damaged reads unset; independent of the switch. */
+    @Test
+    fun theUpgradeNoticeDismissalIsKeptAcrossARelaunch() {
+        assertFalse(prefs.healthUpgradeNoticeDismissed)
+
+        assertTrue(prefs.setHealthUpgradeNoticeDismissed())
+        assertTrue(PrefsAppPrefs(values).healthUpgradeNoticeDismissed)
+        assertEquals(true, values.raw(NOTICE_DISMISSED))
+        assertFalse(prefs.healthWriteEnabled, "dismissing the notice does not turn writing on")
+
+        values.putRaw(NOTICE_DISMISSED, "yes")
+        assertFalse(prefs.healthUpgradeNoticeDismissed)
+
+        values.failWrites = true
+        values.putRaw(NOTICE_DISMISSED, false)
+        assertFalse(prefs.setHealthUpgradeNoticeDismissed())
+    }
+
     private companion object {
         /** The keys, typed here rather than read from the code. */
         const val ONBOARDING = "onboarding.completed.v1"
         const val ASKED = "bt.permission.asked.v1"
         const val SECTION_ORDER = "today.sectionOrder.v1"
         const val TILE_ORDER = "today.tileOrder.v1"
+        const val HEALTH_WRITE = "health.write.enabled.v1"
+        const val NOTICE_DISMISSED = "health.upgradeNotice.dismissed.v1"
     }
 }
