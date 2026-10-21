@@ -143,8 +143,9 @@ class AppContainer(context: Context) {
     )
 
     /**
-     * The store's launch repairs (the 30-day prune, the purges, the night move, the backfill, the
-     * heal, the cursor repair), once per process, off the main thread, after the store opened.
+     * The store's launch repairs (the purges, the night move, the backfill, the heal, the cursor
+     * repair), once per process, off the main thread, after the store opened. None deletes a reading
+     * for its age.
      */
     private val launchRepairs = LaunchHousekeeping({ database.await() }, wallNow, ZoneId::systemDefault, log).start(appScope)
 

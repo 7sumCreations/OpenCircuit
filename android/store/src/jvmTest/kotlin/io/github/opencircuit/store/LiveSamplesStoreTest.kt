@@ -164,7 +164,7 @@ class LiveSamplesStoreTest {
     /**
      * A live reading stamped behind the mark (the phone's clock behind the ring's, whose drained
      * samples the writer already marked) waits for Health Connect too, instead of being taken as
-     * written and pruned as such.
+     * written and never sent.
      */
     @Test
     fun aLiveReadingBehindTheMarkPullsTheHealthMarkBack() = runBlocking<Unit> {

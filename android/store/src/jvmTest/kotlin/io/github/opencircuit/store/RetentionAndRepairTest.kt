@@ -5,7 +5,6 @@ import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
 import kotlinx.coroutines.runBlocking
 import java.time.Instant
-import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,12 +14,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Retention and launch repairs at their edges, beyond the ported upstream tests. Upstream outcomes
- * read from ios/OpenCircuit/Store/LocalStore.swift @ b1c2fdd: the prune cuts 30 CALENDAR days in
- * the user's zone and deletes `start < cutoff` (:1058-1070; Foundation's day arithmetic measured
- * on Swift 6.3.2 against java.time across DST changes — identical); the heart-rate purge compares
- * the stored Double, `value < 30 || value > 220` (:1090-1102); the timestamp purge deletes outside
- * ingest's window (:1110-1122); the cursor repair resets `last > now + 1 day` (:1144-1160).
+ * Launch repairs at their edges, beyond the ported upstream tests. Upstream outcomes read from
+ * ios/OpenCircuit/Store/LocalStore.swift @ b1c2fdd: the heart-rate purge compares the stored
+ * Double, `value < 30 || value > 220` (:1090-1102); the timestamp purge deletes outside ingest's
+ * window (:1110-1122); the cursor repair resets `last > now + 1 day` (:1144-1160). Upstream's
+ * 30-day retention (:1058-1070) is not run here: no launch step deletes a reading for its age
+ * (PruneGuardTest).
  * Upstream latches its two purges in UserDefaults after the purge saved (ios/OpenCircuit/App.swift:624,
  * :638); here the latch commits in the purge's own transaction, so it is set exactly when the purge
  * committed. Each launch step runs even when an earlier one fails, as upstream's separate launch tasks.
@@ -29,7 +28,6 @@ class RetentionAndRepairTest {
 
     private val now = Instant.parse("2026-10-03T12:00:00Z")
     private val utc = ZoneOffset.UTC
-    private val cutoff = Instant.parse("2026-09-03T12:00:00Z")
     private val tenYears = 10L * 365 * 24 * 3600
 
     private fun row(kind: MetricKind, at: Instant, value: Double) =
@@ -41,54 +39,6 @@ class RetentionAndRepairTest {
         sampleDao().allSamples().filter { it.kindRaw == MetricKind.HEART_RATE.rawValue }.map { it.value }
 
     private suspend fun StoreDatabase.latch(key: String) = kvDao().get(key)
-
-    @Test
-    fun pruneKeepsRowsExactlyAtTheCutoffAndDeletesOlderOnesButNeverRollupsOrCursors() = runBlocking<Unit> {
-        withInMemoryStore { db ->
-            val older = cutoff.minusMillis(1)
-            db.sampleDao().insertSamples(listOf(row(MetricKind.HEART_RATE, cutoff, 60.0), row(MetricKind.HEART_RATE, older, 61.0)))
-            db.dailyDao().insertDaytimeTemp(StoredDaytimeTempEntity(time = cutoff, celsius = 33.0))
-            db.dailyDao().insertDaytimeTemp(StoredDaytimeTempEntity(time = older, celsius = 33.1))
-            db.dailyDao().insertStepSample(StoredStepSampleEntity(start = cutoff, end = now, delta = 5, healthWritten = true))
-            db.dailyDao().insertStepSample(StoredStepSampleEntity(start = older, end = now, delta = 6, healthWritten = true))
-            db.dailyDao().insertDaily(StoredDailyEntity(day = cutoff.minusSeconds(40L * 86_400), steps = 9, updatedAt = cutoff))
-            // Everything here was written to Health Connect: the retention keeps what was not (PruneGuardTest).
-            val written = StoredCursorEntity("hk:heartRate", cutoff)
-            db.sampleDao().upsertCursors(listOf(StoredCursorEntity("heartRate", older), written))
-
-            LocalStore(db).pruneExpiredSamples(now, utc)
-
-            assertEquals(listOf(cutoff), db.sampleStarts())
-            assertEquals(listOf(cutoff), db.dailyDao().daytimeTemps(Instant.EPOCH, now).map { it.time })
-            assertEquals(listOf(cutoff), db.dailyDao().stepSamples(Instant.EPOCH, now.plusSeconds(1)).map { it.start })
-            assertEquals(1, db.dailyDao().allDailies().size)
-            assertEquals(setOf(StoredCursorEntity("heartRate", older), written), db.sampleDao().allCursors().toSet())
-        }
-    }
-
-    @Test
-    fun pruneCountsThirtyCalendarDaysInTheGivenZoneAcrossAClockChange() = runBlocking<Unit> {
-        withInMemoryStore { db ->
-            // London springs forward on 2026-03-29. Foundation and java.time both put 30 days
-            // before 2026-04-28T00:30Z at 2026-03-29T01:30Z (measured); 30 x 24 h would be 00:30Z.
-            val london = ZoneId.of("Europe/London")
-            val londonNow = Instant.parse("2026-04-28T00:30:00Z")
-            val kept = Instant.parse("2026-03-29T01:30:00Z")
-            db.sampleDao().insertSamples(
-                listOf(
-                    row(MetricKind.SPO2, kept, 0.97),
-                    row(MetricKind.SPO2, kept.minusMillis(1), 0.97),
-                    row(MetricKind.SPO2, Instant.parse("2026-03-29T01:00:00Z"), 0.97),
-                ),
-            )
-            // All written to Health Connect (the mark is inclusive), so only the cutoff decides.
-            db.sampleDao().upsertCursors(listOf(StoredCursorEntity("hk:spo2", kept)))
-
-            LocalStore(db).pruneExpiredSamples(londonNow, london)
-
-            assertEquals(listOf(kept), db.sampleStarts())
-        }
-    }
 
     @Test
     fun heartRatePurgeComparesTheStoredValueDeletesOnlyHeartRatesAndRunsOnce() = runBlocking<Unit> {
@@ -228,24 +178,19 @@ class RetentionAndRepairTest {
     }
 
     @Test
-    fun launchRepairsPruneAndPurgeBeforeTheCursorRepairSoItSeesTheCleanedTable() = runBlocking<Unit> {
+    fun launchRepairsPurgeBeforeTheCursorRepairSoItSeesTheCleanedTable() = runBlocking<Unit> {
         withInMemoryStore { db ->
-            // Either sample would become the repaired cursor if the repair ran first.
-            db.sampleDao().insertSamples(
-                listOf(
-                    row(MetricKind.HEART_RATE, now.minusSeconds(40L * 86_400), 60.0),
-                    row(MetricKind.HEART_RATE, now.minusSeconds(3600), 4.0),
-                ),
-            )
-            // The old one was written to Health Connect, so the retention may prune it.
-            val written = StoredCursorEntity("hk:heartRate", now.minusSeconds(40L * 86_400))
+            // The implausible reading is the newer one: it would become the repaired cursor if the repair ran first.
+            val old = now.minusSeconds(40L * 86_400)
+            db.sampleDao().insertSamples(listOf(row(MetricKind.HEART_RATE, old, 60.0), row(MetricKind.HEART_RATE, now.minusSeconds(3600), 4.0)))
+            // The old one was written to Health Connect; it is kept all the same.
+            val written = StoredCursorEntity("hk:heartRate", old)
             db.sampleDao().upsertCursors(listOf(StoredCursorEntity("heartRate", now.plusSeconds(tenYears)), written))
 
             val report = LaunchRepairs.run(LocalStore(db), SleepStore(db), now, utc)
 
-            assertEquals(emptyList(), db.sampleDao().allSamples())
-            assertEquals(listOf(written), db.sampleDao().allCursors())
-            assertEquals(Result.success(Unit), report.prune)
+            assertEquals(listOf(old), db.sampleStarts())
+            assertEquals(setOf(StoredCursorEntity("heartRate", old), written), db.sampleDao().allCursors().toSet())
             assertEquals(Result.success(1), report.heartRatePurge)
             assertEquals(Result.success(0), report.timestampPurge)
             assertEquals(Result.success(1), report.cursorRepair)
@@ -253,21 +198,22 @@ class RetentionAndRepairTest {
     }
 
     @Test
-    fun aSecondLaunchSkipsTheLatchedPurgesButStillPrunesAndRepairs() = runBlocking<Unit> {
+    fun aSecondLaunchSkipsTheLatchedPurgesButStillRepairs() = runBlocking<Unit> {
         withInMemoryStore { db ->
             val store = LocalStore(db)
             LaunchRepairs.run(store, SleepStore(db), now, utc)
             val implausible = row(MetricKind.HEART_RATE, now.minusSeconds(3600), 4.0)
-            db.sampleDao().insertSamples(listOf(implausible, row(MetricKind.SPO2, now.minusSeconds(40L * 86_400), 0.97)))
-            // The old SpO2 was written to Health Connect, so the retention may prune it.
-            val written = StoredCursorEntity("hk:spo2", now.minusSeconds(40L * 86_400))
+            val old = now.minusSeconds(40L * 86_400)
+            db.sampleDao().insertSamples(listOf(implausible, row(MetricKind.SPO2, old, 0.97)))
+            // The old SpO2 was written to Health Connect; it is kept all the same.
+            val written = StoredCursorEntity("hk:spo2", old)
             db.sampleDao().upsertCursors(listOf(StoredCursorEntity("spo2", now.plusSeconds(tenYears)), written))
 
             val second = LaunchRepairs.run(store, SleepStore(db), now, utc)
 
             assertEquals(listOf(4.0), db.heartRates())
-            assertEquals(1, db.sampleDao().allSamples().size)
-            assertEquals(listOf(written), db.sampleDao().allCursors())
+            assertEquals(2, db.sampleDao().allSamples().size)
+            assertEquals(setOf(StoredCursorEntity("spo2", old), written), db.sampleDao().allCursors().toSet())
             assertEquals(Result.success(null), second.heartRatePurge)
             assertEquals(Result.success(null), second.timestampPurge)
             assertEquals(Result.success(1), second.cursorRepair)
@@ -279,14 +225,13 @@ class RetentionAndRepairTest {
         withInMemoryStore { db ->
             val real = db.sampleDao()
             val failing = object : SampleDao by real {
-                override suspend fun deleteSamplesBefore(cutoff: Instant, guardedKinds: List<String>): Int = error("injected failure")
+                override suspend fun deleteHeartRatesOutside(kindRaw: String, lowest: Double, highest: Double): Int = error("injected failure")
             }
             db.sampleDao().upsertCursors(listOf(StoredCursorEntity("heartRate", now.plusSeconds(tenYears))))
 
             val report = LaunchRepairs.run(LocalStore(db, sampleDao = failing), SleepStore(db), now, utc)
 
-            assertTrue(report.prune.isFailure)
-            assertEquals(Result.success(0), report.heartRatePurge)
+            assertTrue(report.heartRatePurge.isFailure)
             assertEquals(Result.success(0), report.timestampPurge)
             assertEquals(Result.success(1), report.cursorRepair)
             assertEquals(emptyList(), db.sampleDao().allCursors())

@@ -13,7 +13,8 @@ import kotlin.test.assertTrue
  * Upstream `StoredDaily.day` is `@Attribute(.unique)` (ios/OpenCircuit/Store/LocalStore.swift:649
  * @ b1c2fdd): one rollup row per day. The key-value table holds every stored blob and latch; a row
  * with no value would be a blob that is neither present nor absent, so the column refuses NULL.
- * The 30-day prune deletes by time on three tables, so each has an index on that column.
+ * Readings are kept for good, so a read by time over the three time-stamped reading tables must use
+ * an index on that column, never scan the table.
  */
 class StoreTablesTest {
 
@@ -50,11 +51,11 @@ class StoreTablesTest {
     }
 
     @Test
-    fun eachPruneDeleteUsesAnIndexOnItsTimeColumn() = runBlocking {
+    fun eachReadByTimeUsesAnIndexOnItsTimeColumn() = runBlocking {
         withInMemoryStore { db ->
             for ((table, column) in listOf("stored_sample" to "start", "stored_daytime_temp" to "time", "stored_step_sample" to "start")) {
-                val plan = db.queryRaw("EXPLAIN QUERY PLAN DELETE FROM $table WHERE $column < 0").joinToString("\n")
-                assertTrue("USING INDEX" in plan || "USING COVERING INDEX" in plan, "$table prune scans the table: $plan")
+                val plan = db.queryRaw("EXPLAIN QUERY PLAN SELECT * FROM $table WHERE $column >= 0 AND $column < 1").joinToString("\n")
+                assertTrue("USING INDEX" in plan || "USING COVERING INDEX" in plan, "$table read by time scans the table: $plan")
             }
         }
     }

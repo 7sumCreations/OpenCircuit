@@ -15,10 +15,10 @@ import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * The store's launch repairs, run once when the app starts (upstream runs them as launch tasks,
- * ios/OpenCircuit/App.swift:15-43): [LaunchRepairs.run] — the 30-day prune (which keeps what Health
- * Connect has not received), the two one-time purges, the move of stored nights onto their wake day,
- * the provenance backfill, the heal of withheld scores and the cursor repair — on [background], after
- * the store opened. A store that cannot open runs none; each step's outcome is logged, counts and
+ * ios/OpenCircuit/App.swift:15-43): [LaunchRepairs.run] — the two one-time purges, the move of
+ * stored nights onto their wake day, the provenance backfill, the heal of withheld scores and the
+ * cursor repair — on [background], after the store opened. None deletes a reading for its age: every
+ * reading is kept. A store that cannot open runs none; each step's outcome is logged, counts and
  * error kinds only, never a reading.
  */
 class LaunchHousekeeping(
@@ -44,7 +44,6 @@ class LaunchHousekeeping(
     internal companion object {
         /** One line naming each step's outcome: "ok", a count, or the error's kind. */
         fun summary(r: LaunchRepairs.Report): String = listOf(
-            "prune" to r.prune.map { "ok" },
             "heart-rate purge" to r.heartRatePurge.map { it?.toString() ?: "done before" },
             "timestamp purge" to r.timestampPurge.map { it?.toString() ?: "done before" },
             "night move" to r.nightRekey.map { "ok" },

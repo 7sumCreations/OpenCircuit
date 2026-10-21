@@ -20,10 +20,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The store's launch repairs (`LaunchRepairs.run`: the 30-day prune, the two one-time purges, the
- * night move, the provenance backfill, the score heal, the cursor repair) run once when the app
- * starts, on a background dispatcher, after the store opened (upstream runs them as launch tasks,
- * ios/OpenCircuit/App.swift:15-43). Before this the app never called them.
+ * The store's launch repairs (`LaunchRepairs.run`: the two one-time purges, the night move, the
+ * provenance backfill, the score heal, the cursor repair) run once when the app starts, on a
+ * background dispatcher, after the store opened (upstream runs them as launch tasks,
+ * ios/OpenCircuit/App.swift:15-43). None deletes a reading for its age.
  */
 class LaunchHousekeepingTest {
 
@@ -31,7 +31,7 @@ class LaunchHousekeepingTest {
     private val old = Instant.parse("2026-09-10T12:00:00Z") // 37 days old
 
     @Test
-    fun theRepairsRunOnTheGivenDispatcherAfterTheStoreOpensAndKeepWhatHealthConnectLacks() = runTest {
+    fun theRepairsRunOnTheGivenDispatcherAfterTheStoreOpensAndKeepEveryOldReading() = runTest {
         val io = StandardTestDispatcher(testScheduler)
         val db = StoreFactory.openInMemory(io)
         val logs = CopyOnWriteArrayList<String>()
@@ -49,10 +49,10 @@ class LaunchHousekeepingTest {
             testScheduler.advanceUntilIdle()
 
             assertTrue(job.isCompleted)
-            assertEquals(listOf(old.plusSeconds(60)), store.samples(MetricKind.HEART_RATE, Instant.EPOCH, now).map { it.start }, "the written one pruned, the unwritten one kept")
+            assertEquals(listOf(old, old.plusSeconds(60)), store.samples(MetricKind.HEART_RATE, Instant.EPOCH, now).map { it.start }, "written to Health Connect or not, both kept")
             val line = logs.single()
-            assertTrue(line.startsWith("Launch repairs:"), line)
-            assertTrue("prune ok" in line && "night move ok" in line && "cursor repair 0" in line, line)
+            assertTrue(line.startsWith("Launch repairs: heart-rate purge 0,"), line)
+            assertTrue("night move ok" in line && "cursor repair 0" in line, line)
             assertTrue(Regex("""\d{2,}\.\d""").find(line) == null, "no reading in the log: $line")
         } finally {
             scope.cancel()

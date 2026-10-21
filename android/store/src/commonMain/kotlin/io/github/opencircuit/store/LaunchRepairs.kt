@@ -5,10 +5,13 @@ import java.time.Instant
 import java.time.ZoneId
 
 // The store housekeeping run once per app launch. Port of upstream ios/OpenCircuit/App.swift
-// (@ b1c2fdd): the launch tasks at :15-43 and their wrappers `pruneExpiredSamplesAtLaunch` (:617),
-// `purgeImplausibleHeartRateOnce` (:626), `purgeImplausibleTimestampsOnce` (:640),
-// `rekeySleepNightsOnce` (:658-663), `backfillSleepProvenanceOnce` (:674-679),
-// `healWithheldSleepScores` (:698-711) and `repairFutureSyncCursorsAtLaunch` (:722).
+// (@ b1c2fdd): the launch tasks at :15-43 and their wrappers `purgeImplausibleHeartRateOnce` (:626),
+// `purgeImplausibleTimestampsOnce` (:640), `rekeySleepNightsOnce` (:658-663),
+// `backfillSleepProvenanceOnce` (:674-679), `healWithheldSleepScores` (:698-711) and
+// `repairFutureSyncCursorsAtLaunch` (:722).
+//
+// Upstream's first launch task, the 30-day retention (`pruneExpiredSamplesAtLaunch`, :617), is not
+// run: every reading is kept on the phone (recorded in PORTING.md).
 //
 // Upstream runs each step as its own launch task and swallows its failure (`try?` / do-catch);
 // here every step still runs whatever happened to the one before it, and each outcome is returned
@@ -27,7 +30,6 @@ object LaunchRepairs {
      * is the nights whose score it restored, newest first.
      */
     data class Report(
-        val prune: Result<Unit>,
         val heartRatePurge: Result<Int?>,
         val timestampPurge: Result<Int?>,
         val nightRekey: Result<Unit>,
@@ -37,23 +39,21 @@ object LaunchRepairs {
     )
 
     /**
-     * Runs, in order: the 30-day prune, the one-time heart-rate purge, the one-time timestamp
-     * purge, the three sleep-history repairs of [sleep] — the one-time move of stored nights onto
+     * Runs, in order: the one-time heart-rate purge, the one-time timestamp purge, the three sleep-history repairs of [sleep] — the one-time move of stored nights onto
      * the day they ended ([SleepStore.ensureNightKeyMigrated]), the provenance backfill
      * ([SleepStore.backfillSleepProvenance]) and the heal of withheld scores
      * ([SleepStore.healWithheldSleepScores]) — then the cursor repair, last, so its "newest stored
      * sample" lookup sees the cleaned table. A failing step is reported and the next one runs.
-     * Cancellation is not a step failure: it stops the run.
+     * Cancellation is not a step failure: it stops the run. No step deletes a reading for its age.
      */
     suspend fun run(store: LocalStore, sleep: SleepStore, now: Instant, zone: ZoneId): Report {
-        val prune = attempt { store.pruneExpiredSamples(now, zone) }
         val heartRatePurge = attempt { store.purgeImplausibleHeartRateOnce(now) }
         val timestampPurge = attempt { store.purgeImplausibleTimestampsOnce(now) }
         val nightRekey = attempt { sleep.ensureNightKeyMigratedOrThrow(zone, now) }
         val provenanceBackfill = attempt { sleep.backfillSleepProvenance() }
         val scoreHeal = attempt { sleep.healWithheldSleepScores(now) }
         val cursorRepair = attempt { store.repairFutureSyncCursors(now) }
-        return Report(prune, heartRatePurge, timestampPurge, nightRekey, provenanceBackfill, scoreHeal, cursorRepair)
+        return Report(heartRatePurge, timestampPurge, nightRekey, provenanceBackfill, scoreHeal, cursorRepair)
     }
 
     private inline fun <T> attempt(step: () -> T): Result<T> =

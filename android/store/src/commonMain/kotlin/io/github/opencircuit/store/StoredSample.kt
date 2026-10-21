@@ -22,7 +22,8 @@ import java.time.Instant
  */
 @Entity(
     tableName = "stored_sample",
-    // The second index serves the 30-day prune, which deletes by `start` alone.
+    // The second index serves the reads and the one-time timestamp purge that go by `start` alone.
+    // It once served the 30-day retention, which is gone; it stays so the schema does not change.
     indices = [Index(value = ["kind_raw", "start"]), Index(value = ["start"])],
 )
 internal data class StoredSampleEntity(

@@ -52,16 +52,8 @@ internal interface DailyDao {
     @Query("UPDATE stored_step_sample SET health_written = 1 WHERE id IN (:ids)")
     suspend fun markStepSamplesWritten(ids: List<Long>)
 
-    /** Deletes every step delta with `start < cutoff` already written to Health Connect (the retention prune). */
-    @Query("DELETE FROM stored_step_sample WHERE start < :cutoff AND health_written = 1")
-    suspend fun deleteWrittenStepSamplesBefore(cutoff: Instant): Int
-
     @Insert
     suspend fun insertDaytimeTemp(reading: StoredDaytimeTempEntity)
-
-    /** Deletes every daytime reading with `time < cutoff` (the retention prune). */
-    @Query("DELETE FROM stored_daytime_temp WHERE time < :cutoff")
-    suspend fun deleteDaytimeTempsBefore(cutoff: Instant): Int
 
     /** Readings with `from <= time < to`, oldest first (upstream `daytimeTemperaturesDescriptor`). */
     @Query("SELECT * FROM stored_daytime_temp WHERE time >= :from AND time < :to ORDER BY time, id")

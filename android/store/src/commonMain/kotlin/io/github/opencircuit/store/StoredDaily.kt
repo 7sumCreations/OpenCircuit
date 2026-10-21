@@ -10,8 +10,8 @@ import java.time.Instant
 // readings. Port of upstream ios/OpenCircuit/Store/LocalStore.swift `StoredDaily` (:647-664),
 // `StoredStepSample` (:674-688) and `StoredDaytimeTemp` (:760-768) (@ b1c2fdd).
 //
-// Upstream's `Int` is 64-bit, so the step columns are `Long`. The time columns the 30-day prune
-// deletes by (`start`, `time`) are indexed; upstream's SwiftData store had no such index.
+// Upstream's `Int` is 64-bit, so the step columns are `Long`. The time columns (`start`, `time`)
+// are indexed for the range reads; upstream's SwiftData store had no such index.
 
 /**
  * One day's step total (the ring's onboard step count), keyed by the start of the local day and

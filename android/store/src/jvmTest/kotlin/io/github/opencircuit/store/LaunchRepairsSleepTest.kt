@@ -86,16 +86,13 @@ class LaunchRepairsSleepTest {
             val steps = mutableListOf<String>()
             val sampleDao = db.sampleDao()
             val recordingSamples = object : SampleDao by sampleDao {
-                override suspend fun deleteSamplesBefore(cutoff: Instant, guardedKinds: List<String>): Int =
-                    sampleDao.deleteSamplesBefore(cutoff, guardedKinds).also { steps += "prune" }
                 override suspend fun deleteHeartRatesOutside(kindRaw: String, lowest: Double, highest: Double): Int =
                     sampleDao.deleteHeartRatesOutside(kindRaw, lowest, highest).also { steps += "heart-rate purge" }
                 override suspend fun deleteSamplesOutside(floor: Instant, ceiling: Instant): Int =
                     sampleDao.deleteSamplesOutside(floor, ceiling).also { steps += "timestamp purge" }
-                // The prune reads the Health Connect marks right after its first delete; every later
-                // read of the cursor rows is the cursor repair's.
+                // The only launch step that reads the cursor rows is the cursor repair.
                 override suspend fun allCursors(): List<StoredCursorEntity> =
-                    sampleDao.allCursors().also { steps += if (steps.lastOrNull() == "prune") "prune: marks read" else "cursor repair" }
+                    sampleDao.allCursors().also { steps += "cursor repair" }
             }
             val kvDao = db.kvDao()
             val recordingKv = object : KvDao by kvDao {
@@ -118,7 +115,7 @@ class LaunchRepairsSleepTest {
             val report = LaunchRepairs.run(LocalStore(db, sampleDao = recordingSamples), SleepStore(db, recordingSleep, recordingKv), now, utc)
 
             assertEquals(
-                listOf("prune", "prune: marks read", "heart-rate purge", "timestamp purge", "night move", "backfill", "heal", "cursor repair"),
+                listOf("heart-rate purge", "timestamp purge", "night move", "backfill", "heal", "cursor repair"),
                 steps,
             )
             assertTrue(report.provenanceBackfill.isFailure)

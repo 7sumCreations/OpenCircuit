@@ -22,9 +22,9 @@ import java.time.ZoneId
 // and `cumulativeState` (:3136); the other sample reads (`latestSample(kind:before:)` :813,
 // `earliestSample` :831 / :842, `recentSamples` :1184); daily steps and step samples
 // (`addDailySteps` :3058, `todaySteps` :3073, `stepSamples` :3100, `latestDaily` :3105,
-// `recentDailies` :3114, `dailies` :3119); daytime temperatures (:1073, :1079); retention and
-// repairs (`sampleRetentionDays` :1051, `pruneExpiredSamples` :1058, `purgeImplausibleHeartRate`
-// :1090, `purgeImplausibleTimestamps` :1110, `repairFutureSyncCursors` :1144), with the purges'
+// `recentDailies` :3114, `dailies` :3119); daytime temperatures (:1073, :1079); the repairs
+// (`purgeImplausibleHeartRate` :1090, `purgeImplausibleTimestamps` :1110,
+// `repairFutureSyncCursors` :1144), with the purges'
 // one-time latches from ios/OpenCircuit/App.swift (:624, :638); the period log
 // (ios/OpenCircuit/CycleStore.swift :73-156), the headache log and the frozen headache-risk rows
 // (ios/OpenCircuit/Store/HeadacheStore.swift :195-315, :332-406), without their health-write calls
@@ -44,6 +44,9 @@ import java.time.ZoneId
 //   A NaN or infinite value of any other kind is dropped too (a NaN cannot be stored here).
 // - Step totals are `Long` (Swift's `Int` is 64-bit) and an overflowing total fails the write, as
 //   Swift's `+=` traps; a failed day lookup fails the write (upstream's `try?` inserts a new row).
+// - Nothing ages out: upstream deletes raw samples, step deltas and daytime readings older than 30
+//   days (`sampleRetentionDays` :1051, `pruneExpiredSamples` :1058-1070); this store keeps every
+//   reading for good (recorded in PORTING.md).
 // - The two one-time purges keep their latch in this database and write it in the purge's own
 //   transaction; upstream sets a UserDefaults flag after the purge has saved.
 // - The period and headache logs share one implementation of upstream's save rules
@@ -546,32 +549,6 @@ class LocalStore internal constructor(
     }
 
     /**
-     * Deletes raw samples, step deltas and daytime readings older than [olderThanDays] calendar
-     * days before [now] in [zone] (`time < cutoff`; a row exactly at the cutoff is kept), in one
-     * transaction. Day totals and cursors are never pruned. Meant for once a launch, not per write.
-     *
-     * Nothing Health Connect has not received is pruned (PORTING D-300): a reading above zero of a
-     * [HEALTH_MIRRORED_KINDS] kind is deleted only at or before its kind's mark (with no mark, none
-     * is), and a step delta only once marked written; they age out once written. A zero reading,
-     * which is never written, and the daytime readings, which are not written to Health Connect,
-     * age out as before.
-     */
-    suspend fun pruneExpiredSamples(now: Instant, zone: ZoneId, olderThanDays: Long = SAMPLE_RETENTION_DAYS) {
-        // Calendar days in the zone, as Foundation's `date(byAdding: .day, value: -days, to:)`.
-        val cutoff = now.atZone(zone).minusDays(olderThanDays).toInstant()
-        db.withWriteTransaction {
-            sampleDao.deleteSamplesBefore(cutoff, HEALTH_MIRRORED_KINDS.map { it.rawValue })
-            val marks = healthMarks()
-            for (kind in HEALTH_MIRRORED_KINDS) {
-                val mark = marks.last(kind) ?: continue
-                sampleDao.deleteWrittenSamplesBefore(kind.rawValue, cutoff, mark)
-            }
-            dailyDao.deleteDaytimeTempsBefore(cutoff)
-            dailyDao.deleteWrittenStepSamplesBefore(cutoff)
-        }
-    }
-
-    /**
      * Once per store: deletes heart-rate samples whose value is below 30 or above 220 bpm (stored
      * before the decoder's band guard) and returns how many; null when it already ran. The purge
      * and its latch commit together, so a failed purge leaves no latch and runs again next time.
@@ -796,9 +773,6 @@ class LocalStore internal constructor(
     }
 
     companion object {
-        /** Days of raw samples, step deltas and daytime readings kept on the phone (upstream `sampleRetentionDays`). */
-        const val SAMPLE_RETENTION_DAYS = 30L
-
         /**
          * The kinds written to Health Connect straight from the stored samples (upstream
          * `healthMirroredKinds`). Steps, active energy and sleep take their own paths.

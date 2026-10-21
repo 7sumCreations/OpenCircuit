@@ -19,10 +19,10 @@ import kotlin.test.assertTrue
 /**
  * What each launch repair does to a store the app itself filled, measured before the repairs run at
  * every launch: the kept seven-night backlog drained by Sync now through the real store (the nights
- * are in June, the phone's clock in October, so every sample is past the 30-day retention), then
- * written to a Health Connect that allows everything but blood oxygen. One run of
- * [LaunchRepairs.run] on that store, step by step: what it deleted, moved, filled, healed and
- * repaired, and what it left.
+ * are in June, the phone's clock in October, so every sample is months old), then written to a
+ * Health Connect that allows everything but blood oxygen. One run of [LaunchRepairs.run] on that
+ * store, step by step: what it deleted, moved, filled, healed and repaired, and what it left —
+ * every reading, written to Health Connect or not.
  */
 class LaunchRepairsRealStoreHazardTest {
 
@@ -55,11 +55,10 @@ class LaunchRepairsRealStoreHazardTest {
             val now = SYNC_TEST_EPOCH.plus(Duration.ofDays(1))
             val report = LaunchRepairs.run(store, sleep, now, ZoneOffset.UTC)
 
-            // 1. Prune: everything is months old; only what Health Connect received goes.
-            assertEquals(Result.success(Unit), report.prune)
+            // 1. Everything is months old and most of it is in Health Connect: every reading is kept.
             val after = counts()
-            assertEquals(pendingBefore, after, "exactly the unwritten readings of each kind are kept (before: $before)")
-            assertEquals(before.getValue(MetricKind.SPO2), after.getValue(MetricKind.SPO2), "every blood-oxygen reading kept")
+            assertEquals(before, after, "every reading of each kind is kept")
+            assertTrue(kinds.any { before.getValue(it) > pendingBefore.getValue(it) }, "some kept readings were already written")
             assertEquals(pendingBefore, pending(), "nothing pending was lost")
             // 2-3. The purges find nothing the drain stored: ingest's own checks already kept it out.
             assertEquals(Result.success(0), report.heartRatePurge)

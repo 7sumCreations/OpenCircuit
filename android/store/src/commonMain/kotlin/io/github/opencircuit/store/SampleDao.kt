@@ -79,17 +79,6 @@ internal interface SampleDao {
     @Query("SELECT * FROM stored_sample WHERE kind_raw = :kindRaw AND start <= :notAfter ORDER BY start DESC, id DESC LIMIT 1")
     suspend fun latestSampleAtOrBefore(kindRaw: String, notAfter: Instant): StoredSampleEntity?
 
-    /**
-     * Deletes every sample with `start < cutoff` except the readings above zero of the [guardedKinds]
-     * (the retention prune; those are pruned per kind by [deleteWrittenSamplesBefore]); returns how many.
-     */
-    @Query("DELETE FROM stored_sample WHERE start < :cutoff AND (kind_raw NOT IN (:guardedKinds) OR value <= 0)")
-    suspend fun deleteSamplesBefore(cutoff: Instant, guardedKinds: List<String>): Int
-
-    /** Deletes one kind's samples with `start < cutoff` at or before its Health Connect [mark]; returns how many. */
-    @Query("DELETE FROM stored_sample WHERE kind_raw = :kindRaw AND start < :cutoff AND start <= :mark")
-    suspend fun deleteWrittenSamplesBefore(kindRaw: String, cutoff: Instant, mark: Instant): Int
-
     /** Deletes the samples of one kind whose value is below [lowest] or above [highest]. */
     @Query("DELETE FROM stored_sample WHERE kind_raw = :kindRaw AND (value < :lowest OR value > :highest)")
     suspend fun deleteHeartRatesOutside(kindRaw: String, lowest: Double, highest: Double): Int
