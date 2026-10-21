@@ -206,16 +206,16 @@ screen (see "Today"), keeps every reading on the phone for good, and makes Healt
 switch you turn on yourself. Each release carries one APK, `OpenCircuit-Android-<version>.apk`,
 and its SHA-256 checksum file, and the release notes give the signing certificate's digest.
 
-> **0.3.0 was built from `eca6a006`.** Nine commits have landed on the branch since, four of them
-> fixes: a settled-sleep write that read a long-standing install's night marks one night at a time
+> **0.3.0 was built from `eca6a006`.** Everything this page marks as 0.4.0 — Today, the day
+> browser, every reading kept, the Health Connect switch — has landed on the branch since, together
+> with four fixes made right after 0.3.0: a settled-sleep write that read a long-standing install's night marks one night at a time
 > (slow on an install with years of history); a sleep record Health Connect refused clearing the
 > queued edit for good (a path the app cannot reach until it can edit a night); the guard that stops
 > a reading saved *while* a write is running from being counted as already written, which used to be
 > optional and is now required of every store — the phone checks for 0.3.0 were made before that
 > became mandatory, so this one rule rests on the app's tests rather than on those checks; and a
-> screen title TalkBack could not read as a heading. The other five are a documentation note, a
-> tidy-up, a reorganisation that changes nothing about how the app behaves, and two test additions.
-> They are in the code and ship with the next release; the 0.3.0 APK does not contain them.
+> screen title TalkBack could not read as a heading. All of it is in the code and ships with the
+> next release, 0.4.0; the 0.3.0 APK does not contain any of it.
 
 > **Not affiliated with, authorized, or endorsed by RingConn or JZ_Tech. Not a medical device.**
 > Readings are estimates from a consumer ring and are not for diagnosis or treatment.
@@ -286,8 +286,9 @@ is stored the moment the app opens; it never blanks while the ring syncs.
 - **Live heart rate, by itself.** Once a sync ends while Today is on screen (or the ring connects
   and no sync is due because the last one was minutes ago), heart rate goes live: "Live · warming
   up" until the ring locks on, then "Live now" with the number updating. It runs in 90-second
-  measures, one after another, for as long as Today is on screen; leaving Today stops it and
-  coming back starts it again. It never runs during a sync or during your night (the same window
+  measures, one after another, while Today is on screen; leaving Today stops it and coming back
+  starts it again. Stopping it yourself, a dropped connection or the ring refusing the request
+  ends it until the next sync finishes. It never runs during a sync or during your night (the same window
   the automatic syncs keep out of). If the ring seems to be off your finger, the next try waits
   longer each time, up to 10 minutes. While a sync runs the hero says "Live heart rate after sync".
 - **SpO₂ by tap.** **Measure** under SpO₂ measures it (up to 45 seconds; **Stop** ends it early).
@@ -382,8 +383,9 @@ range, nights, last night's sleep) and the last sync's result.
 - **"N records waiting — the all-day channel didn't answer".** A sync stores a record only once
   every channel has been drained past it, so nothing older is ever skipped; when a channel did not
   answer, did not finish or was not reached, newer records wait on the phone for the next sync.
-- **The overdue warning.** A ring holds only a limited stretch of history, and how much a ring
-  really keeps has not been measured yet. The card (and Today) warns in amber at 4 days (Gen 3: 7)
+- **The overdue warning.** A ring holds only a limited stretch of history. The warning's own words
+  give each model's nominal figure, but how much a ring really keeps has not yet been measured on a
+  real ring, so treat it as a guide. The card (and Today) warns in amber at 4 days (Gen 3: 7)
   and in red at 5 days (Gen 3: 9), counted from the oldest record the ring may still hold — a sync
   that left a channel unfinished does not reset it. Sync before then.
 - **Steps and skin temperature are only recorded while the ring is connected.** They are not in
@@ -401,7 +403,8 @@ makes no Health Connect call at all — it writes nothing, reads nothing (not ev
 allowed) and shows no Health Connect prompt; your readings stay only in the app. Turning it ON
 never opens a permission screen by itself: the **Health Connect** card appears under the switch
 (only while it is ON), first says "Checking Health Connect…" and then shows what is already
-allowed. Turning it OFF stops writing at once, even a write that is under way; what was already
+allowed. Turning it OFF stops writing straight away: a write that is under way stops at its next
+call to Health Connect (a batch already sent still lands); what was already
 written stays in Health Connect until you remove it there. An install that had tapped **Connect
 Health Connect** before 0.4.0 sees a one-time notice on Today, "Health Connect export is now off", with **Dismiss**
 and **Open Settings**; using the switch dismisses it too.

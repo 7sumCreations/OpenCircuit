@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
@@ -23,8 +24,6 @@ import io.github.opencircuit.app.ring.RingUiState
 import io.github.opencircuit.app.ring.connectionCardUi
 import io.github.opencircuit.app.settings.SettingsScreen
 import io.github.opencircuit.app.settings.SettingsUiState
-import io.github.opencircuit.app.today.BrowsableDays
-import io.github.opencircuit.app.today.DayBrowser
 import io.github.opencircuit.app.today.DashboardSection
 import io.github.opencircuit.app.today.TODAY_CHIP_TAG
 import io.github.opencircuit.app.today.TODAY_DAY_STRIP_TAG
@@ -67,11 +66,13 @@ import java.time.ZoneOffset
 import java.util.Locale
 
 /**
- * What a screen reader and a finger need from every screen, checked on hand-built states: each
- * screen's title is a heading (Today, a past day, a tile's trend, Ring, Settings), and every control
- * Today draws — the hero's Measure, the date strip and its arrows, the "Today" chip, Pick a day,
- * Sync now, the notice's buttons, Edit order and its move buttons, every tile — can be touched over
- * at least 48 × 48 dp.
+ * What a screen reader and a finger need from every screen: each screen's title is a heading
+ * (Today, a past day, a tile's trend, Ring, Settings), and every control Today draws on today, on a
+ * loaded past day, in Edit order and with no ring paired can be touched over at least 48 × 48 dp.
+ * Each sweep scrolls down its page and also names the controls it must have seen whole — the hero's
+ * Measure, Open Ring, the date strip and its arrows, the "Today" chip, Pick a day, Sync now, the
+ * notice's buttons, Edit order, its move buttons and Reset, every tile — so none can slip past
+ * unmeasured.
  */
 @RunWith(AndroidJUnit4::class)
 class ScreenAccessibilityTest {
@@ -95,12 +96,19 @@ class ScreenAccessibilityTest {
         return TodayTrends.of(TodayWindowInputs(nights = nights, hrv = hrv, hr = hr), zone)
     }
 
-    /** Today with everything it can draw at once: the date strip, the hero, the overdue chip, the notice, readiness, tiles, calories and goals. */
+    /**
+     * Today with everything it can draw at once, its values loaded for [selected]: the date strip,
+     * the hero (or a past day's card), readiness, tiles, calories and goals — plus, added by hand
+     * so their buttons are measured too, the overdue chip and the one-time notice.
+     */
     private fun full(selected: LocalDate = today): TodayUiState {
         val log = listOf(SyncLogEntry(startedAt = now.minusSeconds(660), finishedAt = now.minusSeconds(600), outcome = "COMPLETE"))
-        val base = TodayPresenter.present(TodayInput(TodayStored(trends = trends()), TodaySession(link = LinkState.Authenticated, log = log), now, zone))
+        val stored = TodayStored(trends = trends(), day = selected, earliest = day(-20))
+        val base = TodayPresenter.present(
+            TodayInput(stored, TodaySession(link = LinkState.Authenticated, log = log), now, zone, picked = selected, marked = setOf(today.minusDays(1))),
+        )
+        check(base.day == selected && base.browser.selected == selected) { "the page must be loaded for $selected" }
         return base.copy(
-            browser = DayBrowser.present(BrowsableDays(today.minusDays(20), today), selected, today, setOf(today.minusDays(1))),
             overdue = TodayOverdueUi("Your ring keeps about 7 days of data. Sync soon so nothing is lost.", TodayAlertLevel.AMBER, canSync = true),
             healthNotice = true,
         )
@@ -146,15 +154,17 @@ class ScreenAccessibilityTest {
             ?: node.config.getOrNull(SemanticsProperties.Text)?.joinToString()
             ?: node.config.toString()
 
-    /** Scrolls Today's list to each of [tags] in turn, checking at the top and at every stop. */
-    private fun checkTodayDownTo(tags: List<String>) {
+    /** Scrolls Today's list to each of [stops] in turn, checking at the top and at every stop. */
+    private fun checkTodayDownTo(stops: List<SemanticsMatcher>) {
         checkTouchTargets()
-        for (tag in tags) {
-            compose.onNodeWithTag(TODAY_LIST_TAG).performScrollToNode(hasTestTag(tag))
+        for (stop in stops) {
+            compose.onNodeWithTag(TODAY_LIST_TAG).performScrollToNode(stop)
             checkTouchTargets()
         }
         assertTrue(small.joinToString("\n"), small.isEmpty())
     }
+
+    private val everyTileThenGoals = TodayTile.Metric.entries.map { hasTestTag(todayTileTag(it)) } + hasTestTag(TODAY_GOALS_TAG)
 
     @Test
     fun todaysTitleIsAHeading() {
@@ -198,7 +208,7 @@ class ScreenAccessibilityTest {
     @Test
     fun everyControlOnTodayIsAtLeast48dpFromTheTopToTheGoals() {
         compose.setContent { OpenCircuitTheme { TodayScreen(full(), onAction = {}) } }
-        checkTodayDownTo(TodayTile.Metric.entries.map(::todayTileTag) + TODAY_GOALS_TAG)
+        checkTodayDownTo(everyTileThenGoals)
         // The hero's Measure, the overdue chip's and the notice's buttons, the strip's arrows, Pick a day, Edit order and all eight tiles were seen whole.
         val expected = listOf("Measure", "Sync now", "Dismiss", "Open Settings", TODAY_PREVIOUS_DAY_TAG, TODAY_NEXT_DAY_TAG, TODAY_PICK_DAY_TAG, TODAY_EDIT_ORDER_TAG) +
             TodayTile.Metric.entries.map(::todayTileTag)
@@ -206,11 +216,30 @@ class ScreenAccessibilityTest {
     }
 
     @Test
-    fun everyControlOnAPastDayAndInEditOrderIsAtLeast48dp() {
-        compose.setContent { OpenCircuitTheme { TodayScreen(full(today.minusDays(2)).copy(editingOrder = true), onAction = {}) } }
-        // Down to the last section's row, past every tile's.
-        checkTodayDownTo(TodayTile.Metric.entries.map { todayOrderRowTag(it.name.lowercase(Locale.ROOT)) } + todayOrderRowTag(DashboardSection.GOALS.rawValue))
-        val expected = listOf(TODAY_CHIP_TAG, "Move Readiness down", "Move Goals up", "Move Heart rate down", todayDayTag(today.minusDays(2)))
+    fun everyControlOnALoadedPastDayIsAtLeast48dp() {
+        val past = today.minusDays(2)
+        compose.setContent { OpenCircuitTheme { TodayScreen(full(past), onAction = {}) } }
+        checkTodayDownTo(everyTileThenGoals)
+        val expected = listOf(TODAY_CHIP_TAG, todayDayTag(past), TODAY_EDIT_ORDER_TAG) + TodayTile.Metric.entries.map(::todayTileTag)
         assertEquals(emptyList<String>(), expected - checked)
+    }
+
+    @Test
+    fun everyControlInEditOrderIsAtLeast48dpDownToReset() {
+        compose.setContent { OpenCircuitTheme { TodayScreen(full().copy(editingOrder = true), onAction = {}) } }
+        // Down every tile's row and the last section's, to "Reset to default order".
+        checkTodayDownTo(
+            TodayTile.Metric.entries.map { hasTestTag(todayOrderRowTag(it.name.lowercase(Locale.ROOT))) } +
+                hasTestTag(todayOrderRowTag(DashboardSection.GOALS.rawValue)) + hasText("Reset to default order"),
+        )
+        val expected = listOf("Move Readiness down", "Move Heart rate down", "Move Steps up", "Move Goals up", "Reset to default order", TODAY_EDIT_ORDER_TAG)
+        assertEquals(emptyList<String>(), expected - checked)
+    }
+
+    @Test
+    fun withNoRingPairedOpenRingIsAtLeast48dp() {
+        compose.setContent { OpenCircuitTheme { TodayScreen(TodayUiState(loading = false), onAction = {}) } }
+        checkTodayDownTo(emptyList())
+        assertEquals(emptyList<String>(), listOf("Open Ring") - checked)
     }
 }

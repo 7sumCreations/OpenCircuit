@@ -26,7 +26,7 @@ the details of each screen, see [`ANDROID.md`](ANDROID.md).
 | Can't yet | Read the history of rings on older firmware (seen on FR02.013). It is stored, not readable yet: update the ring's firmware in the RingConn app |
 | Can | Write to Health Connect on the phone (from 0.3.0): heart rate, resting heart rate, HRV, blood oxygen, breathing, skin temperature, steps, distance, active calories, basal metabolic rate and sleep, after every sync and on "Write to Health Connect now" — from 0.4.0 only once you turn on "Send to Health Connect" in Settings (it is off until you do) |
 | Can | Write again without duplicates, skip types you did not allow, and retry a failed type on the next sync |
-| Can | Keep what the ring and Measure find live — steps, skin temperature, a Measure's settled heart rate or last SpO₂ — on the phone as they arrive, so closing the app does not lose them, and write them to Health Connect |
+| Can | Keep what the ring and Measure find live — steps, skin temperature, a Measure's settled heart rate or last SpO₂ — on the phone as they arrive, so closing the app does not lose them, and write them to Health Connect while "Send to Health Connect" is on |
 | Can't yet | Sync in the background. Keep the app open while it syncs; leaving it pauses the sync until you come back |
 | Can't yet | Record steps or skin temperature while the ring is disconnected. They are only recorded (and written to Health Connect) while connected |
 | Can't yet | Write skin temperature on a phone whose Health Connect does not offer it (Android 14). The card says "Not supported on this phone" |
@@ -70,8 +70,8 @@ with **Open Settings**. Turning the switch back on does not ask again for what y
 What was written before stays in Health Connect.
 
 **What does the switch do while it is off?** Nothing reaches Health Connect: the app writes
-nothing, reads nothing and shows no Health Connect prompt. Turning it off stops a write that is
-under way, too. Your readings stay in the app either way, and Today never reads Health Connect.
+nothing, reads nothing and shows no Health Connect prompt. Turning it off also stops a write that is
+under way, at its next call to Health Connect (a batch already sent still lands). Your readings stay in the app either way, and Today never reads Health Connect.
 
 **I allowed nothing. How do I change it?** The card then shows **Open Health Connect settings**,
 which opens Health Connect's page for OpenCircuit. Turn on what it may write and come back: the
@@ -148,8 +148,9 @@ recorded while the app is running.
 
 **Why is Today's heart rate live without me tapping anything?** Once a sync ends while Today is on
 screen, the app starts a live heart-rate reading by itself, in 90-second measures one after another,
-for as long as Today stays on screen. It never runs during a sync or your night, it stops when you
-leave Today, and if the ring seems to be off your finger it waits longer between tries (up to 10
+while Today stays on screen. It never runs during a sync or your night, it stops when you leave
+Today (and comes back when you return), stopping it yourself or a dropped connection ends it until
+the next sync, and if the ring seems to be off your finger it waits longer between tries (up to 10
 minutes). Tapping SpO₂ **Measure** takes over, and heart rate resumes after.
 
 **Can I look at an earlier day?** Yes. Swipe Today sideways, tap a date in the strip, or use **Pick
@@ -182,6 +183,7 @@ yet. The pages are kept safely on your phone and nothing is lost. Update the rin
 the RingConn app, then sync again.
 
 **Why does Today (or the Ring data card) warn that I haven't synced?** A ring holds only a limited
-stretch of history, and how much a ring really keeps has not been measured yet. The warning turns
+stretch of history. The warning's words give each model's nominal figure, but how much a ring really
+keeps has not yet been measured on a real ring, so treat it as a guide. The warning turns
 amber at 4 days (Gen 3: 7) and red at 5 days (Gen 3: 9) since the oldest record the ring may still
 hold, with **Sync now**. Sync before then so nothing is lost.

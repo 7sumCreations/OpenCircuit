@@ -28,18 +28,27 @@ import io.github.opencircuit.app.today.TODAY_PAST_DAY_TAG
 import io.github.opencircuit.app.today.TODAY_STRIP_TAG
 import io.github.opencircuit.app.today.TodayAction
 import io.github.opencircuit.app.today.TodayAlertLevel
+import io.github.opencircuit.app.today.TodayInput
 import io.github.opencircuit.app.today.TodayOverdueUi
+import io.github.opencircuit.app.today.TodayPresenter
 import io.github.opencircuit.app.today.TodayScreen
+import io.github.opencircuit.app.today.TodaySession
+import io.github.opencircuit.app.today.TodayStored
 import io.github.opencircuit.app.today.TodayUiState
 import io.github.opencircuit.app.today.todayDayTag
 import io.github.opencircuit.app.ui.OpenCircuitTheme
 import io.github.opencircuit.ble.LinkState
+import io.github.opencircuit.ringkit.MetricKind
+import io.github.opencircuit.ringkit.QuantitySample
+import io.github.opencircuit.store.SyncLogEntry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
 
 /**
  * The Today scenarios the design mock-up names that no other render test draws, each from a
@@ -76,7 +85,6 @@ class TodayScenariosRenderTest {
         compose.onNodeWithText("71").assertIsDisplayed()
         compose.onNodeWithText("Live now").assertIsDisplayed()
         compose.onNodeWithText("Last synced 2 min ago").assertIsDisplayed()
-        compose.onNodeWithText("Live heart rate after sync").assertDoesNotExist()
         compose.onNodeWithText("Measure").assertIsEnabled()
         // The label, the number, the unit and "Live now" are one node, and its changes are announced politely.
         compose.onNode(hasText("Heart rate") and hasText("71") and hasText("Live now"))
@@ -102,10 +110,16 @@ class TodayScenariosRenderTest {
 
     @Test
     fun disconnectedKeepsTheStoredReadingsAndSaysWhyMeasureIsOff() {
-        val disconnected = stored.copy(
-            lastSynced = "Last synced 3 h ago",
-            ring = LinkStatePresenter.present(LinkState.WaitingForRing, "RingConn").headline,
-            spo2Measure = MeasureButtonUi(reason = "Connect the ring to measure"),
+        // Built by the presenter from a paired ring that is out of reach, so the ring line, Measure's
+        // reason and the absent Open Ring / overdue chip are the app's own decisions, not the fixture's.
+        val now = Instant.parse("2026-10-21T16:00:00Z")
+        val readings = TodayStored(
+            heartRate = QuantitySample(MetricKind.HEART_RATE, now.minusSeconds(3 * 3_600L), value = 62.0),
+            spo2 = QuantitySample(MetricKind.SPO2, now.minusSeconds(9 * 3_600L), value = 0.97),
+        )
+        val log = listOf(SyncLogEntry(startedAt = now.minusSeconds(3 * 3_600L + 60), finishedAt = now.minusSeconds(3 * 3_600L), outcome = "COMPLETE"))
+        val disconnected = TodayPresenter.present(
+            TodayInput(readings, TodaySession(link = LinkState.WaitingForRing, ringName = "RingConn", log = log), now, ZoneOffset.UTC),
         )
         show(disconnected)
         compose.onNodeWithText("Ring unreachable — reconnecting automatically").assertIsDisplayed()
