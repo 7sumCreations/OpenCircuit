@@ -168,6 +168,7 @@ class MainActivity : ComponentActivity() {
                                     state = state,
                                     onAction = { if (it == TodayAction.OpenRing) destination = Destination.Ring else todayViewModel.onAction(it) },
                                     modifier = inner,
+                                    animate = !reducedMotion(),
                                 )
                             }
                             Destination.Ring -> {

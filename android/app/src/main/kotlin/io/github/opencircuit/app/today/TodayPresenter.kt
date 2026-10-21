@@ -11,6 +11,7 @@ import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.ringkit.SyncMeasurement
 import io.github.opencircuit.store.SyncLogEntry
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -61,6 +62,14 @@ data class TodayUiState(
     val heartRateLive: Boolean = false,
     /** The hero's SpO₂ button. */
     val spo2Measure: MeasureButtonUi = MeasureButtonUi(),
+    /** The metric tiles, in the dashboard's order; empty before the first load (the screen shows same-size placeholders). */
+    val tiles: List<TileUi> = emptyList(),
+    /** The readiness ring; null before the first load. */
+    val readiness: ReadinessUi? = null,
+    /** The one-sentence read of today; null before the first load (and on any day but today). */
+    val synthesis: String? = null,
+    /** Today's date in words ("Wednesday 30 September"). */
+    val dateLine: String = "",
 )
 
 /** What the ring session contributes to Today: its link, name, sync log, the running sync, the ring's firmware and the live measure. */
@@ -108,7 +117,14 @@ object TodayPresenter {
         val live = session.live
         val storedHr = reading(HEART_RATE, BPM, stored?.heartRate, stored != null, neverSynced, input) { it.roundToInt().toString() }
         val storedSpo2 = reading(SPO2, PERCENT, stored?.spo2, stored != null, neverSynced, input) { (it * 100).roundToInt().toString() }
+        val today = LocalDate.ofInstant(input.now, input.zone)
+        val dashboard = stored?.let { TodayDashboard.present(it.trends, today, input.now, input.zone, session.log.lastOrNull()?.finishedAt) }
+            ?: DashboardUi(dateLine = TodayDashboard.dateLine(today))
         return TodayUiState(
+            tiles = dashboard.tiles,
+            readiness = dashboard.readiness,
+            synthesis = dashboard.synthesis,
+            dateLine = dashboard.dateLine,
             loading = stored == null,
             heartRate = heartRate(storedHr, live, session.syncing),
             heartRateLive = live.mode == LiveMode.HEART_RATE,

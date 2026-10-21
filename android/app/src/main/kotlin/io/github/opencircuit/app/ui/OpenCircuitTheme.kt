@@ -1,6 +1,6 @@
 package io.github.opencircuit.app.ui
 
-import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -66,11 +66,11 @@ fun OpenCircuitTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable
  */
 object Motion {
     /** Standard spatial default: damping 0.9, stiffness 700. */
-    fun <T> spatial(animate: Boolean): AnimationSpec<T> = if (animate) spring(dampingRatio = 0.9f, stiffness = 700f) else snap()
+    fun <T> spatial(animate: Boolean): FiniteAnimationSpec<T> = if (animate) spring(dampingRatio = 0.9f, stiffness = 700f) else snap()
 
     /** Standard effects default: damping 1, stiffness 1600 (colour and opacity never overshoot). */
-    fun <T> effects(animate: Boolean): AnimationSpec<T> = if (animate) spring(dampingRatio = 1f, stiffness = 1600f) else snap()
+    fun <T> effects(animate: Boolean): FiniteAnimationSpec<T> = if (animate) spring(dampingRatio = 1f, stiffness = 1600f) else snap()
 
     /** Expressive spatial default: damping 0.8, stiffness 380. */
-    fun <T> expressive(animate: Boolean): AnimationSpec<T> = if (animate) spring(dampingRatio = 0.8f, stiffness = 380f) else snap()
+    fun <T> expressive(animate: Boolean): FiniteAnimationSpec<T> = if (animate) spring(dampingRatio = 0.8f, stiffness = 380f) else snap()
 }
