@@ -12,7 +12,9 @@ import io.github.opencircuit.app.sync.SyncRecords
 import io.github.opencircuit.app.sync.SyncTriggers
 import io.github.opencircuit.ble.LinkState
 import io.github.opencircuit.ble.LinkTeardown
+import io.github.opencircuit.ble.RefusalReason
 import io.github.opencircuit.ble.RingLink
+import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.Command
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,11 +85,7 @@ class RingSessionController(
 
     /** The live heart-rate / SpO₂ measure: writes through the link, reads the `0x15` frames; none starts during a sync. */
     val liveMeasure: LiveMeasureController = LiveMeasureController(
-        send = { command ->
-            // The entry's status query too: a sync the measure stands down for waits for its answer.
-            if (command.contentEquals(Command.statusQuery)) statusQueries.onQuery()
-            link.send(command)
-        },
+        send = ::measureSend,
         scope = scope,
         monotonicMillis = monotonicMillis,
         owner = linkOwner,
@@ -289,6 +287,23 @@ class RingSessionController(
      * refuses. False when no sync started.
      */
     fun syncNow(): Boolean = sync.syncNow()
+
+    /**
+     * Every write the live measure makes goes through here (internal: the tests drive it directly).
+     * A measure coroutine can be past its cancellation check when a sync claims the link, makes the
+     * measure stand down and opens its drain; its write must then never reach the ring, since a
+     * status query answered with `0x50` reads as the end of the history. So the status query is
+     * marked outstanding first, then the claim is read: either the sync's wait for status answers
+     * sees the query (and the open waits for its answer or 2 s), or this write sees the sync's
+     * claim and is refused. The measure it belongs to has already ended (the stand-down), so the
+     * refusal ends nothing and shows nothing. The refusal borrows [RefusalReason.HISTORY_UNSAFE]:
+     * the history is mid-drain.
+     */
+    internal suspend fun measureSend(command: ByteArray): SendResult {
+        if (command.contentEquals(Command.statusQuery)) statusQueries.onQuery()
+        if (linkOwner.current?.kind == LinkOwner.Kind.SYNC) return SendResult.Refused(RefusalReason.HISTORY_UNSAFE)
+        return link.send(command)
+    }
 
     /**
      * The user asked for the link (Scan & connect, Try again, Sync now): starts collecting if not

@@ -9,6 +9,8 @@ import io.github.opencircuit.app.sync.AutoSyncTrigger
 import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.ble.FakeRingLink
 import io.github.opencircuit.ble.LinkState
+import io.github.opencircuit.ble.RefusalReason
+import io.github.opencircuit.ble.SendResult
 import io.github.opencircuit.ringkit.Command
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -254,6 +256,38 @@ class MeasureSyncStartRaceTest {
             assertEquals(emptyList(), w.ring.writes.filter { it.hex.startsWith("02") }, "no open before the d0's answer")
             advanceTo(11_500)
             assertEquals(listOf(11_500L), w.ring.writes.filter { it.hex.startsWith("02") }.map { it.atMillis })
+        } finally {
+            w.db.close()
+        }
+    }
+
+    /**
+     * A measure coroutine that passed its cancellation check before the sync claimed the link, and
+     * reaches the send only after the sync has made it stand down and opened the drain: its write
+     * (a status query above all, whose `0x50` answer the drain would read as the end of history)
+     * is refused, never written.
+     */
+    @Test
+    fun aMeasureWriteThatArrivesAfterTheSyncHasOpenedIsRefusedNotWritten() = runTest {
+        val w = syncWorld(makeRing = ringWith(HistoryTestPages.backlog(3)))
+        try {
+            advanceTo(10_000)
+            assertTrue(w.session.syncNow())
+            var step = 0L
+            while (w.sleepOpens().isEmpty() && step < 5_000) advanceTo(10_000 + ++step)
+            assertEquals(1, w.sleepOpens().size, "the drain opened")
+            assertTrue(w.session.sync.isSyncing.value, "and still holds the link")
+
+            val late = listOf(Command.statusQuery, Command.liveHRMode, Command.fetch, Command.poll)
+            val results = late.map { w.session.measureSend(it) }
+            runCurrent()
+            assertEquals(late.map { SendResult.Refused(RefusalReason.HISTORY_UNSAFE) }, results)
+            val open = w.ring.writes.indexOfFirst { it.hex.startsWith("02") }
+            assertEquals(
+                emptyList(),
+                w.ring.writes.drop(open).map { it.hex }.filter { it == "d00000" || it == "070000" || it == "950000" || (it.startsWith("06") && it.length == 6) },
+                "no measure write after the drain's open",
+            )
         } finally {
             w.db.close()
         }
