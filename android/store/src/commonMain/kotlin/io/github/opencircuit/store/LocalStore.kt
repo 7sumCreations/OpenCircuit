@@ -11,6 +11,7 @@ import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SyncCursor
 import io.github.opencircuit.ringkit.isCumulativeCounter
+import kotlinx.coroutines.flow.Flow
 import java.time.Instant
 import java.time.ZoneId
 
@@ -447,6 +448,15 @@ class LocalStore internal constructor(
         if (pulled.isNotEmpty()) sampleDao.upsertCursors(pulled)
     }
 
+    /**
+     * Announces changes to the stored readings: one emission when collected, then one after every
+     * committed write to a table in [READING_TABLES], from any writer over this database (Room's
+     * table triggers, so a new writer is covered without being wired here). Each emission names the
+     * tables that changed. Writers over a SECOND database opened on the same file are not seen —
+     * the app keeps one database per process. Bookkeeping rows (`store_kv`, cursors) never emit.
+     */
+    fun changes(): Flow<Set<String>> = db.invalidationTracker.createFlow(*READING_TABLES.toTypedArray(), emitInitialState = true)
+
     /** Stored samples of [kind] with `from <= start < to`, oldest first. */
     suspend fun samples(kind: MetricKind, from: Instant, to: Instant): List<QuantitySample> =
         sampleDao.samples(kind.rawValue, from, to).mapNotNull { it.toSample() }
@@ -798,6 +808,10 @@ class LocalStore internal constructor(
 
         /** The kinds [insertLiveSamples] takes: what the app measures live and keeps (upstream persists these three). */
         val LIVE_KINDS: Set<MetricKind> = setOf(MetricKind.HEART_RATE, MetricKind.SPO2, MetricKind.TEMPERATURE)
+
+        /** The tables of ring readings [changes] watches: samples, daily steps and their deltas, daytime temperatures, nights, naps. */
+        val READING_TABLES: List<String> =
+            listOf("stored_sample", "stored_daily", "stored_step_sample", "stored_daytime_temp", "stored_sleep_summary", "stored_nap")
 
         /** Row ids bound in one statement: well under SQLite's 999 host parameters. */
         private const val MAX_IDS_PER_STATEMENT = 500
