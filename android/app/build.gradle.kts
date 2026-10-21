@@ -263,3 +263,12 @@ tasks.withType<Test>().configureEach {
         }
     })
 }
+
+// The build gate (`assembleDebug lintDebug`) quotes lint's verdict as evidence. On an unchanged
+// tree Gradle marks the lint analysis UP-TO-DATE and replays the stored result, so a gate run
+// could not show that lint actually ran. Lint is not part of the everyday build loop, so always
+// re-running its analysis costs the gate about 20 seconds and nothing else. Compile and packaging
+// tasks keep normal up-to-date checks: their inputs are hashed, and any source change re-runs the
+// Kotlin compiler.
+tasks.matching { it.name.startsWith("lintAnalyze") || it.name.startsWith("lintReport") }
+    .configureEach { outputs.upToDateWhen { false } }
