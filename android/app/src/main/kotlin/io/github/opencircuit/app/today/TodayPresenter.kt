@@ -82,6 +82,10 @@ data class TodayUiState(
     val pastDay: PastDayHeroUi? = null,
     /** The open tile's trend screen; null with none open. */
     val detail: TileDetailUi? = null,
+    /** [day]'s Calories card; null before the first load. */
+    val calories: CaloriesUi? = null,
+    /** [day]'s four goal rings; null before the first load. */
+    val goals: GoalsUi? = null,
 )
 
 /** What the ring session contributes to Today: its link, name, sync log, the running sync, the ring's firmware and the live measure. */
@@ -145,7 +149,7 @@ object TodayPresenter {
      */
     fun dashboard(stored: TodayStored?, facts: DashboardFacts, now: Instant, zone: ZoneId): DashboardUi {
         val today = LocalDate.ofInstant(now, zone)
-        return stored?.let { TodayDashboard.present(it.trends, it.day ?: today, now, zone, facts.lastSyncAt, facts.syncKnown) }
+        return stored?.let { TodayDashboard.present(it.trends, it.day ?: today, now, zone, facts.lastSyncAt, facts.syncKnown, it.activity, it.naps) }
             ?: DashboardUi(dateLine = TodayDashboard.dateLine(today))
     }
 
@@ -174,6 +178,8 @@ object TodayPresenter {
             // From the dashboard, not the load: the two can be one emission apart, and the day must name the values shown.
             day = dashboard.day,
             pastDay = dashboard.pastDay,
+            calories = dashboard.calories,
+            goals = dashboard.goals,
             browser = browser(input),
             loading = stored == null,
             heartRate = heartRate(storedHr, live, session.syncing),

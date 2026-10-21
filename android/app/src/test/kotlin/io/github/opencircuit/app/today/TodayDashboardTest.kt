@@ -1,9 +1,12 @@
 package io.github.opencircuit.app.today
 
 import io.github.opencircuit.ble.LinkState
+import io.github.opencircuit.ringkit.GoalHistory
+import io.github.opencircuit.ringkit.HRSample
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.ringkit.WellnessBalance
+import io.github.opencircuit.store.DayActivityInputs
 import io.github.opencircuit.store.SyncLogEntry
 import java.time.Instant
 import java.time.LocalDate
@@ -142,4 +145,41 @@ class TodayDashboardTest {
     }
 
     private fun syncedAt(t: Instant) = SyncLogEntry(startedAt = t.minusSeconds(60), finishedAt = t, outcome = "COMPLETE")
+
+    // Readiness's activity factor, as upstream's readiness card adds it (WellnessBalanceCardView.swift
+    // :194-249 @ 2d07e550): the day's Activity Score over its calorie estimate and the goals, joining
+    // only when it is above 0, and never making a readiness without a scored night.
+
+    private val today: LocalDate = LocalDate.ofInstant(now, zone)
+
+    private fun activity(steps: Long?, hr: List<HRSample> = emptyList()) = DayActivityInputs(today, hr, steps, emptyList(), null)
+
+    /** Calorie and minute goals off, so the Activity Score is the step attainment alone: 6,000 of 6,400 → 94. */
+    private val stepsOnly = GoalHistory.Goals(workdaySteps = 6_400, activeKcal = 0.0, activityMinutes = 0.0)
+
+    @Test
+    fun theDaysActivityJoinsReadinessAsItsThirdFactor() {
+        val r = assertNotNull(TodayDashboard.present(week(), today, now, zone, lastSyncAt = null, activity = activity(6_000), goals = stepsOnly).readiness)
+        // Sleep 0.82 × 0.40 + recovery (90 − 34) / 75 × 0.25 + activity 0.9375 × 0.15, over 0.80 → 82.
+        assertEquals(82, r.score)
+        assertEquals(listOf(FactorUi("Sleep", 82), FactorUi("Overnight recovery", 75), FactorUi("Activity", 94)), r.factors)
+        assertNull(r.note)
+        assertEquals("Readiness, estimate, 82 out of 100, Good. Sleep 82, overnight recovery 75, activity 94", r.description)
+    }
+
+    /** A fresh morning (no steps, resting heart rate only) scores activity 0: it does not drag readiness down. */
+    @Test
+    fun aDayWithNoActivityYetLeavesReadinessOnTheNight() {
+        val resting = (0 until 6).map { HRSample(58, now.minusSeconds(3_600L - it * 300)) }
+        val r = assertNotNull(TodayDashboard.present(week(), today, now, zone, lastSyncAt = null, activity = activity(null, resting), goals = stepsOnly).readiness)
+        assertEquals(79, r.score)
+        assertEquals(listOf("Sleep", "Overnight recovery"), r.factors.map { it.label })
+    }
+
+    @Test
+    fun activityAloneNeverMakesAReadiness() {
+        val r = assertNotNull(TodayDashboard.present(week(lastNight = false), today, now, zone, lastSyncAt = now, activity = activity(10_000), goals = stepsOnly).readiness)
+        assertNull(r.score)
+        assertEquals("Last night's sleep hasn't synced yet. Readiness appears once it does.", r.empty)
+    }
 }

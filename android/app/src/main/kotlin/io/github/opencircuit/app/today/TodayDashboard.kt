@@ -1,12 +1,15 @@
 package io.github.opencircuit.app.today
 
 import io.github.opencircuit.app.ui.charts.TrendGeometry
+import io.github.opencircuit.health.EnergyProfile
 import io.github.opencircuit.ringkit.BaselineTrend
-import io.github.opencircuit.ringkit.GoalDefaults
+import io.github.opencircuit.ringkit.GoalHistory
 import io.github.opencircuit.ringkit.SwiftFormat
 import io.github.opencircuit.ringkit.TemperatureUnit
 import io.github.opencircuit.ringkit.TodaySynthesis
+import io.github.opencircuit.ringkit.UserProfile
 import io.github.opencircuit.ringkit.WellnessBalance
+import io.github.opencircuit.store.DayActivityInputs
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -91,15 +94,19 @@ data class DashboardUi(
     val pastDay: PastDayHeroUi? = null,
     /** The day all of the above is for; null before the first load. The screen's day comes from here, so it can never name one day over another day's values. */
     val day: LocalDate? = null,
+    /** The day's Calories card; null before the first load. */
+    val calories: CaloriesUi? = null,
+    /** The day's four goal rings; null before the first load. */
+    val goals: GoalsUi? = null,
 )
 
 /**
  * The dashboard's words and shapes for one day from the stored window. Pure: the clock and the
  * zone are inputs. Readiness follows upstream's readiness card (`WellnessBalanceCardView.swift`
- * :195-262 @ 2d07e550): anchored on the night keyed on the day, from its sleep score and overnight
- * stress; the activity factor joins when the day's activity estimate lands with the Calories card,
- * and Vitals Status is not on this screen (upstream passes none either). The synthesis line speaks
- * about now, so it is built for today only.
+ * :194-262 @ 2d07e550): anchored on the night keyed on the day, from its sleep score and overnight
+ * stress, plus the day's Activity Score (over the same calorie estimate as the Calories card) once
+ * it is above 0; Vitals Status is not on this screen (upstream passes none either). The synthesis
+ * line speaks about now, so it is built for today only.
  */
 object TodayDashboard {
 
@@ -108,15 +115,30 @@ object TodayDashboard {
      * Before it has (or when reading it failed) an empty log proves nothing, so nothing here claims
      * the ring never synced.
      */
-    fun present(trends: TodayTrends, day: LocalDate, now: Instant, zone: ZoneId, lastSyncAt: Instant?, syncKnown: Boolean = true): DashboardUi {
+    fun present(
+        trends: TodayTrends,
+        day: LocalDate,
+        now: Instant,
+        zone: ZoneId,
+        lastSyncAt: Instant?,
+        syncKnown: Boolean = true,
+        /** [day]'s activity inputs (the store's one day reader); null when none were read. */
+        activity: DayActivityInputs? = null,
+        naps: List<GoalHistory.NapSleep> = emptyList(),
+        goals: GoalHistory.Goals = GOALS,
+        profile: UserProfile = EnergyProfile.DEFAULT,
+    ): DashboardUi {
         val isToday = day == LocalDate.ofInstant(now, zone)
         val dayStart = day.atStartOfDay(zone).toInstant()
-        val stepGoal = GoalDefaults.stepsGoal(dayStart, zone) { null }
+        val stepGoal = goals.stepGoal(dayStart, zone)
+        val dayActivity = CaloriesGoals.present(activity, trends.nights, naps, day, now, zone, goals, profile)
         val tiles = TodayTiles.build(
             trends.points, trends.restingHR, TemperatureUnit.CELSIUS, now = now, zone = zone,
             heartRateRanges = trends.heartRateRanges, stepGoal = stepGoal, shownDay = day,
         )
-        val (readiness, report) = readiness(trends, dayStart, isToday, neverSynced = syncKnown && lastSyncAt == null)
+        // Activity joins only once the day has some: a fresh 0-step morning does not drag readiness down (upstream :240-242).
+        val activityScore = dayActivity.activity?.score?.takeIf { it > 0 }
+        val (readiness, report) = readiness(trends, dayStart, isToday, neverSynced = syncKnown && lastSyncAt == null, activityScore)
         // With no data in the window and the log unread, the sentence would have to guess between
         // "no data yet" and "more than two weeks old": it waits for the log.
         val unsure = !syncKnown && lastSyncAt == null && trends.newestSampleAt == null
@@ -126,7 +148,7 @@ object TodayDashboard {
             null
         }
         val pastDay = if (isToday) null else pastDayHero(trends, day, zone)
-        return DashboardUi(tiles.map { tileUi(it, now, zone) }, readiness, synthesis, dateLine(day), pastDay, day)
+        return DashboardUi(tiles.map { tileUi(it, now, zone) }, readiness, synthesis, dateLine(day), pastDay, day, dayActivity.calories, dayActivity.goals)
     }
 
     /** "Wednesday 30 September". */
@@ -180,7 +202,7 @@ object TodayDashboard {
     )
 
     /** The readiness card for the night keyed on [dayStart], and what it reports to the synthesis line. */
-    private fun readiness(trends: TodayTrends, dayStart: Instant, isToday: Boolean, neverSynced: Boolean): Pair<ReadinessUi, ReadinessReport> {
+    private fun readiness(trends: TodayTrends, dayStart: Instant, isToday: Boolean, neverSynced: Boolean, activityScore: Int?): Pair<ReadinessUi, ReadinessReport> {
         val heading = if (isToday) "Readiness" else "Readiness that day"
         val point = trends.points.firstOrNull { it.date == dayStart }
         if (dayStart !in trends.nightKeys) {
@@ -194,7 +216,7 @@ object TodayDashboard {
         val asleep = point?.sleepMinutes
         // A score or stress of 0 is "not computed", as upstream's card reads it (`s.sleepScore > 0`).
         val result = WellnessBalance.anchoredScore(
-            WellnessBalance.Input(sleepScore = point?.sleepScore?.takeIf { it > 0 }, overnightStress = point?.stressScore?.takeIf { it > 0 }),
+            WellnessBalance.Input(sleepScore = point?.sleepScore?.takeIf { it > 0 }, overnightStress = point?.stressScore?.takeIf { it > 0 }, activityScore = activityScore),
         )
         if (result == null) {
             val empty = if (isToday) "Last night has no sleep score, so there's no readiness today." else "That night has no sleep score, so there's no readiness for it."
@@ -232,6 +254,13 @@ object TodayDashboard {
         WellnessBalance.Tier.GOOD -> "–"
         WellnessBalance.Tier.NEEDS_IMPROVEMENT -> "!"
     }
+
+    /**
+     * The goals the rings and the step tile are judged on: the stored goal settings once the app
+     * stores any (it has no goals screen yet, so every key reads as unset and upstream's defaults
+     * answer, `GoalDefaults`).
+     */
+    private val GOALS: GoalHistory.Goals = GoalHistory.Goals.fromDefaults { null }
 
     private val DATE_LINE: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH)
     private val SHORT_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)

@@ -49,6 +49,8 @@ data class TodayTrends(
     val newestSampleAt: Instant? = null,
     /** The wake days (start of day) a stored night is keyed on, scored or not: readiness tells "no night" from "no score". */
     val nightKeys: Set<Instant> = emptySet(),
+    /** The window's stored nights as read: the Sleep goal ring credits the one that ended on its day. */
+    val nights: List<TodayNight> = emptyList(),
 ) {
     companion object {
 
@@ -101,7 +103,7 @@ data class TodayTrends(
                 inputs.hr.maxOfOrNull { it.start }, inputs.hrv.maxOfOrNull { it.start }, inputs.spo2.maxOfOrNull { it.start },
                 inputs.rr.maxOfOrNull { it.start }, inputs.dayTemps.maxOfOrNull { it.time }, inputs.stepDeltas.maxOfOrNull { it.end },
             ).maxOrNull()
-            return TodayTrends(points, restingHR, ranges, newest, nightsByDay.keys.map { it.atStartOfDay(zone).toInstant() }.toSet())
+            return TodayTrends(points, restingHR, ranges, newest, nightsByDay.keys.map { it.atStartOfDay(zone).toInstant() }.toSet(), inputs.nights)
         }
 
         /** The mean of the values above [minValue] whose start is inside [window] (both ends included, as `DateInterval.contains`). */

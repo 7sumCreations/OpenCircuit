@@ -1,7 +1,9 @@
 package io.github.opencircuit.app.today
 
+import io.github.opencircuit.ringkit.GoalHistory
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
+import io.github.opencircuit.store.DayActivityInputs
 import io.github.opencircuit.store.LocalStore
 import io.github.opencircuit.store.SleepStore
 import io.github.opencircuit.store.StoreDatabase
@@ -32,6 +34,10 @@ data class TodayStored(
     val windowDays: Int = TodayTiles.WINDOW_DAYS,
     /** The first stored reading of any kind: where the days the user can browse begin; null with nothing stored. */
     val earliest: Instant? = null,
+    /** [day]'s activity inputs, from the store's one day reader (the Health Connect energy writer reads it too); null before a load. */
+    val activity: DayActivityInputs? = null,
+    /** The naps that start on [day]: the Sleep goal ring credits them with the night that ended on it. */
+    val naps: List<GoalHistory.NapSleep> = emptyList(),
 )
 
 /** Where Today's stored readings come from, and when they changed. */
@@ -68,14 +74,18 @@ class TodayRepository(
         require(windowDays >= 1) { "a window has at least one day" }
         val db = database()
         val store = LocalStore(db)
+        val sleep = SleepStore(db)
         TodayStored(
             heartRate = store.latestSample(MetricKind.HEART_RATE),
             spo2 = store.latestSample(MetricKind.SPO2),
-            trends = TodayTrends.of(window(store, SleepStore(db), day, zone, windowDays), zone),
+            trends = TodayTrends.of(window(store, sleep, day, zone, windowDays), zone),
             day = day,
             windowDays = windowDays,
             // The oldest of each kind, by its (kind, start) index: one row each, whatever is kept.
             earliest = MetricKind.entries.mapNotNull { store.earliestSample(it)?.start }.minOrNull(),
+            activity = store.dayActivityInputs(day, zone),
+            naps = sleep.naps(day.atStartOfDay(zone).toInstant(), day.plusDays(1).atStartOfDay(zone).toInstant())
+                .map { GoalHistory.NapSleep(it.effectiveStart, it.effectiveEnd, it.asleepMin) },
         )
     }
 

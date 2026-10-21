@@ -216,10 +216,12 @@ data class TodayTile(
         return parts.joinToString(". ")
     }
 
-    private companion object {
-        val SHORT_DAY: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE d", Locale.ENGLISH)
+    internal companion object {
+        private val SHORT_DAY: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE d", Locale.ENGLISH)
+
+        /** A day with no stored step total: said instead of 0, on the tile and on the Steps ring. */
         const val STEPS_NOT_RECORDED = "Steps not recorded"
-        const val NO_READING_THAT_DAY = "No reading that day"
+        private const val NO_READING_THAT_DAY = "No reading that day"
     }
 }
 

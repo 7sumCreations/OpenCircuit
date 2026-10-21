@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import io.github.opencircuit.app.ui.LocalTones
 import io.github.opencircuit.app.ui.Motion
 import io.github.opencircuit.app.ui.charts.Sparkline
+import io.github.opencircuit.ringkit.GoalHistory
 import io.github.opencircuit.ringkit.WellnessBalance
 import java.time.LocalDate
 import java.util.Locale
@@ -188,8 +189,114 @@ private fun DayPage(
         } else {
             items(state.tiles, key = { it.metric.name }) { MetricTile(it, fontScale, animate, onAction) }
         }
+        wide("calories") { CaloriesCard(state.calories.takeIf { ours }) }
+        wide("goals") { GoalsCard(state.goals.takeIf { ours }) }
     }
 }
+
+/**
+ * The day's Calories card: the total, a bar split into resting and active with its legend, and
+ * what it is an estimate of — or why there is none. One node saying [CaloriesUi.description]; null
+ * (its day still loading) holds the card's place with a dash.
+ */
+@Composable
+private fun CaloriesCard(calories: CaloriesUi?) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag(TODAY_CALORIES_TAG).clearAndSetSemantics { calories?.let { contentDescription = it.description } },
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(calories?.heading ?: "Calories", style = MaterialTheme.typography.titleMedium)
+                calories?.qualifier?.let { Text("  $it", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            val total = calories?.total
+            if (total == null) {
+                Text(calories?.empty ?: "—", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(total, style = MaterialTheme.typography.headlineMedium)
+                    Text(" kcal", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
+                }
+                val primary = MaterialTheme.colorScheme.primary
+                Canvas(Modifier.fillMaxWidth().height(12.dp)) {
+                    val split = size.width * calories.restingShare
+                    drawRect(primary.copy(alpha = 0.45f), size = Size(split, size.height))
+                    drawRect(primary, topLeft = Offset(split, 0f), size = Size(size.width - split, size.height))
+                }
+                Text("Resting ${calories.resting} · Active ${calories.active}", style = MaterialTheme.typography.bodySmall)
+                Text(CALORIES_FOOTNOTE, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/**
+ * The day's four goal rings (steps, active kcal, active minutes, sleep), each one node saying its
+ * value, goal and percent ([GoalRingUi.description]); a ring with nothing to show draws only its
+ * track and says why. Null (its day still loading) holds the card's place with four empty tracks.
+ */
+@Composable
+private fun GoalsCard(goals: GoalsUi?) {
+    val tones = LocalTones.current
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag(TODAY_GOALS_TAG),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Goals", style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val rings = goals?.rings
+                for (i in 0 until GOAL_RINGS) {
+                    val ring = rings?.getOrNull(i)
+                    Column(
+                        Modifier.weight(1f).then(if (ring != null) Modifier.testTag(todayGoalTag(ring.ring)) else Modifier)
+                            .clearAndSetSemantics { ring?.let { contentDescription = it.description } },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        val track = Color(tones.tonal)
+                        val arc = MaterialTheme.colorScheme.primary
+                        Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
+                            Canvas(Modifier.fillMaxSize()) {
+                                val stroke = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
+                                val inset = stroke.width / 2
+                                val arcSize = Size(size.width - stroke.width, size.height - stroke.width)
+                                drawArc(track, -90f, 360f, false, Offset(inset, inset), arcSize, style = stroke)
+                                val fraction = ring?.fraction ?: 0f
+                                if (fraction > 0f) drawArc(arc, -90f, 360f * fraction, false, Offset(inset, inset), arcSize, style = stroke)
+                            }
+                            Text(ring?.centre ?: "—", style = MaterialTheme.typography.labelLarge)
+                        }
+                        Text(ring?.label ?: "", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            ring?.detail ?: "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            goals?.note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+    }
+}
+
+/** The Calories card. */
+const val TODAY_CALORIES_TAG = "today.calories"
+
+/** The Goals card. */
+const val TODAY_GOALS_TAG = "today.goals"
+
+/** One goal ring, by its ring. */
+fun todayGoalTag(ring: GoalHistory.Ring): String = "today.goal." + ring.rawValue
+
+private const val GOAL_RINGS = 4
+private const val CALORIES_FOOTNOTE = "An estimate from heart rate, steps and a standard body profile."
 
 /** An item across the whole grid width. */
 private fun LazyGridScope.wide(key: String, content: @Composable () -> Unit) =
