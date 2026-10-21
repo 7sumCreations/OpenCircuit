@@ -28,7 +28,7 @@ class RestingHrDayTest {
     private val hc = FakeHealthConnect(clock::now).apply { grantAll() }
     private val samples = InMemoryHealthSamples()
     private val sleep = InMemoryHealthSleep()
-    private val activity = InMemoryHealthActivity(zone)
+    private val activity = InMemoryHealthActivity(zone, samples)
 
     private fun writer() = HealthWriter(
         hc, samples, WriteGeneration(InMemoryWriteGenerations()), InMemoryHealthFailures(), clock::now, { zone }, { RingDevice("Gen 2") },

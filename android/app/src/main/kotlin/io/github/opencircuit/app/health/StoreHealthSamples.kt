@@ -99,6 +99,10 @@ class StoreHealthActivity(
 
     override suspend fun forgetEnergyBefore(day: LocalDate) = blobs().forgetHealthEnergyWrittenBefore(day)
 
+    // The store's one day reader, the one Today's Calories card reads; a day with no stored total is 0 steps to the writer.
+    override suspend fun dayInputs(day: LocalDate, zone: ZoneId): ActiveEnergyDays.DayInputs =
+        store().dayActivityInputs(day, zone).let { ActiveEnergyDays.DayInputs(it.heartRate, it.steps ?: 0, it.stepWindows, it.sleepWindow) }
+
     private fun StoredStepRow.toStepRow() = StepRow(id, sample.start, sample.end, sample.delta)
 }
 

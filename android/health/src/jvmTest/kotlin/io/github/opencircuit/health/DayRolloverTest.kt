@@ -26,7 +26,7 @@ class DayRolloverTest {
     private val clock = TestClock(Instant.parse("2025-07-28T16:00:00Z"))
     private val hc = FakeHealthConnect(clock::now).apply { grantAll() }
     private val samples = InMemoryHealthSamples()
-    private val activity = InMemoryHealthActivity(newYork)
+    private val activity = InMemoryHealthActivity(newYork, samples)
     private val generations = InMemoryWriteGenerations()
 
     private fun writer() = HealthWriter(

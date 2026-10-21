@@ -4,15 +4,19 @@ import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CumulativeMetricAccumulator
 import io.github.opencircuit.ringkit.CumulativeMetricState
+import io.github.opencircuit.ringkit.DateInterval
+import io.github.opencircuit.ringkit.HRSample
 import io.github.opencircuit.ringkit.LiveHR
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.ringkit.SleepEdit
 import io.github.opencircuit.ringkit.SleepSegment
+import io.github.opencircuit.ringkit.StepWindow
 import io.github.opencircuit.ringkit.SyncCursor
 import io.github.opencircuit.ringkit.isCumulativeCounter
 import kotlinx.coroutines.flow.Flow
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 
 // The store's ingest path: ring samples and the per-metric sync cursor, committed together.
@@ -507,6 +511,26 @@ class LocalStore internal constructor(
 
     /** Step deltas with `from <= start < to`, oldest first. */
     suspend fun stepSamples(from: Instant, to: Instant): List<StepSample> = dailyDao.stepSamples(from, to).map { it.toStepSample() }
+
+    /**
+     * Local [day]'s activity inputs in [zone] ([DayActivityInputs]): the one reader the Health
+     * Connect energy writer and Today's Calories card and goal rings share, so the two can never
+     * price a day differently. Every bound is a range read on its table's time index.
+     */
+    suspend fun dayActivityInputs(day: LocalDate, zone: ZoneId): DayActivityInputs {
+        val dayStart = day.atStartOfDay(zone).toInstant()
+        val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant()
+        val nights = SleepStore(db).sleepSummaries(day.minusDays(2).atStartOfDay(zone).toInstant(), day.plusDays(2).atStartOfDay(zone).toInstant())
+        return DayActivityInputs(
+            day = day,
+            heartRate = samples(MetricKind.HEART_RATE, dayStart, dayEnd).map { HRSample(it.value.toInt(), it.start, it.end) },
+            steps = dailyDao.dailyOn(dayStart)?.steps,
+            stepWindows = stepSamples(dayStart.minusSeconds(DayActivityInputs.STEP_WINDOW_LOOKBACK_SECONDS), dayEnd)
+                .map { StepWindow(it.start, it.end, it.delta.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) },
+            sleepWindow = nights.filter { it.inBedEnd.isAfter(it.inBedStart) && !it.inBedEnd.isBefore(dayStart) && it.inBedEnd.isBefore(dayEnd) }
+                .maxByOrNull { it.inBedEnd }?.let { DateInterval(it.inBedStart, it.inBedEnd) },
+        )
+    }
 
     /**
      * The step deltas not yet written to Health Connect, every day, oldest first (ties in row order),

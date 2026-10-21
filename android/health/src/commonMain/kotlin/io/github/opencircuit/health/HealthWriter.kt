@@ -1,6 +1,5 @@
 package io.github.opencircuit.health
 
-import io.github.opencircuit.ringkit.DateInterval
 import io.github.opencircuit.ringkit.HRSample
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
@@ -8,7 +7,6 @@ import io.github.opencircuit.ringkit.RestingHR
 import io.github.opencircuit.ringkit.SleepHealthGate
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SleepStage
-import io.github.opencircuit.ringkit.StepWindow
 import io.github.opencircuit.ringkit.UserProfile
 import io.github.opencircuit.ringkit.containsAssertedTime
 import io.github.opencircuit.ringkit.healthPublishable
@@ -579,10 +577,11 @@ class HealthWriter(
         /**
          * Active energy as absolute per-bucket records ([ActiveEnergyDays], PORTING.md D-295): each of
          * the last [ActiveEnergyDays.LOOKBACK_DAYS] local days is estimated again from what the store
-         * holds — its heart rate, its steps and their windows, the night that ended in it (its heart
-         * rate is not exercise) — and every bucket whose kilocalories changed is written under its id;
-         * what each accepted bucket carries is kept per day, so the next flush writes only changes and
-         * can lower a bucket to 0. What was kept for older days is forgotten.
+         * holds for it ([HealthActivityStore.dayInputs], the day reader Today's Calories card shares) —
+         * its heart rate, its steps and their windows, the night that ended in it (its heart rate is
+         * not exercise) — and every bucket whose kilocalories changed is written under its id; what
+         * each accepted bucket carries is kept per day, so the next flush writes only changes and can
+         * lower a bucket to 0. What was kept for older days is forgotten.
          */
         private suspend fun writeActiveEnergy(granted: Set<HealthPermission>) {
             val type = RecordType.ACTIVE_CALORIES_BURNED
@@ -590,20 +589,10 @@ class HealthWriter(
             val today = now.atZone(zone).toLocalDate()
             val first = today.minusDays(ActiveEnergyDays.LOOKBACK_DAYS - 1)
             activity.forgetEnergyBefore(first)
-            val nights = store.nights(first.minusDays(2).atStartOfDay(zone).toInstant(), today.plusDays(2).atStartOfDay(zone).toInstant())
             val perDay = LinkedHashMap<LocalDate, Pair<Map<Instant, Double>, List<ActiveEnergyDays.Change>>>()
             for (offset in 0 until ActiveEnergyDays.LOOKBACK_DAYS) {
                 val day = first.plusDays(offset)
-                val dayStart = day.atStartOfDay(zone).toInstant()
-                val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant()
-                val inputs = ActiveEnergyDays.DayInputs(
-                    heartRate = store.samples(MetricKind.HEART_RATE, dayStart, dayEnd).map { HRSample(it.value.toInt(), it.start, it.end) },
-                    steps = activity.daySteps(day),
-                    stepWindows = activity.steps(dayStart.minusSeconds(SECONDS_PER_DAY), dayEnd)
-                        .map { StepWindow(it.start, it.end, it.count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) },
-                    sleepWindow = nights.filter { it.inBedEnd.isAfter(it.inBedStart) && !it.inBedEnd.isBefore(dayStart) && it.inBedEnd.isBefore(dayEnd) }
-                        .maxByOrNull { it.inBedEnd }?.let { DateInterval(it.inBedStart, it.inBedEnd) },
-                )
+                val inputs = activity.dayInputs(day, zone)
                 val written = activity.energyWritten(day)
                 val changes = ActiveEnergyDays.changes(day, zone, ActiveEnergyDays.buckets(day, zone, inputs, profile()), written, now)
                 if (changes.isNotEmpty()) perDay[day] = written to changes

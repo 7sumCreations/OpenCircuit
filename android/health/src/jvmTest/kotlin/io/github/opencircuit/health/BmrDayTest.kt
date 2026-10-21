@@ -26,7 +26,7 @@ class BmrDayTest {
     private val clock = TestClock(Instant.parse("2026-10-16T12:00:00Z"))
     private val hc = FakeHealthConnect(clock::now).apply { grantAll() }
     private val samples = InMemoryHealthSamples()
-    private val activity = InMemoryHealthActivity(zone)
+    private val activity = InMemoryHealthActivity(zone, samples)
 
     private fun writer() = HealthWriter(
         hc, samples, WriteGeneration(InMemoryWriteGenerations()), InMemoryHealthFailures(), clock::now, { zone }, { RingDevice("Gen 2") },

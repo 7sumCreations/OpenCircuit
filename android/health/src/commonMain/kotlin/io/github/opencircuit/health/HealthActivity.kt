@@ -44,6 +44,13 @@ interface HealthActivityStore {
     /** Forgets what was written for every day before [day]. */
     suspend fun forgetEnergyBefore(day: LocalDate)
 
+    /**
+     * What local [day]'s active-energy estimate is made from in [zone]: its heart rate, its step
+     * total and step windows, and the in-bed window of the night that ended in it. The app answers
+     * with the store's one day reader, the same one its Calories card reads.
+     */
+    suspend fun dayInputs(day: LocalDate, zone: ZoneId): ActiveEnergyDays.DayInputs
+
     companion object {
         /** Holds nothing: a writer built without steps or energy. */
         val NONE: HealthActivityStore = object : HealthActivityStore {
@@ -56,6 +63,7 @@ interface HealthActivityStore {
             override suspend fun energyWritten(day: LocalDate): Map<Instant, Double> = emptyMap()
             override suspend fun setEnergyWritten(day: LocalDate, written: Map<Instant, Double>) = Unit
             override suspend fun forgetEnergyBefore(day: LocalDate) = Unit
+            override suspend fun dayInputs(day: LocalDate, zone: ZoneId) = ActiveEnergyDays.DayInputs(emptyList(), 0, emptyList(), null)
         }
     }
 }

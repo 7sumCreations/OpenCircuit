@@ -1,5 +1,9 @@
 package io.github.opencircuit.health
 
+import io.github.opencircuit.ringkit.DateInterval
+import io.github.opencircuit.ringkit.HRSample
+import io.github.opencircuit.ringkit.MetricKind
+import io.github.opencircuit.ringkit.StepWindow
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -9,8 +13,12 @@ import java.time.ZoneId
  * (`:store` `pendingStepSampleRows` / `markStepSamplesWritten` / `todaySteps` and the `store_kv`
  * marks): pending is every unwritten row, oldest first (ties in row order); each added row gets the
  * next row id; a day's total is the sum of the rows whose end falls on that local day in [zone].
+ * A day's energy inputs follow the store's day reader (`:store` `LocalStore.dayActivityInputs`),
+ * taking heart rate and nights from [samples]: the day's heart rate, its total, the step rows that
+ * start from a day before its start to its end, the latest night (keyed within two days of it) whose
+ * non-empty in-bed window ended in it.
  */
-class InMemoryHealthActivity(private val zone: ZoneId) : HealthActivityStore {
+class InMemoryHealthActivity(private val zone: ZoneId, private val samples: HealthSampleStore = InMemoryHealthSamples()) : HealthActivityStore {
     private val lock = Any()
     private val rows = mutableListOf<StepRow>()
     private val written = mutableSetOf<Long>()
@@ -54,4 +62,17 @@ class InMemoryHealthActivity(private val zone: ZoneId) : HealthActivityStore {
     }
 
     override suspend fun forgetEnergyBefore(day: LocalDate): Unit = synchronized(lock) { energy.keys.removeAll { it.isBefore(day) } }
+
+    override suspend fun dayInputs(day: LocalDate, zone: ZoneId): ActiveEnergyDays.DayInputs {
+        val dayStart = day.atStartOfDay(zone).toInstant()
+        val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant()
+        val nights = samples.nights(day.minusDays(2).atStartOfDay(zone).toInstant(), day.plusDays(2).atStartOfDay(zone).toInstant())
+        return ActiveEnergyDays.DayInputs(
+            heartRate = samples.samples(MetricKind.HEART_RATE, dayStart, dayEnd).map { HRSample(it.value.toInt(), it.start, it.end) },
+            steps = daySteps(day),
+            stepWindows = steps(dayStart.minusSeconds(86_400), dayEnd).map { StepWindow(it.start, it.end, it.count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) },
+            sleepWindow = nights.filter { it.inBedEnd.isAfter(it.inBedStart) && !it.inBedEnd.isBefore(dayStart) && it.inBedEnd.isBefore(dayEnd) }
+                .maxByOrNull { it.inBedEnd }?.let { DateInterval(it.inBedStart, it.inBedEnd) },
+        )
+    }
 }
