@@ -1,5 +1,6 @@
 package io.github.opencircuit.app.today
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import io.github.opencircuit.app.ring.everyMinute
 import io.github.opencircuit.app.session.SessionHost
@@ -7,6 +8,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
@@ -45,30 +48,58 @@ class TodayViewModel(
     private val log: (String) -> Unit = {},
     /** What Today's own actions do to the ring session. */
     private val commands: TodayCommands = TodayCommands.NONE,
+    /** Where the picked day lives, so it survives the activity being recreated and the process being killed. */
+    private val saved: SavedStateHandle = SavedStateHandle(),
 ) : ViewModel(scope) {
 
     /** The Today screen's state. */
     val uiState: StateFlow<TodayUiState>
 
-    /** Today's own actions (pull to refresh, the hero's Measure / Stop, the overdue chip's Sync now); navigation is the host's. */
+    /** Dates marked because data landed on them while another day was open; a visit clears its mark. */
+    private val marks = MutableStateFlow<Set<LocalDate>>(emptySet())
+
+    /** Today's own actions (pull to refresh, the hero's Measure / Stop, the overdue chip's Sync now, the day browser); tabs are the host's. */
     fun onAction(action: TodayAction) {
         when (action) {
             TodayAction.Refresh -> commands.refresh()
             TodayAction.MeasureSpO2 -> commands.measureSpO2()
             TodayAction.StopMeasure -> commands.stopMeasure()
             TodayAction.OpenRing -> Unit
+            is TodayAction.SelectDay -> select(action.day)
+            TodayAction.ShowToday -> select(today())
         }
     }
 
+    private fun today(): LocalDate = LocalDate.ofInstant(wallClock(), zone())
+
+    /**
+     * A past day is kept as its date, so only the user moves it; today (or later) is kept as no
+     * date at all, so Today follows the clock into the next day.
+     */
+    private fun select(day: LocalDate) {
+        // Set to null, never removed: a removed key stops updating the flow already handed out.
+        saved[PICKED_DAY] = if (day.isBefore(today())) day.toEpochDay() else null
+        marks.update { it - day }
+    }
+
     init {
-        val stored: Flow<TodayStored?> = (source?.revisions() ?: flowOf(0L))
-            .transformLatest<Long, TodayStored?> {
+        val ticks = clockTicks.shareIn(scope, SharingStarted.Eagerly, replay = 1)
+        val picked: Flow<LocalDate?> = saved.getStateFlow<Long?>(PICKED_DAY, null).map { it?.let(LocalDate::ofEpochDay) }
+        // The day on screen: the picked one, or today — re-read on every tick, so Today turns over at local midnight.
+        val shown = combine(picked, ticks) { p, _ -> p ?: today() }.distinctUntilChanged()
+        var previous: TodayStored? = null
+        // One load per revision and per day shown; a new request cancels the one it replaces.
+        val stored: Flow<TodayStored?> = combine(source?.revisions() ?: flowOf(0L), shown) { _, day -> day }
+            .transformLatest<LocalDate, TodayStored?> { day ->
                 if (source == null) {
                     emit(TodayStored())
                 } else {
                     try {
                         val z = zone()
-                        emit(source.load(LocalDate.ofInstant(wallClock(), z), z))
+                        val loaded = source.load(day, z)
+                        marks.update { (it + DayMarks.landed(previous, loaded, z)) - day }
+                        previous = loaded
+                        emit(loaded)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -84,12 +115,17 @@ class TodayViewModel(
         // Each read twice below, each run once: one load per revision, one session collection.
         val loads = stored.shareIn(scope, SharingStarted.Eagerly, replay = 1)
         val parts = session.shareIn(scope, SharingStarted.Eagerly, replay = 1)
-        val ticks = clockTicks.shareIn(scope, SharingStarted.Eagerly, replay = 1)
         val facts = parts.map(DashboardFacts::of).distinctUntilChanged()
         val dashboard = combine(loads, facts, ticks) { s, f, _ -> TodayPresenter.dashboard(s, f, wallClock(), zone()) }
-        uiState = combine(loads, parts, dashboard, ticks) { s, parts, built, _ ->
-            TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built))
+        val browsing = combine(picked, marks) { p, m -> p to m }
+        uiState = combine(loads, parts, dashboard, ticks, browsing) { s, parts, built, _, (p, m) ->
+            TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built, picked = p, marked = m))
         }.stateIn(scope, SharingStarted.Eagerly, TodayUiState())
+    }
+
+    private companion object {
+        /** The picked past day's epoch day in the saved state; absent on Today. */
+        const val PICKED_DAY = "today.pickedDay"
     }
 }
 

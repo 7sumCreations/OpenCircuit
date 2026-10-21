@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.withIndex
 import kotlinx.coroutines.withContext
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.coroutines.CoroutineContext
@@ -25,6 +26,12 @@ data class TodayStored(
     val spo2: QuantitySample? = null,
     /** The two-week window ending on the day loaded: the tiles', readiness card's and synthesis line's data. */
     val trends: TodayTrends = TodayTrends(),
+    /** The day this load is for; null for a load not made for a day (the screen then shows today). */
+    val day: LocalDate? = null,
+    /** How many days [trends] covers, ending on [day]. */
+    val windowDays: Int = TodayTiles.WINDOW_DAYS,
+    /** The first stored reading of any kind: where the days the user can browse begin; null with nothing stored. */
+    val earliest: Instant? = null,
 )
 
 /** Where Today's stored readings come from, and when they changed. */
@@ -35,9 +42,10 @@ interface TodaySource {
     /**
      * What Today shows for [day] in [zone], read off the main thread. The hero's readings are the
      * NEWEST stored, whatever their day: the screen prints when each was taken ("as of Mon 19 Oct ·
-     * 2 days ago"), so an old reading never reads as today's. The day bounds the per-day reads.
+     * 2 days ago"), so an old reading never reads as today's. The day bounds the per-day reads: the
+     * [windowDays] days ending on it (two weeks for the tiles; thirty for a tile's 30-day trend).
      */
-    suspend fun load(day: LocalDate, zone: ZoneId): TodayStored
+    suspend fun load(day: LocalDate, zone: ZoneId, windowDays: Int = TodayTiles.WINDOW_DAYS): TodayStored
 }
 
 /**
@@ -56,25 +64,30 @@ class TodayRepository(
 
     override fun revisions(): Flow<Long> = revisions(storeChanges(database), settle)
 
-    override suspend fun load(day: LocalDate, zone: ZoneId): TodayStored = withContext(io) {
+    override suspend fun load(day: LocalDate, zone: ZoneId, windowDays: Int): TodayStored = withContext(io) {
+        require(windowDays >= 1) { "a window has at least one day" }
         val db = database()
         val store = LocalStore(db)
         TodayStored(
             heartRate = store.latestSample(MetricKind.HEART_RATE),
             spo2 = store.latestSample(MetricKind.SPO2),
-            trends = TodayTrends.of(window(store, SleepStore(db), day, zone), zone),
+            trends = TodayTrends.of(window(store, SleepStore(db), day, zone, windowDays), zone),
+            day = day,
+            windowDays = windowDays,
+            // The oldest of each kind, by its (kind, start) index: one row each, whatever is kept.
+            earliest = MetricKind.entries.mapNotNull { store.earliestSample(it)?.start }.minOrNull(),
         )
     }
 
     /**
-     * The [TodayTiles.WINDOW_DAYS] days ending on [day]: the nights keyed on them, their step totals,
-     * and the readings from the evening before the first (its night's in-bed window starts there) to
-     * the end of [day] — each a range read on its table's time index, so the cost is the window's,
-     * never the history's.
+     * The [windowDays] days ending on [day]: the nights keyed on them, their step totals, and the
+     * readings from the evening before the first (its night's in-bed window starts there) to the end
+     * of [day] — each a range read on its table's time index, so the cost is the window's, never the
+     * history's.
      */
-    private suspend fun window(store: LocalStore, sleep: SleepStore, day: LocalDate, zone: ZoneId): TodayWindowInputs {
-        val first = day.minusDays(TodayTiles.WINDOW_DAYS - 1L).atStartOfDay(zone).toInstant()
-        val readingsFrom = day.minusDays(TodayTiles.WINDOW_DAYS.toLong()).atStartOfDay(zone).toInstant()
+    private suspend fun window(store: LocalStore, sleep: SleepStore, day: LocalDate, zone: ZoneId, windowDays: Int): TodayWindowInputs {
+        val first = day.minusDays(windowDays - 1L).atStartOfDay(zone).toInstant()
+        val readingsFrom = day.minusDays(windowDays.toLong()).atStartOfDay(zone).toInstant()
         val end = day.plusDays(1).atStartOfDay(zone).toInstant()
         return TodayWindowInputs(
             nights = sleep.sleepSummaries(first, end).map {

@@ -24,6 +24,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.opencircuit.app.connect.AndroidPermissionReader
@@ -106,6 +107,7 @@ class MainActivity : ComponentActivity() {
                     wallClock = { java.time.Instant.ofEpochMilli(container.clock.nowMillis()) },
                     log = container.log,
                     commands = todayCommands(container.ringSessions),
+                    saved = createSavedStateHandle(),
                 )
             }
         }

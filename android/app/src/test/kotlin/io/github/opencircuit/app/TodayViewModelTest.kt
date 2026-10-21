@@ -48,7 +48,7 @@ class TodayViewModelTest {
         var fail = false
         var loads = 0
         override fun revisions(): Flow<Long> = revisions
-        override suspend fun load(day: LocalDate, zone: ZoneId): TodayStored {
+        override suspend fun load(day: LocalDate, zone: ZoneId, windowDays: Int): TodayStored {
             loads++
             hold?.await()
             if (fail) throw IllegalStateException("disk")

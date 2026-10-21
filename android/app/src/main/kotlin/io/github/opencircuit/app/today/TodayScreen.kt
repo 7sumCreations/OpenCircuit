@@ -65,6 +65,7 @@ import io.github.opencircuit.app.ui.LocalTones
 import io.github.opencircuit.app.ui.Motion
 import io.github.opencircuit.app.ui.charts.Sparkline
 import io.github.opencircuit.ringkit.WellnessBalance
+import java.time.LocalDate
 import java.util.Locale
 
 /** What the user can do on Today. */
@@ -80,6 +81,12 @@ sealed interface TodayAction {
 
     /** The hero's Stop, while SpO₂ is measured. */
     data object StopMeasure : TodayAction
+
+    /** Show [day]: a swipe, a chevron, a date-strip tap or the date picker. Today (or a later day) is Today. */
+    data class SelectDay(val day: LocalDate) : TodayAction
+
+    /** The "Today" chip: back to today. */
+    data object ShowToday : TodayAction
 }
 
 /** The tag of Today's hero card. */

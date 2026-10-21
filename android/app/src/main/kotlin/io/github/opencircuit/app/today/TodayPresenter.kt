@@ -70,6 +70,16 @@ data class TodayUiState(
     val synthesis: String? = null,
     /** Today's date in words ("Wednesday 30 September"). */
     val dateLine: String = "",
+    /**
+     * The day the tiles, readiness and hero range on screen are for; null before the first load.
+     * It can trail [DayBrowserUi.selected] while a newly picked day loads: the screen shows that
+     * day's page as placeholders until the two agree, never the day before's values as its own.
+     */
+    val day: LocalDate? = null,
+    /** The day browser: the days there are, the one picked, and the marked dates. */
+    val browser: DayBrowserUi = DayBrowserUi(),
+    /** On a past day, its heart-rate range in place of the live hero; null on today. */
+    val pastDay: PastDayHeroUi? = null,
 )
 
 /** What the ring session contributes to Today: its link, name, sync log, the running sync, the ring's firmware and the live measure. */
@@ -106,6 +116,10 @@ data class TodayInput(
      * sync's progress does not rebuild it; null to build it here.
      */
     val dashboard: DashboardUi? = null,
+    /** The day the user picked; null for Today (which follows the clock). */
+    val picked: LocalDate? = null,
+    /** Dates marked because data landed on them while another day was open. */
+    val marked: Set<LocalDate> = emptySet(),
 )
 
 internal const val HEART_RATE = "Heart rate"
@@ -123,13 +137,23 @@ internal const val MEASURE = "Measure"
 object TodayPresenter {
 
     /**
-     * The dashboard (tiles, readiness, sentence) for today from what is stored and the two facts of
-     * the sync log it reads; placeholders' state (no tiles) before the first load.
+     * The dashboard (tiles, readiness, sentence) for the day the load is for (today when it names
+     * none) from what is stored and the two facts of the sync log it reads; placeholders' state (no
+     * tiles) before the first load.
      */
     fun dashboard(stored: TodayStored?, facts: DashboardFacts, now: Instant, zone: ZoneId): DashboardUi {
         val today = LocalDate.ofInstant(now, zone)
-        return stored?.let { TodayDashboard.present(it.trends, today, now, zone, facts.lastSyncAt, facts.syncKnown) }
+        return stored?.let { TodayDashboard.present(it.trends, it.day ?: today, now, zone, facts.lastSyncAt, facts.syncKnown) }
             ?: DashboardUi(dateLine = TodayDashboard.dateLine(today))
+    }
+
+    /** The browser: from the first stored day (or the picked day, if earlier) to today; a picked day not before today is today. */
+    private fun browser(input: TodayInput): DayBrowserUi {
+        val today = LocalDate.ofInstant(input.now, input.zone)
+        val selected = input.picked?.takeIf { it.isBefore(today) } ?: today
+        val stored = BrowsableDays.of(input.stored?.earliest, input.now, input.zone)
+        val days = if (selected.isBefore(stored.first)) BrowsableDays(selected, stored.last) else stored
+        return DayBrowser.present(days, selected, today, input.marked - selected)
     }
 
     fun present(input: TodayInput): TodayUiState {
@@ -145,6 +169,9 @@ object TodayPresenter {
             readiness = dashboard.readiness,
             synthesis = dashboard.synthesis,
             dateLine = dashboard.dateLine,
+            day = stored?.let { it.day ?: LocalDate.ofInstant(input.now, input.zone) },
+            pastDay = dashboard.pastDay,
+            browser = browser(input),
             loading = stored == null,
             heartRate = heartRate(storedHr, live, session.syncing),
             heartRateLive = live.mode == LiveMode.HEART_RATE,

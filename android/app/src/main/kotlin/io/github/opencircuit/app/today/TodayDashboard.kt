@@ -58,12 +58,37 @@ data class ReadinessUi(
     val description: String,
 )
 
+/**
+ * A past day's heart rate in place of the live hero: its low–high, average and resting estimate,
+ * and the range as a bar on a fixed [PastDayHeroUi.SCALE_LOW]–[PastDayHeroUi.SCALE_HIGH] bpm scale
+ * ([low], [average], [high] are fractions of it) — or, with nothing stored that day, why ([empty]).
+ */
+data class PastDayHeroUi(
+    val title: String,
+    /** "52–112"; null when the day has no heart rate. */
+    val range: String? = null,
+    /** "average 72 · resting 55". */
+    val detail: String? = null,
+    val low: Float = 0f,
+    val average: Float = 0f,
+    val high: Float = 0f,
+    val empty: String? = null,
+    val description: String,
+) {
+    companion object {
+        const val SCALE_LOW = 40.0
+        const val SCALE_HIGH = 160.0
+    }
+}
+
 /** The dashboard part of Today: the tiles, the readiness ring, the synthesis sentence and the date line. */
 data class DashboardUi(
     val tiles: List<TileUi> = emptyList(),
     val readiness: ReadinessUi? = null,
     val synthesis: String? = null,
     val dateLine: String = "",
+    /** On a past day, its heart-rate range in place of the live hero; null on today. */
+    val pastDay: PastDayHeroUi? = null,
 )
 
 /**
@@ -87,7 +112,7 @@ object TodayDashboard {
         val stepGoal = GoalDefaults.stepsGoal(dayStart, zone) { null }
         val tiles = TodayTiles.build(
             trends.points, trends.restingHR, TemperatureUnit.CELSIUS, now = now, zone = zone,
-            heartRateRanges = trends.heartRateRanges, stepGoal = stepGoal,
+            heartRateRanges = trends.heartRateRanges, stepGoal = stepGoal, shownDay = day,
         )
         val (readiness, report) = readiness(trends, dayStart, isToday, neverSynced = syncKnown && lastSyncAt == null)
         // With no data in the window and the log unread, the sentence would have to guess between
@@ -98,11 +123,37 @@ object TodayDashboard {
         } else {
             null
         }
-        return DashboardUi(tiles.map { tileUi(it, now, zone) }, readiness, synthesis, dateLine(day))
+        val pastDay = if (isToday) null else pastDayHero(trends, day, zone)
+        return DashboardUi(tiles.map { tileUi(it, now, zone) }, readiness, synthesis, dateLine(day), pastDay)
     }
 
     /** "Wednesday 30 September". */
     fun dateLine(day: LocalDate): String = DATE_LINE.format(day)
+
+    /** [day]'s heart rate in place of the live hero: its low–high on the fixed scale, average and resting estimate. */
+    private fun pastDayHero(trends: TodayTrends, day: LocalDate, zone: ZoneId): PastDayHeroUi {
+        val start = day.atStartOfDay(zone).toInstant()
+        val title = "Heart rate on ${SHORT_DATE.format(day)}"
+        val spokenTitle = "Heart rate on ${DATE_LINE.format(day)}"
+        val range = trends.heartRateRanges.firstOrNull { it.day == start }
+            ?: return PastDayHeroUi(title, empty = NO_HEART_RATE, description = "$spokenTitle. $NO_HEART_RATE")
+        val average = trends.points.firstOrNull { it.date == start }?.dayHRAvg
+        val resting = trends.restingHR.firstOrNull { LocalDate.ofInstant(it.day, zone) == day }?.bpm
+        fun whole(v: Double) = TileNumber.WHOLE.format(v)
+        fun onScale(v: Double) = ((v - PastDayHeroUi.SCALE_LOW) / (PastDayHeroUi.SCALE_HIGH - PastDayHeroUi.SCALE_LOW)).coerceIn(0.0, 1.0).toFloat()
+        val detail = listOfNotNull(average?.let { "average ${whole(it)}" }, resting?.let { "resting ${whole(it)}" }).joinToString(" · ")
+        val description = "$spokenTitle: ${whole(range.low)} to ${whole(range.high)} beats per minute" +
+            (average?.let { ", average ${whole(it)}" } ?: "") + (resting?.let { ", resting ${whole(it)}" } ?: "")
+        return PastDayHeroUi(
+            title = title,
+            range = "${whole(range.low)}–${whole(range.high)}",
+            detail = detail.ifEmpty { null },
+            low = onScale(range.low),
+            average = onScale(average ?: range.low),
+            high = onScale(range.high),
+            description = description,
+        )
+    }
 
     private fun tileUi(tile: TodayTile, now: Instant, zone: ZoneId): TileUi = TileUi(
         metric = tile.metric,
@@ -180,4 +231,6 @@ object TodayDashboard {
     }
 
     private val DATE_LINE: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH)
+    private val SHORT_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
+    private const val NO_HEART_RATE = "No heart rate was stored for this day."
 }

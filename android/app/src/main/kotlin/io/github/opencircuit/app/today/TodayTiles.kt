@@ -114,6 +114,11 @@ data class TodayTile(
     val number: TileNumber,
     /** An Android line under the value: the heart rate's low–high, the night's sleep score, the steps' goal. */
     val extra: String? = null,
+    /**
+     * The tile is for a past day the user picked (Android's day browser): its value is that day's
+     * only, with no freshness (the heading names the day), and steps judge that whole day.
+     */
+    val pastDay: Boolean = false,
 ) {
     /** The metrics, in the dashboard's default order. Upstream's six, plus HEART_RATE and SLEEP (Android). */
     enum class Metric { HEART_RATE, HRV, RESTING_HR, SPO2, RESPIRATORY_RATE, SKIN_TEMP, SLEEP, STEPS }
@@ -124,6 +129,7 @@ data class TodayTile(
 
     /** "last night" / "today" / "yesterday" / "as of Mon 28" / "night to Mon 28". */
     fun freshnessText(now: Instant, zone: ZoneId): String? {
+        if (pastDay) return null
         val valueDate = valueDate ?: return null
         val today = LocalDate.ofInstant(now, zone)
         val d = LocalDate.ofInstant(valueDate, zone)
@@ -138,6 +144,7 @@ data class TodayTile(
      * nightly metric, anything but last night (keyed today); otherwise, older than yesterday.
      */
     fun isStale(now: Instant, zone: ZoneId): Boolean {
+        if (pastDay) return false
         val valueDate = valueDate ?: return false
         val today = LocalDate.ofInstant(now, zone)
         return LocalDate.ofInstant(valueDate, zone) < (if (isNightly) today else today.minusDays(1))
@@ -152,6 +159,8 @@ data class TodayTile(
         get() {
             val trend = trend ?: return null
             if (trend.direction == null) return null
+            // A past day with nothing that day states no verdict about another day's value.
+            if (pastDay) return if (valueText == null) null else trend
             return if (metric == Metric.STEPS && !trendIsYesterday) null else trend
         }
 
@@ -166,7 +175,7 @@ data class TodayTile(
     /** "Usual 44–50 ms", the learning state while the baseline is thin, or why there is no value. */
     val rangeText: String
         get() {
-            if (valueText == null) return if (metric == Metric.STEPS) STEPS_NOT_RECORDED else "No data yet"
+            if (valueText == null) return if (metric == Metric.STEPS) STEPS_NOT_RECORDED else if (pastDay) NO_READING_THAT_DAY else "No data yet"
             val r = trend?.usualRange
             if (r != null) return "Usual ${format(r.start)}–${format(r.endInclusive)}${if (unit.isEmpty()) "" else " $unit"}"
             val need = BaselineTrend.DEFAULT_MIN_BASELINE_DAYS
@@ -181,7 +190,11 @@ data class TodayTile(
             if (isStale(now, zone)) freshnessText(now, zone)?.let { parts += it }
             extra?.let { parts += it }
         } else {
-            parts += if (metric == Metric.STEPS) STEPS_NOT_RECORDED.lowercase(Locale.ROOT) else "no data yet"
+            parts += when {
+                metric == Metric.STEPS -> STEPS_NOT_RECORDED.lowercase(Locale.ROOT)
+                pastDay -> NO_READING_THAT_DAY.lowercase(Locale.ROOT)
+                else -> "no data yet"
+            }
         }
         // The unit after a range, only when there is one (the sleep tile's durations carry their own).
         val unitWords = if (spokenUnit.isEmpty()) "" else " $spokenUnit"
@@ -206,6 +219,7 @@ data class TodayTile(
     private companion object {
         val SHORT_DAY: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE d", Locale.ENGLISH)
         const val STEPS_NOT_RECORDED = "Steps not recorded"
+        const val NO_READING_THAT_DAY = "No reading that day"
     }
 }
 
@@ -225,11 +239,16 @@ object TodayTiles {
         zone: ZoneId,
         heartRateRanges: List<DayRange> = emptyList(),
         stepGoal: Int? = null,
+        shownDay: LocalDate? = null,
     ): List<TodayTile> = TodayTile.Metric.entries.map {
-        build(it, points, restingHR, tempUnit, windowDays, now, zone, heartRateRanges, stepGoal)
+        build(it, points, restingHR, tempUnit, windowDays, now, zone, heartRateRanges, stepGoal, shownDay)
     }
 
-    /** One metric's tile over the [windowDays] days ending on [now]'s day in [zone]. */
+    /**
+     * One metric's tile over the [windowDays] days ending on [now]'s day in [zone] — or, for a
+     * [shownDay] before that (Android's day browser), ending on [shownDay], showing that day's value
+     * only and judging steps on that whole day.
+     */
     fun build(
         metric: TodayTile.Metric,
         points: List<TrendsEngine.DailyPoint>,
@@ -240,8 +259,12 @@ object TodayTiles {
         zone: ZoneId,
         heartRateRanges: List<DayRange> = emptyList(),
         stepGoal: Int? = null,
+        shownDay: LocalDate? = null,
     ): TodayTile {
-        val todayDate = LocalDate.ofInstant(now, zone)
+        val clockDay = LocalDate.ofInstant(now, zone)
+        val pastDay = shownDay != null && shownDay.isBefore(clockDay)
+        // From here "today" is the day the window ends on: the shown past day, or the clock's today.
+        val todayDate = if (pastDay) shownDay!! else clockDay
         fun start(d: LocalDate): Instant = d.atStartOfDay(zone).toInstant()
         fun startOfDay(t: Instant): Instant = start(LocalDate.ofInstant(t, zone))
         val today = start(todayDate)
@@ -271,11 +294,13 @@ object TodayTiles {
             extra: (BaselineTrend.Point) -> String? = { null },
         ): TodayTile {
             val trend = BaselineTrend.evaluate(pts, minAbsoluteDelta = floor)
+            // A past day shows its own value only; on today the newest in the window, however old.
+            val shown = trend?.latest?.takeIf { !pastDay || it.date == today }
             return TodayTile(
-                metric = metric, title = title, qualifier = qualifier, valueText = trend?.let { number.format(it.latest.value) },
+                metric = metric, title = title, qualifier = qualifier, valueText = shown?.let { number.format(it.value) },
                 unit = unit, days = days, values = slots(pts), trend = trend, trendIsYesterday = false,
-                valueDate = trend?.latest?.date, isNightly = isNightly, spokenUnit = spokenUnit, number = number,
-                extra = trend?.let { extra(it.latest) },
+                valueDate = shown?.date, isNightly = isNightly, spokenUnit = spokenUnit, number = number,
+                extra = shown?.let(extra), pastDay = pastDay,
             )
         }
 
@@ -306,7 +331,7 @@ object TodayTiles {
                 val ranges = heartRateRanges.associateBy { startOfDay(it.day) }
                 val pts = series { it.dayHRAvg }
                 tile(
-                    "Heart rate", if (pts.any { it.date == today }) "today avg" else "day avg",
+                    "Heart rate", if (!pastDay && pts.any { it.date == today }) "today avg" else "day avg",
                     "bpm", "beats per minute", pts, 2.0, TileNumber.WHOLE, isNightly = false,
                 ) { latest ->
                     ranges[latest.date]?.let { "Range ${TileNumber.WHOLE.format(it.low)}–${TileNumber.WHOLE.format(it.high)} bpm" }
@@ -318,7 +343,18 @@ object TodayTiles {
                     scores[latest.date]?.takeIf { it > 0 }?.let { "Sleep score $it" }
                 }
             }
-            TodayTile.Metric.STEPS -> {
+            TodayTile.Metric.STEPS -> if (pastDay) {
+                // A past day is complete: its total is the headline and is judged against the days before it.
+                val pts = series { p -> p.steps?.toDouble() }
+                val day = pts.firstOrNull { it.date == today }
+                TodayTile(
+                    metric = metric, title = "Steps", qualifier = "that day",
+                    valueText = day?.let { TileNumber.GROUPED.format(it.value) }, unit = "", days = days,
+                    values = slots(pts), trend = BaselineTrend.evaluate(pts, minAbsoluteDelta = 1_000.0),
+                    trendIsYesterday = false, valueDate = day?.date, isNightly = false,
+                    spokenUnit = "steps", number = TileNumber.GROUPED, extra = "Connected time only", pastDay = true,
+                )
+            } else {
                 // Headline = today's total; trend = the last complete day vs the days before it.
                 val pts = series { p -> p.steps?.toDouble() }
                 val trend = BaselineTrend.evaluate(pts.filter { it.date < today }, minAbsoluteDelta = 1_000.0)
