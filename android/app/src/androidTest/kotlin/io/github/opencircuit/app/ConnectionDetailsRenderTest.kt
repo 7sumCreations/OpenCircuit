@@ -60,6 +60,7 @@ class ConnectionDetailsRenderTest {
     val compose = createComposeRule()
 
     private var copies = 0
+    private val shown = mutableListOf<Boolean>()
 
     private val ring = RememberedRing("AA:BB:CC:DD:EE:FF", AddressType.RANDOM, "RingConn Gen2-EEFF")
 
@@ -91,7 +92,7 @@ class ConnectionDetailsRenderTest {
         compose.setContent {
             OpenCircuitTheme {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    ConnectionDetailsCard(details, onCopy = { copies++ })
+                    ConnectionDetailsCard(details, onCopy = { copies++ }, onShownChange = { shown += it })
                 }
             }
         }
@@ -159,12 +160,17 @@ class ConnectionDetailsRenderTest {
         )
         show(details(DetailsInput(storage = StorageReport(fileBytes = 3_670_016L, footprint = footprint))))
 
+        assertEquals("collapsed: nothing reported", emptyList<Boolean>(), shown)
         compose.onNodeWithText("Show all").performClick()
         compose.onNodeWithText("Storage").performScrollTo().assertIsDisplayed()
+        assertEquals(listOf(true), shown)
         compose.onNodeWithText(
             "3.5 MB on disk (database + log) · samples from 21 Sep 2026 to 20 Oct 2026 · samples 43,200 (heart rate 17,280) · " +
                 "day totals 30 · step deltas 2,880 · daytime temperatures 1,440 · nights 30 · naps 0",
         ).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Hide").performScrollTo().performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(true, false), shown)
     }
 
     @Test

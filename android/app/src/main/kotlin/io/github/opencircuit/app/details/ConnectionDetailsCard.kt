@@ -39,13 +39,15 @@ fun ConnectionDetailsCard(
     onCopy: () -> Unit,
     modifier: Modifier = Modifier,
     tools: (@Composable () -> Unit)? = null,
-    /** Called with true while the card is expanded on screen, false when it collapses or leaves the screen. */
+    /** Called with true when the card is expanded on screen, and false when it then collapses or leaves the screen; never while collapsed. */
     onShownChange: (Boolean) -> Unit = {},
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    DisposableEffect(expanded) {
-        onShownChange(expanded)
-        onDispose { if (expanded) onShownChange(false) }
+    if (expanded) {
+        DisposableEffect(Unit) {
+            onShownChange(true)
+            onDispose { onShownChange(false) }
+        }
     }
     Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
