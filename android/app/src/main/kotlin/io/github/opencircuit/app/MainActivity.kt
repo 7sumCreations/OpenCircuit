@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
@@ -31,6 +32,7 @@ import io.github.opencircuit.app.connect.PairingSheet
 import io.github.opencircuit.app.connect.ScanStep
 import io.github.opencircuit.app.health.HealthCardSources
 import io.github.opencircuit.app.health.HealthSettingsLink
+import io.github.opencircuit.app.onboarding.AppNavigation
 import io.github.opencircuit.app.onboarding.Destination
 import io.github.opencircuit.app.onboarding.LaunchFlow
 import io.github.opencircuit.app.onboarding.OnboardingScreen
@@ -38,6 +40,12 @@ import io.github.opencircuit.app.ring.LinkAction
 import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.ring.RingScreen
 import io.github.opencircuit.app.ring.RingViewModel
+import io.github.opencircuit.app.settings.SettingsScreen
+import io.github.opencircuit.app.today.TodayAction
+import io.github.opencircuit.app.today.TodayScreen
+import io.github.opencircuit.app.today.TodayViewModel
+import io.github.opencircuit.app.today.todaySession
+import io.github.opencircuit.app.ui.AppShell
 import io.github.opencircuit.app.ui.OpenCircuitTheme
 import io.github.opencircuit.health.HealthPermission
 import io.github.opencircuit.health.JetpackHealthConnect
@@ -86,6 +94,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val todayViewModel: TodayViewModel by viewModels {
+        viewModelFactory {
+            initializer {
+                TodayViewModel(
+                    source = container.todaySource,
+                    session = todaySession(container.ringSessions),
+                    scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+                    wallClock = { java.time.Instant.ofEpochMilli(container.clock.nowMillis()) },
+                    log = container.log,
+                )
+            }
+        }
+    }
+
     // Registered before the activity starts, as the result API requires.
     private val nearbyDevicesRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         ringViewModel.onPermissionResult(permissionReader.read())
@@ -114,19 +136,40 @@ class MainActivity : ComponentActivity() {
         setContent {
             OpenCircuitTheme {
                 var destination by rememberSaveable { mutableStateOf(launch.start) }
-                when (destination) {
-                    Destination.Onboarding -> OnboardingScreen(onDone = { destination = launch.finishOnboarding() })
-                    Destination.Ring -> {
-                        // A grant or refusal made in Settings has no callback: read it on every resume.
-                        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-                            ringViewModel.onResume(permissionReader.read())
-                            // A grant or revoke made in Health Connect's settings has no callback either.
-                            container.healthAccess.refresh()
+                if (!AppNavigation.runsSession(destination)) {
+                    OnboardingScreen(onDone = { destination = launch.finishOnboarding() })
+                } else {
+                    // The ring session starts here, whatever tab is open: the first composition after
+                    // onboarding builds the Ring view model, whose start reconnects the remembered ring.
+                    val sheet by ringViewModel.pairingSheet.collectAsStateWithLifecycle()
+                    LaunchedEffect(sheet) { sheet?.let(::showPairingSheet) }
+                    // A grant or refusal made in Settings has no callback: read it on every resume.
+                    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                        ringViewModel.onResume(permissionReader.read())
+                        // A grant or revoke made in Health Connect's settings has no callback either.
+                        container.healthAccess.refresh()
+                    }
+                    val back = AppNavigation.back(destination)
+                    BackHandler(enabled = back != null) { back?.let { destination = it } }
+                    AppShell(current = destination, onSelect = { destination = it }) { inner ->
+                        when (destination) {
+                            Destination.Today -> {
+                                val state by todayViewModel.uiState.collectAsStateWithLifecycle()
+                                TodayScreen(state = state, onAction = { if (it == TodayAction.OpenRing) destination = Destination.Ring }, modifier = inner)
+                            }
+                            Destination.Ring -> {
+                                val state by ringViewModel.uiState.collectAsStateWithLifecycle()
+                                RingScreen(
+                                    state = state,
+                                    onAction = ::onRingAction,
+                                    modifier = inner,
+                                    pulse = !reducedMotion(),
+                                    detailsTools = VariantLinks.detailsTools,
+                                )
+                            }
+                            Destination.Settings -> SettingsScreen(modifier = inner)
+                            Destination.Onboarding -> Unit
                         }
-                        val state by ringViewModel.uiState.collectAsStateWithLifecycle()
-                        val sheet by ringViewModel.pairingSheet.collectAsStateWithLifecycle()
-                        LaunchedEffect(sheet) { sheet?.let(::showPairingSheet) }
-                        RingScreen(state = state, onAction = ::onRingAction, pulse = !reducedMotion(), detailsTools = VariantLinks.detailsTools)
                     }
                 }
             }
@@ -134,8 +177,8 @@ class MainActivity : ComponentActivity() {
     }
 
     // A sync is paused when the user leaves the app and resumed on return (SyncLifecycle decides;
-    // no foreground service in this version). Through the session, never through the view model,
-    // which is only built once the Ring screen shows.
+    // no foreground service in this version). Through the session, never through the view model:
+    // before onboarding ends there is none.
     override fun onStart() {
         super.onStart()
         container.adapterStates.start()

@@ -2,27 +2,54 @@ package io.github.opencircuit.app.onboarding
 
 import io.github.opencircuit.app.data.AppPrefs
 
-/** The app's screens. No navigation library: two destinations, one `when`. */
-enum class Destination { Onboarding, Ring }
+/** The app's screens. No navigation library: onboarding, then three tabs, one `when`. */
+enum class Destination { Onboarding, Today, Ring, Settings }
+
+/**
+ * The tabs after onboarding and what back does between them. Back from Ring or Settings returns to
+ * Today; back on Today (or in onboarding) is Android's own, which leaves the app.
+ */
+object AppNavigation {
+
+    /** The bottom bar's tabs, in order. */
+    val tabs: List<Destination> = listOf(Destination.Today, Destination.Ring, Destination.Settings)
+
+    /** A tab's label, always shown under its icon. */
+    fun label(tab: Destination): String = when (tab) {
+        Destination.Today -> "Today"
+        Destination.Ring -> "Ring"
+        Destination.Settings -> "Settings"
+        Destination.Onboarding -> "Welcome"
+    }
+
+    /** Where back goes from [from], or null when Android's own back applies. */
+    fun back(from: Destination): Destination? = when (from) {
+        Destination.Ring, Destination.Settings -> Destination.Today
+        Destination.Today, Destination.Onboarding -> null
+    }
+
+    /** The ring session (reconnect, sync on link-up) runs on every screen after onboarding, whatever tab is open. */
+    fun runsSession(on: Destination): Boolean = on != Destination.Onboarding
+}
 
 /**
  * Which screen the app opens on, and what finishing onboarding does
  * (`ios/OpenCircuit/OnboardingView.swift:12-40` @ b1c2fdd: shown once, by a saved flag).
  *
  * [start] reads the flag synchronously when the flow is built, so the first frame already shows
- * the right screen. Finishing or skipping saves the flag and opens the Ring screen; if the write
- * fails the user still gets in, the failure is logged, and onboarding shows again next launch.
- * Onboarding asks for nothing: no permission is requested from here.
+ * the right screen. Finishing or skipping saves the flag and opens Today; if the write fails the
+ * user still gets in, the failure is logged, and onboarding shows again next launch. Onboarding
+ * asks for nothing: no permission is requested from here.
  */
 class LaunchFlow(private val prefs: AppPrefs, private val log: (String) -> Unit) {
 
     /** The first screen. */
-    val start: Destination = if (prefs.onboardingCompleted) Destination.Ring else Destination.Onboarding
+    val start: Destination = if (prefs.onboardingCompleted) Destination.Today else Destination.Onboarding
 
     /** Get started or Skip: remembers it and returns the next screen. */
     fun finishOnboarding(): Destination {
         if (!prefs.setOnboardingCompleted()) log("Could not save that onboarding was done; it will show again next launch")
-        return Destination.Ring
+        return Destination.Today
     }
 }
 

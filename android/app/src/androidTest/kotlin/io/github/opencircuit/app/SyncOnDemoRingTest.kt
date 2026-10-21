@@ -15,6 +15,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.demo.DemoRingLink
+import io.github.opencircuit.app.onboarding.Destination
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
@@ -31,7 +32,8 @@ import org.junit.runner.RunWith
  * card goes to "Last synced just now" with the records stored, three nights and last night, and
  * the ring is disconnected afterwards (the switch is on). Sync now then syncs again whatever the
  * throttle says: it reconnects, drains (nothing new) and disconnects.
- * While a sync runs, both Measure buttons are off and say to wait for it.
+ * While a sync runs, both Measure buttons are off and say to wait for it. The app opens on Today
+ * and the launch's sync starts from there; the test reads the Ring tab.
  */
 @RunWith(AndroidJUnit4::class)
 class SyncOnDemoRingTest {
@@ -56,6 +58,7 @@ class SyncOnDemoRingTest {
 
     @Test
     fun theLaunchSyncsTheDemoRingByItselfThenSyncNowSyncsAgain() {
+        compose.openTab(Destination.Ring)
         compose.waitUntil(timeoutMillis = 90_000) {
             compose.onAllNodesWithText("Last synced just now").fetchSemanticsNodes().isNotEmpty()
         }
@@ -77,6 +80,7 @@ class SyncOnDemoRingTest {
 
     @Test
     fun measureWaitsWhileTheLaunchSyncRuns() {
+        compose.openTab(Destination.Ring)
         // The launch's sync drains three nights page by page: the link is up and "Syncing…" shows.
         compose.waitUntil(timeoutMillis = 30_000) { compose.onAllNodesWithText("Syncing…").fetchSemanticsNodes().isNotEmpty() }
 

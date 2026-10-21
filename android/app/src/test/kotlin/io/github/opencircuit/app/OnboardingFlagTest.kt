@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
 /**
  * Onboarding is shown once: the first screen is decided at launch from `onboarding.completed.v1`
  * alone, and finishing (Get started) or skipping sets it, so the next launch (a new instance
- * over the same file) opens on the Ring screen. A damaged flag shows onboarding again; a failed
+ * over the same file) opens on the Today screen. A damaged flag shows onboarding again; a failed
  * write still lets the user in and says so in the log.
  */
 class OnboardingFlagTest {
@@ -28,14 +28,14 @@ class OnboardingFlagTest {
     }
 
     @Test
-    fun finishingOnboardingOpensTheRingScreenAndTheNextLaunchSkipsIt() {
+    fun finishingOnboardingOpensTheTodayScreenAndTheNextLaunchSkipsIt() {
         val first = launch()
 
-        assertEquals(Destination.Ring, first.finishOnboarding())
+        assertEquals(Destination.Today, first.finishOnboarding())
 
         assertEquals(true, values.raw("onboarding.completed.v1"))
-        assertEquals(Destination.Ring, launch().start, "relaunch")
-        assertEquals(Destination.Ring, launch().start, "and the one after")
+        assertEquals(Destination.Today, launch().start, "relaunch")
+        assertEquals(Destination.Today, launch().start, "and the one after")
     }
 
     @Test
@@ -49,7 +49,7 @@ class OnboardingFlagTest {
     fun aFailedWriteStillLetsTheUserInAndIsLogged() {
         values.failWrites = true
 
-        assertEquals(Destination.Ring, launch().finishOnboarding())
+        assertEquals(Destination.Today, launch().finishOnboarding())
 
         assertEquals(1, logLines.size, logLines.toString())
         assertTrue("onboarding" in logLines.single(), logLines.single())

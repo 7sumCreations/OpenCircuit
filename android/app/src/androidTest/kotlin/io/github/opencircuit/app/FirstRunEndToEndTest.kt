@@ -10,6 +10,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.app.demo.DemoRingLink
 import io.github.opencircuit.app.demo.DemoRingScanner
+import io.github.opencircuit.app.onboarding.Destination
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -20,8 +21,9 @@ import org.junit.runner.RunWith
 /**
  * First run end to end on a device, with the real app (activity, container, preferences, ring
  * sessions) and the debug build's demo ring: a fresh install shows onboarding; skipping it lands
- * on the Ring screen; a relaunch skips onboarding; and once a ring is remembered, the relaunched
- * app reconnects it by its address with no scan and shows it connected.
+ * on Today, with the Ring tab one tap away; a relaunch skips onboarding; and once a ring is
+ * remembered, the relaunched app reconnects it by its address with no scan and shows it connected
+ * — on Today, without visiting the Ring tab.
  *
  * The ring is remembered the way a finished pairing leaves it (the saved-ring preference): the
  * pairing sheet itself is Android's and cannot be driven here.
@@ -49,12 +51,15 @@ class FirstRunEndToEndTest {
         ActivityScenario.launch(MainActivity::class.java).use {
             compose.onNodeWithText("Welcome to OpenCircuit").assertExists()
             compose.onNodeWithText("Skip").performClick()
+            compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithText("Today").fetchSemanticsNodes().isNotEmpty() }
+            compose.openTab(Destination.Ring)
             compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithText("Scan & connect").fetchSemanticsNodes().isNotEmpty() }
         }
         assertTrue("Skip records onboarding as done", app.container.appPrefs.onboardingCompleted)
 
         ActivityScenario.launch(MainActivity::class.java).use {
             compose.onNodeWithText("Welcome to OpenCircuit").assertDoesNotExist()
+            compose.openTab(Destination.Ring)
             compose.onNodeWithText("Scan & connect").assertExists()
         }
 
@@ -64,7 +69,9 @@ class FirstRunEndToEndTest {
 
         ActivityScenario.launch(MainActivity::class.java).use {
             compose.onNodeWithText("Welcome to OpenCircuit").assertDoesNotExist()
+            // Connected on Today: the session started without the Ring tab ever opening.
             compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isNotEmpty() }
+            compose.openTab(Destination.Ring)
             compose.onNodeWithText("Demo ring").assertExists()
         }
         assertEquals("no scan on the way to the remembered ring", scansBefore, scanner.scansStarted)

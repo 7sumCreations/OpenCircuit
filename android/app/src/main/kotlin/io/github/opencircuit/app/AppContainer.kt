@@ -33,6 +33,8 @@ import io.github.opencircuit.health.WriteGeneration
 import io.github.opencircuit.app.session.RingSessionController
 import io.github.opencircuit.app.session.RingSessions
 import io.github.opencircuit.app.sync.SessionHistory
+import io.github.opencircuit.app.today.TodayRepository
+import io.github.opencircuit.app.today.TodaySource
 import io.github.opencircuit.app.sync.StoreHistory
 import io.github.opencircuit.app.sync.SyncTriggerSources
 import io.github.opencircuit.app.sync.learningNights
@@ -88,6 +90,9 @@ class AppContainer(context: Context) {
      */
     private val database: Deferred<StoreDatabase> =
         appScope.async(start = CoroutineStart.LAZY) { StoreFactory.open(context.applicationContext) }
+
+    /** What the Today screen reads, over the app's one database (so every writer's changes reach it). */
+    val todaySource: TodaySource = TodayRepository({ database.await() })
 
     /**
      * Links to a ring over the phone's Bluetooth (`:ble`'s Android factory). In debug builds the
