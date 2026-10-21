@@ -32,11 +32,7 @@ object DashboardSectionOrder {
      * missing, go straight under readiness rather than at the bottom (upstream's rule).
      */
     fun decode(raw: String): List<DashboardSection> {
-        val result = mutableListOf<DashboardSection>()
-        for (id in raw.split(",")) {
-            val section = DashboardSection.entries.firstOrNull { it.rawValue == id } ?: continue
-            if (section !in result) result += section
-        }
+        val result = savedIds(raw, DashboardSection.entries) { it.rawValue }
         for (section in DashboardSection.entries) {
             if (section in result) continue
             val readiness = result.indexOf(DashboardSection.READINESS)

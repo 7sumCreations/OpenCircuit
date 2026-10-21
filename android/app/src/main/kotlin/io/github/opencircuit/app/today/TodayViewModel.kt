@@ -97,11 +97,17 @@ class TodayViewModel(
         return DashboardSectionOrder.reordered(sections, sections, from, if (by < 0) from + by else from + by + 1)
     }
 
-    /** Applies [change] and saves both orders at once; a failed save keeps the new order for this run and says so in the log. */
+    /**
+     * Applies [change] and saves the order it changed — only that one, so a move is one write and a
+     * move past an end none. A failed save keeps the new order for this run and says so in the log.
+     */
     private fun reorder(change: (TodayOrder) -> TodayOrder) {
+        val before = order.value
         val next = order.updateAndGet(change)
         val p = prefs ?: return
-        val saved = p.setTodaySectionOrder(DashboardSectionOrder.encode(next.sections)) and p.setTodayTileOrder(TileOrder.encode(next.tiles))
+        var saved = true
+        if (next.sections != before.sections) saved = p.setTodaySectionOrder(DashboardSectionOrder.encode(next.sections))
+        if (next.tiles != before.tiles) saved = p.setTodayTileOrder(TileOrder.encode(next.tiles)) && saved
         if (!saved) log("Today could not save its order")
     }
 
@@ -158,9 +164,10 @@ class TodayViewModel(
         val loads = stored.shareIn(scope, SharingStarted.Eagerly, replay = 1)
         val parts = session.shareIn(scope, SharingStarted.Eagerly, replay = 1)
         val facts = parts.map(DashboardFacts::of).distinctUntilChanged()
-        // The tiles are put in the saved order here, once per rebuild: a live frame never re-sorts them.
-        val dashboard = combine(loads, facts, ticks, order.map { it.tiles }.distinctUntilChanged()) { s, f, _, tileOrder ->
-            TodayPresenter.dashboard(s, f, wallClock(), zone()).let { d -> d.copy(tiles = d.tiles.sortedBy { tileOrder.indexOf(it.metric) }) }
+        val built = combine(loads, facts, ticks) { s, f, _ -> TodayPresenter.dashboard(s, f, wallClock(), zone()) }
+        // The tiles are put in the saved order once per rebuild or move: a live frame never re-sorts them, and a move never rebuilds them.
+        val dashboard = combine(built, order.map { it.tiles }.distinctUntilChanged()) { d, tileOrder ->
+            d.copy(tiles = d.tiles.sortedBy { tileOrder.indexOf(it.metric) })
         }
         // The detail is built from a load for its day and at least its window; until one lands it waits, never shows another day's.
         val detailUi = combine(loads, detail, shown, ticks) { s, open, day, _ ->

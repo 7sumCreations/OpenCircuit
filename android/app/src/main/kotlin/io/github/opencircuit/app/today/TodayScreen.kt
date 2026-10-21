@@ -246,7 +246,7 @@ private fun LazyGridScope.editOrder(state: TodayUiState, onAction: (TodayAction)
         }
         if (section == DashboardSection.METRICS) {
             state.tileOrder.forEachIndexed { j, metric ->
-                val title = state.tiles.firstOrNull { it.metric == metric }?.title ?: metric.name
+                val title = TodayTiles.title(metric)
                 wide("edit.tile.${metric.name}") {
                     OrderRow(
                         title, indent = true, tag = todayOrderRowTag(metric.name.lowercase(Locale.ROOT)),

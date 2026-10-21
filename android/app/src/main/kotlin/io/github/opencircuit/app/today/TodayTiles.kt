@@ -231,6 +231,18 @@ object TodayTiles {
     /** The shared two-week window (upstream `TrendsData.lookbackDays`). */
     const val WINDOW_DAYS: Int = 14
 
+    /** A tile's name as its tile shows it (Edit order names tiles by it before any load); a test holds the two equal. */
+    fun title(metric: TodayTile.Metric): String = when (metric) {
+        TodayTile.Metric.HEART_RATE -> "Heart rate"
+        TodayTile.Metric.HRV -> "HRV"
+        TodayTile.Metric.RESTING_HR -> "Resting HR"
+        TodayTile.Metric.SPO2 -> "SpO₂"
+        TodayTile.Metric.RESPIRATORY_RATE -> "Resp. rate"
+        TodayTile.Metric.SKIN_TEMP -> "Skin temp"
+        TodayTile.Metric.SLEEP -> "Sleep"
+        TodayTile.Metric.STEPS -> "Steps"
+    }
+
     /** Every tile, in [TodayTile.Metric] order. */
     fun build(
         points: List<TrendsEngine.DailyPoint>,

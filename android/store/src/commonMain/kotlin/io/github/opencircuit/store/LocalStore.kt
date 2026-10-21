@@ -1,5 +1,6 @@
 package io.github.opencircuit.store
 
+import androidx.room3.withReadTransaction
 import androidx.room3.withWriteTransaction
 import io.github.opencircuit.ringkit.Command
 import io.github.opencircuit.ringkit.CumulativeMetricAccumulator
@@ -515,13 +516,14 @@ class LocalStore internal constructor(
     /**
      * Local [day]'s activity inputs in [zone] ([DayActivityInputs]): the one reader the Health
      * Connect energy writer and Today's Calories card and goal rings share, so the two can never
-     * price a day differently. Every bound is a range read on its table's time index.
+     * price a day differently. Every bound is a range read on its table's time index, all in one
+     * read transaction, so a sync committing meanwhile is seen whole or not at all.
      */
-    suspend fun dayActivityInputs(day: LocalDate, zone: ZoneId): DayActivityInputs {
+    suspend fun dayActivityInputs(day: LocalDate, zone: ZoneId): DayActivityInputs = db.withReadTransaction {
         val dayStart = day.atStartOfDay(zone).toInstant()
         val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant()
         val nights = SleepStore(db).sleepSummaries(day.minusDays(2).atStartOfDay(zone).toInstant(), day.plusDays(2).atStartOfDay(zone).toInstant())
-        return DayActivityInputs(
+        DayActivityInputs(
             day = day,
             heartRate = samples(MetricKind.HEART_RATE, dayStart, dayEnd).map { HRSample(it.value.toInt(), it.start, it.end) },
             steps = dailyDao.dailyOn(dayStart)?.steps,

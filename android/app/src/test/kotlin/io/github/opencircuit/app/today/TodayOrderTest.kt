@@ -95,6 +95,33 @@ class TodayOrderTest {
         assertEquals(Metric.entries.toList(), vm.uiState.value.tileOrder)
     }
 
+    /** A move past an end writes nothing; a move writes only the order it changed (one preferences write per tap). */
+    @Test
+    fun aMoveWritesOnlyItsOwnOrderAndANoOpWritesNothing() = runTest {
+        val vm = vm()
+        runCurrent()
+
+        vm.onAction(TodayAction.MoveSection(DashboardSection.READINESS, -1))
+        runCurrent()
+        assertEquals(null, values.string("today.sectionOrder.v1"), "nothing changed, nothing written")
+        assertEquals(null, values.string("today.tileOrder.v1"))
+
+        vm.onAction(TodayAction.MoveTile(Metric.HRV, -1))
+        runCurrent()
+        assertEquals(null, values.string("today.sectionOrder.v1"), "a tile move leaves the section order unwritten")
+        assertEquals("hrv,heart_rate,resting_hr,spo2,respiratory_rate,skin_temp,sleep,steps", values.string("today.tileOrder.v1"))
+    }
+
+    /** Edit order names every tile as the tile does, whether or not a load has built the tiles. */
+    @Test
+    fun everyTileHasItsDisplayNameNeverItsEnumName() {
+        val built = TodayTiles.build(emptyList(), emptyList(), io.github.opencircuit.ringkit.TemperatureUnit.CELSIUS, now = epoch, zone = zone)
+        for (metric in Metric.entries) {
+            assertEquals(built.single { it.metric == metric }.title, TodayTiles.title(metric), metric.name)
+            assertFalse('_' in TodayTiles.title(metric), "no enum identifier: ${TodayTiles.title(metric)}")
+        }
+    }
+
     @Test
     fun aNewViewModelOverTheSamePreferencesHasTheOrder() = runTest {
         val first = vm()

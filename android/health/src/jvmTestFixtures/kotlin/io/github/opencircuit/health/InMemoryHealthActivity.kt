@@ -69,7 +69,8 @@ class InMemoryHealthActivity(private val zone: ZoneId, private val samples: Heal
         val nights = samples.nights(day.minusDays(2).atStartOfDay(zone).toInstant(), day.plusDays(2).atStartOfDay(zone).toInstant())
         return ActiveEnergyDays.DayInputs(
             heartRate = samples.samples(MetricKind.HEART_RATE, dayStart, dayEnd).map { HRSample(it.value.toInt(), it.start, it.end) },
-            steps = daySteps(day),
+            // The day's total in the zone asked for, as every other input here (the store cuts it in the zone it is given).
+            steps = synchronized(lock) { rows.filter { it.end.atZone(zone).toLocalDate() == day }.sumOf { it.count } },
             stepWindows = steps(dayStart.minusSeconds(86_400), dayEnd).map { StepWindow(it.start, it.end, it.count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) },
             sleepWindow = nights.filter { it.inBedEnd.isAfter(it.inBedStart) && !it.inBedEnd.isBefore(dayStart) && it.inBedEnd.isBefore(dayEnd) }
                 .maxByOrNull { it.inBedEnd }?.let { DateInterval(it.inBedStart, it.inBedEnd) },

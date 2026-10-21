@@ -12,11 +12,7 @@ import java.util.Locale
 object TileOrder {
 
     fun decode(raw: String?): List<TodayTile.Metric> {
-        val result = mutableListOf<TodayTile.Metric>()
-        for (id in raw.orEmpty().split(",")) {
-            val metric = TodayTile.Metric.entries.firstOrNull { idOf(it) == id } ?: continue
-            if (metric !in result) result += metric
-        }
+        val result = savedIds(raw, TodayTile.Metric.entries, ::idOf)
         return result + TodayTile.Metric.entries.filter { it !in result }
     }
 
@@ -31,4 +27,18 @@ object TileOrder {
     }
 
     private fun idOf(metric: TodayTile.Metric): String = metric.name.lowercase(Locale.ROOT)
+}
+
+/**
+ * The items a saved order names, in its order: the comma-separated ids of [raw] that name one of
+ * [entries] (by [idOf]), each once — unknown ids and repeats are dropped in place (upstream's
+ * `DashboardSectionOrder.decode` rule, shared by the section and tile orders).
+ */
+internal fun <T> savedIds(raw: String?, entries: List<T>, idOf: (T) -> String): MutableList<T> {
+    val result = mutableListOf<T>()
+    for (id in raw.orEmpty().split(",")) {
+        val item = entries.firstOrNull { idOf(it) == id } ?: continue
+        if (item !in result) result += item
+    }
+    return result
 }

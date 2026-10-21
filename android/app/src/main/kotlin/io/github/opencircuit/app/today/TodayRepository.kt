@@ -84,8 +84,7 @@ class TodayRepository(
             // The oldest of each kind, by its (kind, start) index: one row each, whatever is kept.
             earliest = MetricKind.entries.mapNotNull { store.earliestSample(it)?.start }.minOrNull(),
             activity = store.dayActivityInputs(day, zone),
-            naps = sleep.naps(day.atStartOfDay(zone).toInstant(), day.plusDays(1).atStartOfDay(zone).toInstant())
-                .map { GoalHistory.NapSleep(it.effectiveStart, it.effectiveEnd, it.asleepMin) },
+            naps = naps(sleep, day, zone),
         )
     }
 
@@ -111,6 +110,19 @@ class TodayRepository(
             dayTemps = store.daytimeTemperatures(readingsFrom, end),
             stepDeltas = store.stepSamples(readingsFrom, end),
         )
+    }
+
+    /**
+     * The naps whose shown start (the edited one, else the detected one) is on [day]: the store finds
+     * naps by their detected start, so naps detected a day either side are read and kept by the start
+     * shown — a nap the user moved across midnight belongs to the day it now starts on.
+     */
+    private suspend fun naps(sleep: SleepStore, day: LocalDate, zone: ZoneId): List<GoalHistory.NapSleep> {
+        val start = day.atStartOfDay(zone).toInstant()
+        val end = day.plusDays(1).atStartOfDay(zone).toInstant()
+        return sleep.naps(day.minusDays(1).atStartOfDay(zone).toInstant(), day.plusDays(2).atStartOfDay(zone).toInstant())
+            .filter { !it.effectiveStart.isBefore(start) && it.effectiveStart.isBefore(end) }
+            .map { GoalHistory.NapSleep(it.effectiveStart, it.effectiveEnd, it.asleepMin) }
     }
 
     companion object {
