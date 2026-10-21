@@ -75,6 +75,8 @@ data class TodaySession(
     val liveFirmware: String? = null,
     /** The live measure (the automatic heart rate, or the user's SpO₂). */
     val live: LiveMeasureState = LiveMeasureState(),
+    /** The kept sync log has been read ([log] is what it holds); before that, and when the read failed, nothing is claimed from it. */
+    val logLoaded: Boolean = true,
 )
 
 /** Everything [TodayPresenter.present] needs; [stored] is null until the first load finishes. */
@@ -114,7 +116,7 @@ object TodayPresenter {
             spo2Measure = spo2Button(session),
             lastSynced = if (neverSynced) NOT_SYNCED else "Last synced ${RingDataPresenter.ago(session.log.last().finishedAt, input.now)}",
             ring = session.link?.let { LinkStatePresenter.present(it, session.ringName ?: RING).headline } ?: NO_RING,
-            strip = SyncStripPresenter.present(session.syncing, session.channels, firstSync = neverSynced),
+            strip = SyncStripPresenter.present(session.syncing, session.channels, firstSync = neverSynced && session.logLoaded),
             overdue = overdue(input),
         )
     }
@@ -127,7 +129,9 @@ object TodayPresenter {
     private fun heartRate(stored: ReadingUi, live: LiveMeasureState, syncing: Boolean): ReadingUi = when {
         live.mode == LiveMode.HEART_RATE && live.newest != null ->
             stored.copy(value = live.newest.toString(), note = LIVE_NOW, status = if (live.stale) NO_SIGNAL else null)
-        live.mode == LiveMode.HEART_RATE -> stored.copy(status = WARMING_UP)
+        // A new budget warms up again: the reading this session just settled stays, never the older stored one.
+        live.mode == LiveMode.HEART_RATE -> live.heartRate.lastValue?.let { stored.copy(value = it.toString(), note = LIVE_NOW, status = WARMING_UP) }
+            ?: stored.copy(status = WARMING_UP)
         syncing -> stored.copy(status = LIVE_AFTER_SYNC)
         else -> stored
     }
@@ -164,7 +168,8 @@ object TodayPresenter {
             val level = if (warning.level == SyncMeasurement.OverdueLevel.RED) TodayAlertLevel.RED else TodayAlertLevel.AMBER
             return TodayOverdueUi(warning.text, level, canSync = !session.syncing)
         }
-        if (session.log.isEmpty() && !session.syncing) return TodayOverdueUi(NEVER_SYNCED, TodayAlertLevel.NEVER_SYNCED, canSync = true)
+        // Only once the kept log has been read: before (or after a failed read) an empty log proves nothing.
+        if (session.logLoaded && session.log.isEmpty() && !session.syncing) return TodayOverdueUi(NEVER_SYNCED, TodayAlertLevel.NEVER_SYNCED, canSync = true)
         return null
     }
 

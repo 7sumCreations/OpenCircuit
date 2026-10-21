@@ -64,7 +64,8 @@ class AutoLive(
         data class SyncEnded(val report: SyncReport) : Event
         data class Visible(val visible: Boolean) : Event
         data class Ended(val end: MeasureEnd) : Event
-        data object BackoffOver : Event
+        /** The back-off numbered [id] ran out; one cancelled since (a newer [id]) is stale and ignored. */
+        data class BackoffOver(val id: Long) : Event
         data object LinkLost : Event
     }
 
@@ -76,6 +77,7 @@ class AutoLive(
     private var active = false
     private var noLock = 0
     private var backoff: Job? = null
+    private var backoffId = 0L
 
     /** Starts following the syncs, Today's visibility and the measures. Called once, by the session's start. */
     fun start() {
@@ -97,7 +99,11 @@ class AutoLive(
             is Event.SyncEnded -> onSyncEnded(event.report)
             is Event.Visible -> if (event.visible) onShown() else onHidden()
             is Event.Ended -> onEnded(event.end)
-            Event.BackoffOver -> tryStart()
+            is Event.BackoffOver -> if (event.id == backoffId) {
+                backoff = null
+                // Ran out while Today was away: served; Today coming back starts at once.
+                tryStart()
+            }
             Event.LinkLost -> {
                 armed = false
                 active = false
@@ -112,13 +118,14 @@ class AutoLive(
         // A sync that closed the link (or lost it) arms nothing: the next connection waits for its own sync.
         if (linkState.value != LinkState.Authenticated) return
         armed = true
+        // A fresh sync starts afresh, seen or not: no back-off carried over from before it.
+        noLock = 0
+        cancelBackoff()
         if (!todayVisible.value) {
             log("auto-live: a sync ended while Today was not on screen; live heart rate waits for Today")
             return
         }
         active = true
-        noLock = 0
-        cancelBackoff()
         tryStart()
     }
 
@@ -127,14 +134,15 @@ class AutoLive(
         if (!armed || active) return
         if (linkState.value != LinkState.Authenticated) return
         active = true
-        // The not-worn count carries over: coming back waits out the back-off rather than skipping it.
-        startOrBackOff()
+        // A not-worn back-off still running is waited out (what is left of it), never restarted or skipped.
+        if (backoff?.isActive == true) return
+        tryStart()
     }
 
     private fun onHidden() {
         if (!active) return
         active = false
-        cancelBackoff()
+        // The back-off keeps running while Today is away.
         measure.yieldAuto()
     }
 
@@ -169,9 +177,10 @@ class AutoLive(
         }
         val wait = AutoMeasureGate.interval(BACKOFF_BASE, BACKOFF_CAP, noLock, temperature)
         log("auto-live: no lock $noLock times; the ring seems off a finger, next try in ${wait.seconds} s")
+        val id = ++backoffId
         backoff = scope.launch {
             delay(wait.toMillis())
-            backoffOver.send(Event.BackoffOver)
+            backoffOver.send(Event.BackoffOver(id))
         }
     }
 
@@ -196,9 +205,11 @@ class AutoLive(
         log("auto-live: stopped until the next sync ($why)")
     }
 
+    /** Cancels the running back-off; a run-out it already queued is stale from here on (a new id). */
     private fun cancelBackoff() {
         backoff?.cancel()
         backoff = null
+        backoffId++
     }
 
     companion object {

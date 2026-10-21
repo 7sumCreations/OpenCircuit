@@ -88,11 +88,14 @@ fun todaySession(sessions: SessionHost?): Flow<TodaySession> =
         if (session == null) {
             flowOf(TodaySession())
         } else {
-            combine(session.state, session.syncRecords.entries, session.sync.state, session.liveMeasure.state, session.link.info) { link, entries, sync, live, info ->
+            val log = combine(session.syncRecords.entries, session.syncRecords.logRead) { entries, read -> entries to read }
+            combine(session.state, log, session.sync.state, session.liveMeasure.state, session.link.info) { link, (entries, read), sync, live, info ->
                 TodaySession(
                     link = link,
                     ringName = session.link.ring.name,
                     log = entries,
+                    // An entry recorded this session is a sync too, read or not.
+                    logLoaded = read || entries.isNotEmpty(),
                     syncing = sync.syncing,
                     channels = sync.channels,
                     liveFirmware = info.firmware.version.takeIf(String::isNotEmpty),

@@ -37,6 +37,11 @@ class SyncRecords(
     /** The sync log, oldest entry first. */
     val entries: StateFlow<List<SyncLogEntry>> = entriesFlow.asStateFlow()
 
+    private val logReadFlow = MutableStateFlow(false)
+
+    /** The kept log has been read; until then (and after a failed read) an empty [entries] says nothing about past syncs. */
+    val logRead: StateFlow<Boolean> = logReadFlow.asStateFlow()
+
     /** What the store holds; null when nothing is (or it could not be read). */
     val stored: StateFlow<StoredData?> = storedFlow.asStateFlow()
 
@@ -45,16 +50,19 @@ class SyncRecords(
         loadLock.withLock {
             if (loaded) return
             loaded = true
+            var read = true
             val kept = try {
                 store.syncLog()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 log("The sync log could not be read: ${e::class.java.simpleName}")
+                read = false
                 emptyList()
             }
             // An entry recorded while the log was being read stays, after the stored ones.
             entriesFlow.update { recorded -> (kept + recorded).distinct().takeLast(SyncLog.KEPT) }
+            logReadFlow.value = read
         }
         refreshStored()
     }

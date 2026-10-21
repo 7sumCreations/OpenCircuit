@@ -231,6 +231,15 @@ class LiveMeasureController(
     /** The user tapped Stop. Not a failure; the row keeps what was read. */
     fun stop() = synchronized(lock) { finish(cycle, failure = null, reason = MeasureEndReason.STOPPED) }
 
+    /**
+     * The user tapped Stop on a measure of theirs (Today's SpO₂): stops it, never an automatic one —
+     * a late tap after their measure ended must not end the automatic heart rate that followed it.
+     */
+    fun stopUser() = synchronized(lock) {
+        val current = stateFlow.value
+        if (current.mode != null && !current.auto) finish(cycle, failure = null, reason = MeasureEndReason.STOPPED)
+    }
+
     /** The connection was torn down or the link left `Authenticated`: the measure stops for good. */
     fun onLinkLost() = synchronized(lock) { finish(cycle, failure = MeasureFailure.RingDisconnected) }
 

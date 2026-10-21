@@ -226,7 +226,7 @@ class RingViewModel(
             // A ring on its charger is not on a finger: no new measure (the button is disabled too).
             is RingAction.Measure -> controller?.let { if (!it.deviceStatus.state.value.onCharger) it.liveMeasure.start(action.mode) }
             RingAction.StopMeasure -> controller?.liveMeasure?.stop()
-            RingAction.SyncNow -> controller?.sync?.syncNow()
+            RingAction.SyncNow -> controller?.syncNow()
             RingAction.WriteHealthNow -> health?.writeNow?.invoke()
             // Health Connect's permission screen is the activity's (the activity result registry).
             RingAction.ConnectHealth, RingAction.OpenHealthSettings -> Unit

@@ -64,6 +64,11 @@ class TodayHeroLiveTest {
         assertEquals("Live now", locked.heartRate.note)
         assertNull(locked.heartRate.status)
 
+        // A new 90 s budget warms up again: the reading just settled stays, never the older stored one.
+        val rearmed = today(live = LiveMeasureState(mode = LiveMode.HEART_RATE, auto = true, heartRate = MeasureResult(lastValue = 72)))
+        assertEquals("72", rearmed.heartRate.value)
+        assertEquals("Live · warming up", rearmed.heartRate.status)
+
         val stale = today(live = LiveMeasureState(mode = LiveMode.HEART_RATE, newest = 71, stale = true))
         assertEquals("Live · no signal from the ring", stale.heartRate.status)
     }

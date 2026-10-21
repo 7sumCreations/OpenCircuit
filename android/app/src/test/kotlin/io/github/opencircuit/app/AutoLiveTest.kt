@@ -579,6 +579,111 @@ class AutoLiveTest {
         }
     }
 
+    @Test
+    fun aSyncWhileTodayIsAwayClearsTheNotWornCount() = runTest {
+        val visible = MutableStateFlow(true)
+        val w = build(world(visible = visible, worn = false))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val first = untilSyncEnds(w)
+            advanceTo(first + 200_000) // two misses: a 180 s wait is running
+            visible.value = false
+            runCurrent()
+            w.ring.worn = true
+            val before = w.session.sync.state.value.last
+            assertTrue(w.session.sync.syncNow())
+            runCurrent()
+            val second = untilSyncEnds(w, before)
+            visible.value = true
+            runCurrent()
+            advanceTo(second + 1_000)
+            assertTrue(w.timesOf(heartRateMode, second).isNotEmpty(), "a fresh sync starts afresh: no back-off carried over")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun comingBackDuringTheBackOffWaitsOnlyWhatIsLeftOfIt() = runTest {
+        val visible = MutableStateFlow(true)
+        val w = build(world(visible = visible, worn = false))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 200_000) // the 180 s wait runs to about +360 s
+            visible.value = false
+            runCurrent()
+            advanceTo(end + 260_000)
+            visible.value = true
+            runCurrent()
+            advanceTo(end + 400_000)
+            val next = w.timesOf(heartRateMode, end + 200_000).first()
+            assertTrue(next - end in 355_000..365_000, "the wait ends where it would have: ${next - end}")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun theHerosStopEndsOnlyTheUsersMeasureAndTheRingTabsSyncNowStandsTheAutomaticOneDown() = runTest {
+        val w = build(world())
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 10_000)
+            val host = object : io.github.opencircuit.app.session.SessionHost {
+                override val current: kotlinx.coroutines.flow.StateFlow<io.github.opencircuit.app.session.RingSessionController?> = MutableStateFlow(w.session)
+                override fun reconnectRemembered() = Unit
+                override fun stopReconnecting() = Unit
+            }
+            io.github.opencircuit.app.today.todayCommands(host).stopMeasure() // a late tap: the user's SpO₂ already ended
+            runCurrent()
+            assertEquals(LiveMode.HEART_RATE, w.session.liveMeasure.state.value.mode, "the automatic heart rate is not the user's to Stop here")
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            assertTrue(w.session.sync.state.value.syncing, "the Ring tab's Sync now stands the automatic measure down first")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
+    fun comingBackToAPausedSyncConnectsOnceThroughTheResumedSync() = runTest {
+        val foreground = MutableStateFlow(true)
+        val w = build(world(foreground = foreground, wallStart = Instant.parse("2026-10-08T14:00:00Z")))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            while (w.session.sync.state.value.pagesThisSync < 1) {
+                advanceTimeBy(50)
+                runCurrent()
+            }
+            // Home mid-sync, as the activity's stop does: the sync pauses and its end closes the link.
+            foreground.value = false
+            w.session.sync.onAppStopped(changingConfigurations = false)
+            w.session.onAppLeft(switchOn = true, changingConfigurations = false)
+            untilSyncEnds(w, before = null)
+            advanceTo(testScheduler.currentTime + 5_000)
+            assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value)
+            val back = testScheduler.currentTime
+            // Back, as the activity's start does.
+            foreground.value = true
+            w.session.sync.onAppStarted()
+            w.session.onAppReturned()
+            advanceTo(back + 60_000)
+            assertEquals(1, w.ring.events.count { it.what == "connect" && it.atMillis >= back }, "the resumed sync connects; nothing else does")
+        } finally {
+            w.db.close()
+        }
+    }
+
     /** The link the switch closed when the user left comes back when they return; one the user disconnected does not. */
     @Test
     fun comingBackToTheAppReconnectsTheLinkTheSwitchClosedButNotOneTheUserClosed() = runTest {

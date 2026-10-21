@@ -87,5 +87,14 @@ class TodayOverdueTest {
         assertNull(today(emptyList(), syncing = true).overdue, "the first sync runs: the strip says so")
         assertNull(today(emptyList(), link = null).overdue, "no ring: the hero says where to pair one")
         assertNull(today(listOf(drainedAt(0.1, "FR02.018"))).overdue, "synced recently")
+        // The sync log not read yet (or its read failed): no claim that the ring never synced.
+        val unread = TodayPresenter.present(TodayInput(TodayStored(), TodaySession(link = LinkState.Authenticated, logLoaded = false), now, ZoneOffset.UTC))
+        assertNull(unread.overdue)
+    }
+
+    @Test
+    fun theStripSaysFirstSyncOnlyOnceTheLogSaysSo() {
+        val unread = TodayPresenter.present(TodayInput(TodayStored(), TodaySession(link = LinkState.Authenticated, syncing = true, logLoaded = false), now, ZoneOffset.UTC))
+        assertEquals("Syncing…", unread.strip?.text)
     }
 }

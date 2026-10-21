@@ -36,9 +36,7 @@ fun todayCommands(sessions: SessionHost?): TodayCommands {
     if (sessions == null) return TodayCommands.NONE
     return object : TodayCommands {
         override fun refresh() {
-            val session = sessions.current.value ?: return
-            session.liveMeasure.yieldAuto()
-            session.sync.syncNow()
+            sessions.current.value?.syncNow()
         }
 
         override fun measureSpO2() {
@@ -46,7 +44,7 @@ fun todayCommands(sessions: SessionHost?): TodayCommands {
         }
 
         override fun stopMeasure() {
-            sessions.current.value?.liveMeasure?.stop()
+            sessions.current.value?.liveMeasure?.stopUser()
         }
     }
 }

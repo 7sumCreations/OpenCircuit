@@ -266,7 +266,20 @@ class RingSessionController(
      * link-up's own rules apply. A link the user had closed themselves before leaving stays closed.
      */
     fun onAppReturned() {
-        if (reconnectOnReturn.getAndSet(false) && link.state.value == LinkState.Idle) reconnect()
+        if (!reconnectOnReturn.getAndSet(false)) return
+        // A paused sync the activity's start resumed connects the ring itself: one connect, its own.
+        if (sync.isSyncing.value) return
+        if (link.state.value == LinkState.Idle) reconnect()
+    }
+
+    /**
+     * The user's Sync now (the Ring tab, Today's pull to refresh): the automatic heart-rate measure
+     * stands down first — a sync never starts while a measure runs — then the sync. A measure the
+     * user started is left alone, and the sync then refuses. False when no sync started.
+     */
+    fun syncNow(): Boolean {
+        liveMeasure.yieldAuto()
+        return sync.syncNow()
     }
 
     /**

@@ -45,6 +45,21 @@ class NightQuietDisconnectTest {
         )
     }
 
+    /** App in front at night: the link-up is kept; the user's own Disconnect then holds through the night's end. */
+    @Test
+    fun theUsersOwnDisconnectInTheNightIsNotUndoneByTheCatchUp() = runTest {
+        val w = night(MutableStateFlow(true))
+        try {
+            advanceTo(60_000)
+            assertEquals(LinkState.Authenticated, w.session.state.value, "in front: the night does not close the link")
+            w.session.link.disconnect()
+            advanceTo(local(10) + 3_000)
+            assertEquals(1, w.connects().size, "the user's Disconnect holds")
+        } finally {
+            w.db.close()
+        }
+    }
+
     /** The user opens the app before the night ends: the owed catch-up still connects at the night's end. */
     @Test
     fun theCatchUpStillRunsWhenTheAppIsOpenedBeforeTheNightEnds() = runTest {

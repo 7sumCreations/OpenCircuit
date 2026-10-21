@@ -121,6 +121,13 @@ class SyncTriggers(
     @Volatile
     private var catchUpOwed = false
 
+    /**
+     * The owed catch-up's link was closed by the night's own link-up rule (not by the user, not
+     * dropped): only then does the catch-up connect the ring itself. Touched by the same collection.
+     */
+    @Volatile
+    private var nightClosedLink = false
+
     /** When a descriptor last confirmed the wearer was up. */
     private val wakeConfirmedAt = AtomicReference<Instant?>(null)
 
@@ -244,6 +251,8 @@ class SyncTriggers(
             val why = if (close) "; disconnecting until then" else ""
             log("sync-trigger: link-up inside the night; the sync waits for the night's end$why")
             skipped(now, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.NIGHT_QUIET, disconnected = close)
+            // Only a link this rule closed is reconnected by the catch-up; a kept one the user later closes stays closed.
+            nightClosedLink = close
             if (close) disconnect()
             return !close
         }
@@ -263,7 +272,8 @@ class SyncTriggers(
     private suspend fun catchUpOffLink() {
         // The switch itself, not whether the app is in front: opening the app before the night ends
         // must not drop a catch-up the switch's close made it owe (nothing else would start it).
-        while (catchUpOwed && disconnectSwitch()) {
+        // Only for a link the night's rule closed: a link the user closed stays closed.
+        while (catchUpOwed && nightClosedLink && disconnectSwitch()) {
             val now = wallClock()
             val busy = busyReason()
             if (busy != null) {
