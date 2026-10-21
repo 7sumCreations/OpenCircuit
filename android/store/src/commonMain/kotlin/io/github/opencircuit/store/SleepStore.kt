@@ -630,7 +630,7 @@ class SleepStore internal constructor(
         db.withReadTransaction { sleepDao.summaries(from, to).map { value(it) } }
 
     /** How many nights are keyed `from <= night < to` — what [sleepSummaries] would return, without reading one. */
-    suspend fun nightCount(from: Instant, to: Instant): Int = sleepDao.countSummaries(from, to)
+    suspend fun nightCount(from: Instant, to: Instant): Long = db.withReadTransaction { sleepDao.countSummaries(from, to) }
 
     /**
      * The timeline stored for the day of [night] in [zone]; no segments when no night is stored,

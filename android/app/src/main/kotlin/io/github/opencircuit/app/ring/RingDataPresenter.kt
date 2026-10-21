@@ -98,12 +98,13 @@ object RingDataPresenter {
     fun present(input: RingDataInput): RingDataUi {
         val sync = input.sync
         val disconnectAfterSync = input.disconnectAfterSync
-        val overdue = SyncMeasurement.overdue(SyncLogEntries.generation(input.liveFirmware, input.log), SyncLogEntries.oldestOnRing(input.log), input.now)
+        val warning = overdueWarning(input.liveFirmware, input.log, input.now, syncing = sync?.syncing == true)
         val stored = input.stored
         val storedRange = stored?.let { range(it.oldest, it.newest, input.zone) }
         val nights = stored?.let { count(it.nights) }
         val lastNight = stored?.lastNight?.let { lastNight(it, input.zone) }
-        val overdueText = overdue?.let { "Your ring keeps about ${it.keepsDays} days of data. Sync ${if (it.level == SyncMeasurement.OverdueLevel.RED) "now" else "soon"} so nothing is lost." }
+        val overdueText = warning?.text
+        val overdue = warning
         if (sync?.syncing == true) {
             return RingDataUi(
                 headline = SYNCING,
@@ -142,6 +143,25 @@ object RingDataPresenter {
             overdue = overdueText,
             overdueLevel = overdue?.level,
         )
+    }
+
+    /** The overdue-sync warning's words and how urgent it is. */
+    data class OverdueWarning(val text: String, val level: SyncMeasurement.OverdueLevel)
+
+    /**
+     * The overdue-sync warning from the sync log ([SyncMeasurement.overdue], measured from the
+     * least-drained channel), or null when the ring is not overdue or was never synced. The one
+     * place its words are made: the Ring data card and Today both show it. While a sync runs it
+     * does not ask for the sync already running; it says to let that one finish.
+     */
+    fun overdueWarning(liveFirmware: String?, log: List<SyncLogEntry>, now: Instant, syncing: Boolean): OverdueWarning? {
+        val overdue = SyncMeasurement.overdue(SyncLogEntries.generation(liveFirmware, log), SyncLogEntries.oldestOnRing(log), now) ?: return null
+        val ask = when {
+            syncing -> "Keep the app open until this sync finishes"
+            overdue.level == SyncMeasurement.OverdueLevel.RED -> "Sync now"
+            else -> "Sync soon"
+        }
+        return OverdueWarning("Your ring keeps about ${overdue.keepsDays} days of data. $ask so nothing is lost.", overdue.level)
     }
 
     /** "4,312 records · complete", "Up to date", "12 records · partial — data kept, will retry" or "No data received". */

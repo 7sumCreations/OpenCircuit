@@ -90,10 +90,6 @@ internal interface SampleDao {
     @Query("DELETE FROM stored_cursor WHERE kind_raw = :kindRaw")
     suspend fun deleteCursor(kindRaw: String)
 
-    /** How many samples are stored, of every kind. */
-    @Query("SELECT COUNT(*) FROM stored_sample")
-    suspend fun countSamples(): Long
-
     /** How many samples of each kind are stored; a kind with none is absent. */
     @Query("SELECT kind_raw, COUNT(*) AS n FROM stored_sample GROUP BY kind_raw ORDER BY kind_raw")
     suspend fun countSamplesByKind(): List<KindCount>

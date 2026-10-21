@@ -305,7 +305,8 @@ class RingDataCardStateTest {
         assertEquals("12 Sep – 8 Oct", ui.storedRange)
         assertEquals("21", ui.nights)
         assertEquals("23:41 → 07:02 · 7 h 21 m", ui.lastNight)
-        assertEquals("Your ring keeps about 7 days of data. Sync now so nothing is lost.", ui.overdue)
+        // The warning stays, but does not ask for the sync that is already running.
+        assertEquals("Your ring keeps about 7 days of data. Keep the app open until this sync finishes so nothing is lost.", ui.overdue)
         assertEquals(OverdueLevel.RED, ui.overdueLevel)
         // The running sync replaces the last one's result row: it is not the latest word any more.
         assertNull(ui.lastSync)

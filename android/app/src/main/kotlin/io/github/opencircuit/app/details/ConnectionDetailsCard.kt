@@ -11,6 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -38,8 +39,14 @@ fun ConnectionDetailsCard(
     onCopy: () -> Unit,
     modifier: Modifier = Modifier,
     tools: (@Composable () -> Unit)? = null,
+    /** Called with true while the card is expanded on screen, false when it collapses or leaves the screen. */
+    onShownChange: (Boolean) -> Unit = {},
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
+    DisposableEffect(expanded) {
+        onShownChange(expanded)
+        onDispose { if (expanded) onShownChange(false) }
+    }
     Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

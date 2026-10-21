@@ -204,7 +204,7 @@ class AppContainer(context: Context) {
         DetailsSources(
             pairingOutcome = companionPairing.lastOutcome,
             scanMatch = (ringScanner as? ScanDiagnostics)?.lastMatch,
-            storage = StorageSource({ database.await() }, fileBytes = { storeFileBytes(databaseFile) }).reports(),
+            storage = StorageSource({ database.await() }, fileBytes = { storeFileBytes(databaseFile) }, log = log).reports(),
         )
     }
 

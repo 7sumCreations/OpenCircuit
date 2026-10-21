@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -112,6 +113,9 @@ class RingViewModel(
     /** The switch as shown; follows what was saved. */
     private val disconnectAfterSync = MutableStateFlow(prefs?.disconnectAfterSync ?: true)
 
+    /** Connection details is expanded on screen: only then is the store counted for its Storage row. */
+    private val storageWanted = MutableStateFlow(false)
+
     init {
         fun render(parts: LinkParts, flow: ConnectFlowState, adapter: AdapterState?, detailsInput: DetailsInput, disconnectAfter: Boolean): RingUiState {
             val measuring = parts.live.mode != null
@@ -159,8 +163,14 @@ class RingViewModel(
             }
         }
         val scanKept = details.scanMatch != null
-        // The Storage line starts "not available" and follows the store from its first read on.
-        val storage: Flow<StorageReport?> = details.storage?.onStart<StorageReport?> { emit(null) } ?: flowOf(null)
+        // The Storage line starts "not available"; the store is counted only while Connection details
+        // is expanded (the counts read whole tables), and the last count stays when it collapses.
+        val storageSource = details.storage
+        val storage: Flow<StorageReport?> = if (storageSource == null) {
+            flowOf(null)
+        } else {
+            storageWanted.flatMapLatest { wanted -> if (wanted) storageSource else emptyFlow() }.onStart<StorageReport?> { emit(null) }
+        }
         val detailsInput: Flow<DetailsInput> =
             combine(sessionDetails, details.pairingOutcome, details.scanMatch ?: flowOf(null), storage) { input, pairing, scan, stored ->
                 input.copy(pairing = pairing, scan = scan, scanKept = scanKept, storage = stored)
@@ -212,6 +222,7 @@ class RingViewModel(
             is RingAction.Pick -> connectFlow?.pick(action.ring)
             // The clipboard is the activity's; the text is uiState's details.copyText.
             RingAction.CopyDetails -> Unit
+            is RingAction.DetailsShown -> storageWanted.value = action.shown
             // A ring on its charger is not on a finger: no new measure (the button is disabled too).
             is RingAction.Measure -> controller?.let { if (!it.deviceStatus.state.value.onCharger) it.liveMeasure.start(action.mode) }
             RingAction.StopMeasure -> controller?.liveMeasure?.stop()

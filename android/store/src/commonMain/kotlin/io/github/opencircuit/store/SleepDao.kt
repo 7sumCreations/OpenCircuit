@@ -43,7 +43,7 @@ internal interface SleepDao {
 
     /** How many rows have `from <= night < to`, counted on the `night` index without reading one. */
     @Query("SELECT COUNT(*) FROM stored_sleep_summary WHERE night >= :from AND night < :to")
-    suspend fun countSummaries(from: Instant, to: Instant): Int
+    suspend fun countSummaries(from: Instant, to: Instant): Long
 
     /**
      * Rows with a known recorded in-bed window (`in_bed_end > in_bed_start`) that window overlapping
@@ -76,9 +76,6 @@ internal interface SleepDao {
 
     @Query("SELECT * FROM stored_nap ORDER BY start, id")
     suspend fun allNaps(): List<StoredNapEntity>
-
-    @Query("SELECT COUNT(*) FROM stored_sleep_summary")
-    suspend fun countAllSummaries(): Long
 
     @Query("SELECT COUNT(*) FROM stored_nap")
     suspend fun countNaps(): Long

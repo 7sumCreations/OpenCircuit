@@ -40,6 +40,9 @@ sealed interface RingAction {
     /** Tapped Copy on Connection details: the masked text goes to the clipboard. */
     data object CopyDetails : RingAction
 
+    /** Connection details was expanded ([shown]) or collapsed / left: the Storage row is read only while shown. */
+    data class DetailsShown(val shown: Boolean) : RingAction
+
     /** Tapped Sync now on the Ring data card. */
     data object SyncNow : RingAction
 
@@ -115,7 +118,12 @@ fun RingScreen(
                     onStop = { onAction(RingAction.StopMeasure) },
                 )
             }
-            ConnectionDetailsCard(state.details, onCopy = { onAction(RingAction.CopyDetails) }, tools = detailsTools)
+            ConnectionDetailsCard(
+                state.details,
+                onCopy = { onAction(RingAction.CopyDetails) },
+                tools = detailsTools,
+                onShownChange = { onAction(RingAction.DetailsShown(it)) },
+            )
         }
     }
 }

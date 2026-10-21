@@ -162,7 +162,7 @@ class ConnectionDetailsRenderTest {
         compose.onNodeWithText("Show all").performClick()
         compose.onNodeWithText("Storage").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(
-            "3.5 MB on disk (database + log) · days 21 Sep 2026 – 20 Oct 2026 · samples 43,200 (heartRate 17,280) · " +
+            "3.5 MB on disk (database + log) · samples from 21 Sep 2026 to 20 Oct 2026 · samples 43,200 (heart rate 17,280) · " +
                 "day totals 30 · step deltas 2,880 · daytime temperatures 1,440 · nights 30 · naps 0",
         ).performScrollTo().assertIsDisplayed()
     }

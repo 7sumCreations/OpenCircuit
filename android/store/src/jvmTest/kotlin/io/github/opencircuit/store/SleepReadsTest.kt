@@ -66,11 +66,11 @@ class SleepReadsTest {
             }
             val store = SleepStore(db, noRowReads)
 
-            assertEquals(3, store.nightCount(Instant.EPOCH, Instant.ofEpochMilli(Long.MAX_VALUE)))
-            assertEquals(2, store.nightCount(from = d1, to = d3))
-            assertEquals(0, store.nightCount(from = d2, to = d2))
-            assertEquals(0, store.nightCount(from = d3.plusSeconds(86_400), to = Instant.ofEpochMilli(Long.MAX_VALUE)))
-            assertEquals(writer.sleepSummaries(d1, d3).size, store.nightCount(d1, d3))
+            assertEquals(3L, store.nightCount(Instant.EPOCH, Instant.ofEpochMilli(Long.MAX_VALUE)))
+            assertEquals(2L, store.nightCount(from = d1, to = d3))
+            assertEquals(0L, store.nightCount(from = d2, to = d2))
+            assertEquals(0L, store.nightCount(from = d3.plusSeconds(86_400), to = Instant.ofEpochMilli(Long.MAX_VALUE)))
+            assertEquals(writer.sleepSummaries(d1, d3).size.toLong(), store.nightCount(d1, d3))
         }
     }
 

@@ -258,7 +258,7 @@ class StoreHistory(
         val newest = HISTORY_KINDS.mapNotNull { samples.latestSample(it)?.start }.maxOrNull()
         val sleep = SleepStore(db)
         // Every night ever keyed, counted, never loaded: nights are kept for good.
-        val nights = sleep.nightCount(Instant.EPOCH, FAR_FUTURE)
+        val nights = Math.toIntExact(sleep.nightCount(Instant.EPOCH, FAR_FUTURE))
         val last = sleep.latestSleepSummary()?.let { StoredLastNight(it.currentOnset, it.currentWake, it.asleepMin) }
         if (oldest == null && nights == 0) return null
         return StoredData(oldest, newest, nights, last)

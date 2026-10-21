@@ -51,7 +51,7 @@ class TodayRepository(
     private val settle: Duration = SETTLE,
 ) : TodaySource {
 
-    override fun revisions(): Flow<Long> = revisions(flow { LocalStore(database()).changes().collect { emit(it) } }, settle)
+    override fun revisions(): Flow<Long> = revisions(storeChanges(database), settle)
 
     override suspend fun load(day: LocalDate, zone: ZoneId): TodayStored = withContext(io) {
         val store = LocalStore(database())
@@ -61,6 +61,13 @@ class TodayRepository(
     companion object {
         /** How long the store must be quiet before a burst of writes becomes one revision. */
         val SETTLE: Duration = 300.milliseconds
+
+        /**
+         * The store's change announcements ([LocalStore.changes]) over the database [database]
+         * opens — the one watch every reader of the store's growth shares.
+         */
+        fun storeChanges(database: suspend () -> StoreDatabase): Flow<Set<String>> =
+            flow { LocalStore(database()).changes().collect { emit(it) } }
 
         /**
          * [changes] as revisions 0, 1, 2…: the first announcement (the store's own, when watching

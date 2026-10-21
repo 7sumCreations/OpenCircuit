@@ -1,14 +1,17 @@
 package io.github.opencircuit.app.details
 
 import io.github.opencircuit.app.today.TodayRepository
-import io.github.opencircuit.store.LocalStore
+import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.store.StoreDatabase
 import io.github.opencircuit.store.StoreFootprint
 import io.github.opencircuit.store.StoreFootprints
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Instant
@@ -34,36 +37,52 @@ fun storeFileBytes(database: File): Long? {
 }
 
 /**
- * Connection details' Storage line, read again whenever a reading is written: the store's changes
- * become revisions as Today's do, but settle for [settle] — the counts read whole tables, so a
- * running sync must not recount after every commit.
+ * Connection details' Storage line: read at once, then again after readings are written — at most
+ * once per [every], however steadily they keep coming (a sync's commits, a live measure's
+ * readings), so the line moves on during the growth it exists to show while the whole-table counts
+ * never run back to back. A read that fails is logged (its kind only) and skipped; the line keeps
+ * its last value and the next change tries again. A watch that fails ends quietly: the Ring screen
+ * it feeds must never stop for a diagnostics line.
  */
 class StorageSource(
     private val database: suspend () -> StoreDatabase,
     private val fileBytes: () -> Long?,
     private val io: CoroutineContext = Dispatchers.IO,
-    private val settle: Duration = SETTLE,
+    private val every: Duration = EVERY,
+    private val log: (String) -> Unit = {},
 ) {
-    fun reports(): Flow<StorageReport> =
-        TodayRepository.revisions(flow { LocalStore(database()).changes().collect { emit(it) } }, settle)
-            .map { withContext(io) { StorageReport(fileBytes(), StoreFootprints(database()).read()) } }
+    fun reports(): Flow<StorageReport> = flow {
+        TodayRepository.storeChanges(database).conflate().collect {
+            read()?.let { emit(it) }
+            delay(every)
+        }
+    }.catch { e -> log("Storage line: the store could not be watched (${e::class.java.simpleName})") }
+
+    private suspend fun read(): StorageReport? = try {
+        withContext(io) { StorageReport(fileBytes(), StoreFootprints(database()).read()) }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log("Storage line: the store could not be counted (${e::class.java.simpleName})")
+        null
+    }
 
     companion object {
-        val SETTLE: Duration = 2.seconds
+        val EVERY: Duration = 2.seconds
     }
 }
 
-/** Words the Storage line: bytes, days, rows per table and samples per kind; counts only, never a value. */
+/** Words the Storage line: bytes, the samples' days, rows per table and samples per kind; counts only, never a value. */
 internal object StorageLine {
 
     fun value(report: StorageReport, zone: ZoneId): String {
         val f = report.footprint
         val rows = f.rowsPerTable
-        val kinds = f.samplesPerKind.entries.joinToString(", ") { "${it.key} ${count(it.value)}" }
+        val kinds = f.samplesPerKind.entries.joinToString(", ") { "${kindName(it.key)} ${count(it.value)}" }
         val samples = "samples ${count(rows["stored_sample"] ?: 0)}" + if (kinds.isEmpty()) "" else " ($kinds)"
         return listOf(
             report.fileBytes?.let { "${bytes(it)} on disk (database + log)" } ?: "size not read",
-            days(f.firstSample, f.lastSample, zone),
+            sampleDays(f.firstSample, f.lastSample, zone),
             samples,
             "day totals ${count(rows["stored_daily"] ?: 0)}",
             "step deltas ${count(rows["stored_step_sample"] ?: 0)}",
@@ -73,8 +92,12 @@ internal object StorageLine {
         ).joinToString(" · ")
     }
 
-    private fun days(first: Instant?, last: Instant?, zone: ZoneId): String =
-        if (first == null || last == null) "no samples stored" else "days ${DAY.format(first.atZone(zone))} – ${DAY.format(last.atZone(zone))}"
+    /** A known kind in words ("heart rate", "hrv sdnn"); an unknown stored name as stored. */
+    private fun kindName(raw: String): String =
+        MetricKind.entries.firstOrNull { it.rawValue == raw }?.name?.lowercase(Locale.ROOT)?.replace('_', ' ') ?: raw
+
+    private fun sampleDays(first: Instant?, last: Instant?, zone: ZoneId): String =
+        if (first == null || last == null) "no samples stored" else "samples from ${DAY.format(first.atZone(zone))} to ${DAY.format(last.atZone(zone))}"
 
     private fun bytes(n: Long): String = when {
         n >= MIB -> String.format(Locale.ROOT, "%.1f MB", n / MIB.toDouble())

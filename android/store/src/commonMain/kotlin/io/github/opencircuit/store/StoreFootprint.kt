@@ -37,16 +37,18 @@ class StoreFootprints internal constructor(
 
     /** Counts every reading table in full: meant for a diagnostics screen, never a per-frame path. */
     suspend fun read(): StoreFootprint = db.withReadTransaction {
+        // One pass over the samples: their total is the sum of the per-kind counts.
+        val perKind = sampleDao.countSamplesByKind().associate { it.kindRaw to it.n }
         StoreFootprint(
             rowsPerTable = linkedMapOf(
-                "stored_sample" to sampleDao.countSamples(),
+                "stored_sample" to perKind.values.sum(),
                 "stored_daily" to dailyDao.countDailies(),
                 "stored_step_sample" to dailyDao.countStepSamples(),
                 "stored_daytime_temp" to dailyDao.countDaytimeTemps(),
-                "stored_sleep_summary" to sleepDao.countAllSummaries(),
+                "stored_sleep_summary" to sleepDao.countSummaries(Instant.EPOCH, Instant.ofEpochMilli(Long.MAX_VALUE)),
                 "stored_nap" to sleepDao.countNaps(),
             ),
-            samplesPerKind = sampleDao.countSamplesByKind().associate { it.kindRaw to it.n },
+            samplesPerKind = perKind,
             firstSample = sampleDao.firstSampleStart(),
             lastSample = sampleDao.lastSampleStart(),
         )
