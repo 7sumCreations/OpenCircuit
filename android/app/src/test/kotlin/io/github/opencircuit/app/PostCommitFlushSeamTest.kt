@@ -18,7 +18,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Timeout
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -31,7 +33,12 @@ import kotlin.test.assertTrue
  * and published, and (switch on) the link is closed — never inside the drain, never holding the
  * link, and never under the session or the sync's pause. The trigger runs one flush at a time and
  * loses no request that comes while one runs.
+ *
+ * Every case has a wall-clock limit: a trigger whose gate is gone re-queues itself forever on the
+ * test scheduler, which spins the test thread rather than failing. The limit runs the case on its
+ * own thread so the spin ends as a failure, not a hung build.
  */
+@Timeout(value = 60, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class PostCommitFlushSeamTest {
 
     @Test

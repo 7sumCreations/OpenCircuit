@@ -593,6 +593,39 @@ class AutoLiveTest {
     }
 
     @Test
+    fun todayComingBackDuringTheUsersOwnMeasureStartsNothingAndLeavesItAlone() = runTest {
+        val visible = MutableStateFlow(true)
+        val w = build(world(visible = visible))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 10_000)
+            w.session.liveMeasure.start(LiveMode.SPO2)
+            runCurrent()
+            val tapped = testScheduler.currentTime
+            val logged = w.logs.size
+            advanceTo(tapped + 5_000)
+            // Today leaves and comes back inside the user's SpO₂ budget: the armed state asks AutoLive to try.
+            visible.value = false
+            runCurrent()
+            visible.value = true
+            runCurrent()
+            advanceTo(tapped + 10_000)
+            val state = w.session.liveMeasure.state.value
+            assertEquals(LiveMode.SPO2, state.mode, "the user's measure is untouched")
+            assertEquals(false, state.auto, "and still the user's")
+            assertEquals(emptyList(), w.timesOf(heartRateMode, tapped), "no heart rate started beside it")
+            // AutoLive does not even ask the controller: a refused attempt logs "not started", a taken one "started".
+            val autoLines = w.logs.drop(logged).filter { it.startsWith("auto-live:") }
+            assertEquals(emptyList(), autoLines, "AutoLive tried to start while the user measured")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
     fun stoppingTheAutomaticMeasureEndsItUntilTheNextSync() = runTest {
         val w = build(world())
         try {

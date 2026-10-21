@@ -57,6 +57,17 @@ class LifecycleGlueSourceTest {
     }
 
     @Test
+    fun theRingSessionStartsInTheSharedBlockWhateverTabIsOpen() {
+        // Everything between the onboarding branch and the per-tab `when` runs on Today and Settings too.
+        val shared = activity.substringAfter("OnboardingScreen(").substringBefore("when (destination)")
+        assertTrue("ringViewModel.pairingSheet" in shared, "the Ring view model is built (and reconnects the remembered ring) before any tab is chosen")
+        assertTrue("ringViewModel.onResume(permissionReader.read())" in shared, "every resume re-reads the permissions, on any tab")
+        // The per-tab branches are not where the session starts: no tab touches the sheet a second time.
+        val tabs = activity.substringAfter("when (destination)")
+        assertEquals(0, Regex("""ringViewModel\.pairingSheet""").findAll(tabs).count(), "no tab builds the session a second time")
+    }
+
+    @Test
     fun theRingScreenKeepsTheScreenOnWhileASyncRuns() {
         assertTrue("val keepOn = SyncLifecycle.keepScreenOn(state.ringData.syncing)" in ringScreen)
         assertTrue("view.keepScreenOn = keepOn" in ringScreen)
