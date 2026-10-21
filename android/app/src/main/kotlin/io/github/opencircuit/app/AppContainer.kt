@@ -21,6 +21,7 @@ import io.github.opencircuit.app.details.storeFileBytes
 import io.github.opencircuit.app.health.HealthAccess
 import io.github.opencircuit.app.health.HealthFlush
 import io.github.opencircuit.app.health.HealthSwitch
+import io.github.opencircuit.app.health.HealthUpgradeNotice
 import io.github.opencircuit.app.health.StoreHealthAccessMemory
 import io.github.opencircuit.app.health.StoreHealthActivity
 import io.github.opencircuit.app.health.StoreHealthFailures
@@ -128,7 +129,11 @@ class AppContainer(context: Context) {
      * Connect call goes through [healthFlush] or [healthAccess], and both ask it first. Turning it
      * ON reads Health Connect's access again (the card then shows what is already granted).
      */
-    val healthSwitch: HealthSwitch = HealthSwitch(appPrefs, log, onChanged = { on -> if (on) healthAccess.refresh() })
+    val healthSwitch: HealthSwitch = HealthSwitch(appPrefs, log, onChanged = { on ->
+        // Using the switch, either way, is the user having seen the change: Today's notice goes.
+        healthNotice.dismiss()
+        if (on) healthAccess.refresh()
+    })
 
     /**
      * Health Connect on this phone (the platform's, Android 14 and later); the one client of the
@@ -140,6 +145,9 @@ class AppContainer(context: Context) {
 
     /** The Health Connect write-failure map in the store, shared by every write and the card. */
     private val healthFailures = StoreHealthFailures({ database.await() }, wallNow, log)
+
+    /** What the access reader keeps in the store: the "permission screen shown" flag and the failure map. */
+    private val healthAccessMemory = StoreHealthAccessMemory({ database.await() }, wallNow, healthFailures)
 
     /**
      * Writes what the store holds and Health Connect lacks. The ring's model comes from the current
@@ -180,8 +188,15 @@ class AppContainer(context: Context) {
      * resume, after the permission screen and when the switch turns ON — never while it is OFF.
      */
     val healthAccess: HealthAccess =
-        HealthAccess(healthConnect, StoreHealthAccessMemory({ database.await() }, wallNow, healthFailures), appScope, log, enabled = healthSwitch::isOn)
+        HealthAccess(healthConnect, healthAccessMemory, appScope, log, enabled = healthSwitch::isOn)
             .also { it.refresh() }
+
+    /**
+     * Today's one-time "Health Connect export is now off" notice, for an install that used Health
+     * Connect before the switch existed: told by the store's "permission screen shown" flag (a store
+     * read, never a Health Connect call).
+     */
+    val healthNotice: HealthUpgradeNotice = HealthUpgradeNotice(appPrefs, usedBefore = { healthAccessMemory.asked() }, appScope, log)
 
     /** Android's companion-device manager: the pairing sheet before the first bond, and forgetting. */
     val companionPairing: CompanionPairing = CompanionPairing(AndroidCompanionPort(context), log)

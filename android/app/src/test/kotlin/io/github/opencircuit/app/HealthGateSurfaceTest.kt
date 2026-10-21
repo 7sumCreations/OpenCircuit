@@ -52,6 +52,20 @@ class HealthGateSurfaceTest {
         built.forEach { assertTrue("enabled = healthSwitch::isOn" in it, "built without the switch: $it") }
     }
 
+    /**
+     * The upgrade notice reads the store's "permission screen shown" flag (never Health Connect), and
+     * using the switch dismisses it — which is why a fresh install, whose flag can only be set after
+     * turning the switch ON, never sees it.
+     */
+    @Test
+    fun theNoticeReadsTheStoreFlagAndTheSwitchDismissesIt() {
+        val container = main.getValue("AppContainer.kt")
+        assertTrue("HealthUpgradeNotice(appPrefs, usedBefore = { healthAccessMemory.asked() }, appScope, log)" in container)
+        val switch = container.substringAfter("val healthSwitch: HealthSwitch = HealthSwitch(").substringBefore("\n\n")
+        assertTrue("healthNotice.dismiss()" in switch, "the switch's change dismisses the notice: $switch")
+        assertTrue("healthNotice = container.healthNotice" in main.getValue("MainActivity.kt"), "Today is given the notice")
+    }
+
     @Test
     fun theActivitysResumeAndAfterScreenReadsGoThroughTheAccessReader() {
         val activity = main.getValue("MainActivity.kt")

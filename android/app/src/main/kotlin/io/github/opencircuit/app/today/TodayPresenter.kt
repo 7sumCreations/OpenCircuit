@@ -92,6 +92,8 @@ data class TodayUiState(
     val tileOrder: List<TodayTile.Metric> = TodayTile.Metric.entries.toList(),
     /** Edit order is on: the page lists sections and tiles with move buttons instead of the cards. */
     val editingOrder: Boolean = false,
+    /** The one-time "Health Connect export is now off" notice shows (on today's page only). */
+    val healthNotice: Boolean = false,
 )
 
 /** What the ring session contributes to Today: its link, name, sync log, the running sync, the ring's firmware and the live measure. */

@@ -113,7 +113,16 @@ sealed interface TodayAction {
 
     /** Back to the default order of sections and tiles. */
     data object ResetOrder : TodayAction
+
+    /** The Health Connect notice's Dismiss. */
+    data object DismissHealthNotice : TodayAction
+
+    /** The Health Connect notice's Open Settings: the host opens the Settings tab (and the notice is dismissed). */
+    data object OpenSettings : TodayAction
 }
+
+/** The tag of the one-time Health Connect notice. */
+const val TODAY_HEALTH_NOTICE_TAG = "today.healthNotice"
 
 /** The tag of Today's hero card. */
 const val TODAY_HERO_TAG = "today.hero"
@@ -195,6 +204,7 @@ private fun DayPage(
         wide("strip") { SyncStrip(state) }
         state.overdue?.let { overdue -> wide("overdue") { OverdueChip(overdue, onAction) } }
         if (ours && isToday) wide("synthesis") { SynthesisLine(state, animate) }
+        if (isToday && state.healthNotice) wide("healthNotice") { HealthNotice(onAction) }
         if (!state.loading) wide("orderBar") { OrderBar(state.editingOrder, onAction) }
         if (state.editingOrder) {
             editOrder(state, onAction)
@@ -212,6 +222,35 @@ private fun DayPage(
         }
     }
 }
+
+/**
+ * Shown once to an install that used Health Connect before the switch existed: writing is now OFF
+ * until turned on in Settings, and what was written stays there. Dismiss, or Open Settings.
+ */
+@Composable
+private fun HealthNotice(onAction: (TodayAction) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag(TODAY_HEALTH_NOTICE_TAG),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+    ) {
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(HEALTH_NOTICE_TITLE, style = MaterialTheme.typography.titleSmall, modifier = Modifier.semantics { heading() })
+            Text(HEALTH_NOTICE_BODY, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { onAction(TodayAction.DismissHealthNotice) }) { Text("Dismiss") }
+                TextButton(onClick = { onAction(TodayAction.OpenSettings) }) { Text("Open Settings") }
+            }
+        }
+    }
+}
+
+/** The notice's words (the mockup's). */
+const val HEALTH_NOTICE_TITLE = "Health Connect export is now off"
+const val HEALTH_NOTICE_BODY =
+    "Sending readings to Health Connect is now off by default. Turn it on in Settings if you want it. What was already written stays in Health Connect."
 
 /** "Edit order" (or "Done" while it is on) at the end of a row above the sections. */
 @Composable

@@ -3,6 +3,7 @@ package io.github.opencircuit.app.today
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import io.github.opencircuit.app.data.AppPrefs
+import io.github.opencircuit.app.health.HealthUpgradeNotice
 import io.github.opencircuit.app.ring.everyMinute
 import io.github.opencircuit.app.session.SessionHost
 import kotlinx.coroutines.CancellationException
@@ -54,6 +55,8 @@ class TodayViewModel(
     private val saved: SavedStateHandle = SavedStateHandle(),
     /** Where Today's section and tile orders are saved; null keeps the default order, unsaved. */
     private val prefs: AppPrefs? = null,
+    /** The one-time "Health Connect export is now off" notice; null: none (tests that are not about it). */
+    private val healthNotice: HealthUpgradeNotice? = null,
 ) : ViewModel(scope) {
 
     /** The Today screen's state. */
@@ -86,6 +89,8 @@ class TodayViewModel(
             is TodayAction.MoveSection -> reorder { it.copy(sections = moved(it.sections, action.section, action.by)) }
             is TodayAction.MoveTile -> reorder { it.copy(tiles = TileOrder.moved(it.tiles, action.metric, action.by)) }
             TodayAction.ResetOrder -> reorder { TodayOrder(DashboardSectionOrder.decode(""), TileOrder.decode(null)) }
+            // Open Settings from the notice dismisses it too; the host opens the tab.
+            TodayAction.DismissHealthNotice, TodayAction.OpenSettings -> healthNotice?.dismiss()
         }
     }
 
@@ -177,20 +182,26 @@ class TodayViewModel(
                     .copy(loading = !ready)
             }
         }
-        val browsing = combine(picked, marks, detailUi, order, editing) { p, m, d, o, e -> Browsing(p, m, d, o, e) }
+        val notice: Flow<Boolean> = healthNotice?.visible ?: flowOf(false)
+        val arrangement = combine(order, editing, notice) { o, e, n -> Arrangement(o, e, n) }
+        val browsing = combine(picked, marks, detailUi, arrangement) { p, m, d, a -> Browsing(p, m, d, a) }
         uiState = combine(loads, parts, dashboard, ticks, browsing) { s, parts, built, _, b ->
-            ordered(TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built, picked = b.picked, marked = b.marked)).copy(detail = b.detail), b.order, b.editing)
-        }.stateIn(scope, SharingStarted.Eagerly, ordered(TodayUiState(), order.value, editing = false))
+            ordered(TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built, picked = b.picked, marked = b.marked)).copy(detail = b.detail), b.arrangement)
+        }.stateIn(scope, SharingStarted.Eagerly, ordered(TodayUiState(), Arrangement(order.value, editing = false, notice = healthNotice?.visible?.value == true)))
     }
 
-    /** What the user chose on Today besides the stored data: the picked day, the marks, the open detail, the order and Edit order. */
-    private data class Browsing(val picked: LocalDate?, val marked: Set<LocalDate>, val detail: TileDetailUi?, val order: TodayOrder, val editing: Boolean)
+    /** What the user chose on Today besides the stored data: the picked day, the marks, the open detail, and the page's arrangement. */
+    private data class Browsing(val picked: LocalDate?, val marked: Set<LocalDate>, val detail: TileDetailUi?, val arrangement: Arrangement)
 
-    /** [state] with the saved order and Edit order (its tiles are already in that order: the dashboard sorted them). */
-    private fun ordered(state: TodayUiState, order: TodayOrder, editing: Boolean): TodayUiState = state.copy(
-        sections = order.sections,
-        tileOrder = order.tiles,
-        editingOrder = editing,
+    /** The saved order, Edit order, and whether the one-time Health Connect notice shows. */
+    private data class Arrangement(val order: TodayOrder, val editing: Boolean, val notice: Boolean)
+
+    /** [state] with the saved order, Edit order and the notice (its tiles are already in that order: the dashboard sorted them). */
+    private fun ordered(state: TodayUiState, arrangement: Arrangement): TodayUiState = state.copy(
+        sections = arrangement.order.sections,
+        tileOrder = arrangement.order.tiles,
+        editingOrder = arrangement.editing,
+        healthNotice = arrangement.notice,
     )
 
     private companion object {

@@ -123,6 +123,7 @@ class MainActivity : ComponentActivity() {
                     commands = todayCommands(container.ringSessions),
                     saved = createSavedStateHandle(),
                     prefs = container.appPrefs,
+                    healthNotice = container.healthNotice,
                 )
             }
         }
@@ -185,7 +186,17 @@ class MainActivity : ComponentActivity() {
                                 BackHandler(enabled = state.detail != null) { todayViewModel.onAction(TodayAction.CloseDetail) }
                                 TodayScreen(
                                     state = state,
-                                    onAction = { if (it == TodayAction.OpenRing) destination = Destination.Ring else todayViewModel.onAction(it) },
+                                    onAction = {
+                                        when (it) {
+                                            TodayAction.OpenRing -> destination = Destination.Ring
+                                            // The notice's Open Settings: the tab opens, and the notice is dismissed.
+                                            TodayAction.OpenSettings -> {
+                                                todayViewModel.onAction(it)
+                                                destination = Destination.Settings
+                                            }
+                                            else -> todayViewModel.onAction(it)
+                                        }
+                                    },
                                     modifier = inner,
                                     animate = !reducedMotion(),
                                 )
