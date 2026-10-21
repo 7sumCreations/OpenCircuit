@@ -14,7 +14,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.opencircuit.app.health.HEALTH_CONNECT_CARD_TAG
+import io.github.opencircuit.app.health.HealthAccessState
 import io.github.opencircuit.app.health.HealthCardAction
+import io.github.opencircuit.app.health.HealthFlushState
+import java.time.Instant
 import io.github.opencircuit.app.health.HealthCardUi
 import io.github.opencircuit.app.settings.SETTINGS_HEALTH_SWITCH_TAG
 import io.github.opencircuit.app.settings.SettingsAction
@@ -36,7 +39,7 @@ import org.junit.runner.RunWith
 /**
  * The Health Connect switch and the upgrade notice, drawn from hand-built states and read back by
  * their text and semantics: Settings with the switch OFF draws the switch and its line and nothing
- * of the card (no Connect); a tap on the row asks to turn it on; ON draws the E10 card and routes
+ * of the card (no Connect); a tap on the row asks to turn it on; ON draws the Health Connect card and routes
  * its buttons. Today draws the one-time notice only when asked to, with Dismiss and Open Settings.
  */
 @RunWith(AndroidJUnit4::class)
@@ -79,10 +82,21 @@ class HealthSwitchRenderTest {
     }
 
     @Test
-    fun anOnThatCouldNotBeSavedSaysSo() {
-        compose.setContent { SettingsScreen(SettingsUiState(saveFailed = true), onAction = {}) }
+    fun aChangeThatCouldNotBeSavedSaysSo() {
+        compose.setContent { SettingsScreen(SettingsUiState(saveError = SettingsPresenter.ON_NOT_SAVED), onAction = {}) }
         compose.onNodeWithTag(SETTINGS_HEALTH_SWITCH_TAG).assertIsOff()
         compose.onNodeWithText("Could not save the setting, so it stays off. Try again.").assertIsDisplayed()
+    }
+
+    /** Turned ON before Health Connect has been read: "Checking…", and no button to tap. */
+    @Test
+    fun checkingDrawsNoButton() {
+        compose.setContent {
+            SettingsScreen(SettingsPresenter.present(true, HealthAccessState(), HealthFlushState(), Instant.EPOCH, saveError = null), onAction = {})
+        }
+        compose.onNodeWithText("Checking Health Connect…").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Connect Health Connect").assertDoesNotExist()
+        compose.onNodeWithText("Write to Health Connect now").assertDoesNotExist()
     }
 
     private val today = TodayUiState(

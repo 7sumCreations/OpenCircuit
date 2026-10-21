@@ -7,6 +7,7 @@ import io.github.opencircuit.app.health.StoreHealthPeriods
 import io.github.opencircuit.app.health.StoreHealthSamples
 import io.github.opencircuit.app.health.StoreHealthSleep
 import io.github.opencircuit.app.health.StoreWriteGenerations
+import io.github.opencircuit.app.health.SwitchedHealthConnect
 import io.github.opencircuit.health.FakeHealthConnect
 import io.github.opencircuit.health.HealthActivityStore
 import io.github.opencircuit.health.HealthConnectPort
@@ -55,11 +56,21 @@ internal class RecordingPort(private val inner: HealthConnectPort) : HealthConne
 
     private fun note(name: String) = synchronized(seen) { seen += name }
 
-    override suspend fun sdkStatus(): HealthSdkStatus = inner.sdkStatus().also { note("sdkStatus") }
+    // Each call is noted BEFORE it is passed on, so a call that throws is counted too.
+    override suspend fun sdkStatus(): HealthSdkStatus {
+        note("sdkStatus")
+        return inner.sdkStatus()
+    }
 
-    override suspend fun grantedWrites(): Set<HealthPermission> = inner.grantedWrites().also { note("grantedWrites") }
+    override suspend fun grantedWrites(): Set<HealthPermission> {
+        note("grantedWrites")
+        return inner.grantedWrites()
+    }
 
-    override suspend fun featureAvailable(feature: HealthFeature): Boolean = inner.featureAvailable(feature).also { note("featureAvailable") }
+    override suspend fun featureAvailable(feature: HealthFeature): Boolean {
+        note("featureAvailable")
+        return inner.featureAvailable(feature)
+    }
 
     override suspend fun insert(type: RecordType, records: List<HealthRecord>): List<String> {
         note("insert")
@@ -71,8 +82,10 @@ internal class RecordingPort(private val inner: HealthConnectPort) : HealthConne
         inner.deleteByClientIds(type, clientRecordIds)
     }
 
-    override suspend fun readOwn(type: RecordType, from: Instant, until: Instant): List<HealthRecord> =
-        inner.readOwn(type, from, until).also { note("readOwn") }
+    override suspend fun readOwn(type: RecordType, from: Instant, until: Instant): List<HealthRecord> {
+        note("readOwn")
+        return inner.readOwn(type, from, until)
+    }
 }
 
 /** Holds each insert at its start while closed (open by default). Records the size of each insert it saw. */
@@ -103,7 +116,7 @@ internal suspend fun TestScope.healthWorld(
     activity: Boolean = false,
     /** The store to write from; a fresh in-memory one when null. */
     reuseDb: StoreDatabase? = null,
-    /** The Settings switch as the flush reads it; ON for the tests of the writing itself. */
+    /** The Settings switch as the flush and the port read it; ON for the tests of the writing itself. */
     enabled: () -> Boolean = { true },
 ): HealthWorld {
     val db = reuseDb ?: StoreFactory.openInMemory(StandardTestDispatcher(testScheduler))
@@ -113,7 +126,8 @@ internal suspend fun TestScope.healthWorld(
     val port = RecordingPort(gate)
     val appScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
     val writer = HealthWriter(
-        port = port,
+        // As the app wires it: the writer reaches Health Connect only through the switch.
+        port = SwitchedHealthConnect(port, enabled),
         store = StoreHealthSamples { db },
         generation = WriteGeneration(StoreWriteGenerations({ db }, wall)),
         failureStore = StoreHealthFailures({ db }, wall, log = {}),

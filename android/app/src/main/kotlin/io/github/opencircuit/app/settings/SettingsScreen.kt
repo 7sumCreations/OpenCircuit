@@ -68,9 +68,7 @@ fun SettingsScreen(state: SettingsUiState, onAction: (SettingsAction) -> Unit, m
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     )
-                    if (state.saveFailed) {
-                        Text("Could not save the setting, so it stays off. Try again.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    }
+                    state.saveError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
                     Text(
                         "Turning it off later stops new copies. What was already written stays in Health Connect until you remove it there.",
                         style = MaterialTheme.typography.bodySmall,

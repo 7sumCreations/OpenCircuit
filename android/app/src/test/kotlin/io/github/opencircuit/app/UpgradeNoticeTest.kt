@@ -93,6 +93,18 @@ class UpgradeNoticeTest {
         assertFalse(n.visible.value)
     }
 
+    /**
+     * With writing ON the notice ("export is now off") would be false: never shown, even when an
+     * earlier dismissal could not be saved and the store flag is set.
+     */
+    @Test
+    fun withTheSwitchOnItIsNeverShown() = runTest {
+        values.putRaw("health.write.enabled.v1", true)
+        val n = HealthUpgradeNotice(PrefsAppPrefs(values), { true }, backgroundScope, log = {})
+        runCurrent()
+        assertFalse(n.visible.value)
+    }
+
     /** A dismissal that could not be saved still hides it for this run. */
     @Test
     fun aDismissalThatCouldNotBeSavedStillHidesIt() = runTest {

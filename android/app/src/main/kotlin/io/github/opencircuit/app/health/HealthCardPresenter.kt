@@ -84,6 +84,11 @@ class HealthAccess(
     /** Reads the state again; returns at once. */
     fun refresh(): Job = scope.launch { read() }
 
+    /** Forgets what was read (the switch went OFF): a later ON starts from "not read yet", never from an old answer. */
+    fun forget() {
+        stateFlow.value = HealthAccessState()
+    }
+
     /** The permission screen answered: remembers that it was shown, then reads the grants again. Returns at once. */
     fun permissionScreenAnswered(): Job = scope.launch {
         try {
@@ -101,13 +106,15 @@ class HealthAccess(
         if (!enabled()) return@withLock
         try {
             val available = port.sdkStatus() == HealthSdkStatus.AVAILABLE
-            stateFlow.value = HealthAccessState(
+            val read = HealthAccessState(
                 available = available,
                 granted = if (available) port.grantedWrites() else emptySet(),
                 skinTemperatureSupported = if (available) port.featureAvailable(HealthFeature.SKIN_TEMPERATURE) else null,
                 asked = memory.asked(),
                 failures = memory.failures(),
             )
+            // Turned OFF while this read ran: its answer is not published (OFF forgot what was read).
+            if (enabled()) stateFlow.value = read
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

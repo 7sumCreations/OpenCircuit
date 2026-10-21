@@ -22,6 +22,7 @@ import io.github.opencircuit.app.health.HealthAccess
 import io.github.opencircuit.app.health.HealthFlush
 import io.github.opencircuit.app.health.HealthSwitch
 import io.github.opencircuit.app.health.HealthUpgradeNotice
+import io.github.opencircuit.app.health.SwitchedHealthConnect
 import io.github.opencircuit.app.health.StoreHealthAccessMemory
 import io.github.opencircuit.app.health.StoreHealthActivity
 import io.github.opencircuit.app.health.StoreHealthFailures
@@ -126,22 +127,27 @@ class AppContainer(context: Context) {
 
     /**
      * Settings' "Send to Health Connect" switch, OFF unless the user turned it on. Every Health
-     * Connect call goes through [healthFlush] or [healthAccess], and both ask it first. Turning it
-     * ON reads Health Connect's access again (the card then shows what is already granted).
+     * Connect call goes through [switchedHealthConnect], which asks it before each call; the flush
+     * and the access reader also ask it before they start. Turning it ON reads Health Connect's
+     * access again (the card then shows what is already granted); turning it OFF forgets what was
+     * read, so a later ON never shows an old answer.
      */
     val healthSwitch: HealthSwitch = HealthSwitch(appPrefs, log, onChanged = { on ->
         // Using the switch, either way, is the user having seen the change: Today's notice goes.
         healthNotice.dismiss()
-        if (on) healthAccess.refresh()
+        if (on) healthAccess.refresh() else healthAccess.forget()
     })
 
     /**
      * Health Connect on this phone (the platform's, Android 14 and later); the one client of the
-     * app, reached only through [healthWriter] (behind [healthFlush]) and [healthAccess]. Building it
-     * calls nothing: its client is made on first use. (Public for the instrumented tests, which
-     * grant and read back through it; no app code calls it directly.)
+     * app, reached only through [switchedHealthConnect]. Building it calls nothing: its client is
+     * made on first use. (Public for the instrumented tests, which grant and read back through it;
+     * no app code calls it directly.)
      */
     val healthConnect: JetpackHealthConnect = JetpackHealthConnect(context)
+
+    /** The one door to Health Connect: each call refused while the switch is OFF, a running write's next call too. */
+    private val switchedHealthConnect = SwitchedHealthConnect(healthConnect, healthSwitch::isOn)
 
     /** The Health Connect write-failure map in the store, shared by every write and the card. */
     private val healthFailures = StoreHealthFailures({ database.await() }, wallNow, log)
@@ -156,7 +162,7 @@ class AppContainer(context: Context) {
      * above any version an earlier install left in Health Connect.
      */
     private val healthWriter = HealthWriter(
-        port = healthConnect,
+        port = switchedHealthConnect,
         store = StoreHealthSamples { database.await() },
         generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow)) { clock.nowMillis() },
         failureStore = healthFailures,
@@ -188,7 +194,7 @@ class AppContainer(context: Context) {
      * resume, after the permission screen and when the switch turns ON — never while it is OFF.
      */
     val healthAccess: HealthAccess =
-        HealthAccess(healthConnect, healthAccessMemory, appScope, log, enabled = healthSwitch::isOn)
+        HealthAccess(switchedHealthConnect, healthAccessMemory, appScope, log, enabled = healthSwitch::isOn)
             .also { it.refresh() }
 
     /**

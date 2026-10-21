@@ -37,7 +37,10 @@ class LiveStepsOnDemoRingTest {
 
     @get:Rule(order = 0)
     val connectedDemoRing = object : ExternalResource() {
+        private var noticeDismissed = false
+
         override fun before() {
+            noticeDismissed = app.container.appPrefs.healthUpgradeNoticeDismissed
             runBlocking { grantHealthWrites(app.container.healthConnect, app.packageName, listOf(HealthPermission.STEPS, HealthPermission.DISTANCE)) }
             InstrumentationRegistry.getInstrumentation().runOnMainSync { app.container.ringSessions.stopReconnecting() }
             check(app.container.appPrefs.setOnboardingCompleted()) { "could not record that onboarding was done" }
@@ -48,8 +51,9 @@ class LiveStepsOnDemoRingTest {
         }
 
         override fun after() {
-            // Back to the default for the tests that follow in this process.
+            // Back to the default for the tests that follow in this process; using the switch dismissed the notice, so that goes back too.
             app.container.healthSwitch.set(false)
+            restoreNoticeFlag(app, noticeDismissed)
         }
     }
 

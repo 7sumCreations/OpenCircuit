@@ -10,7 +10,10 @@ import io.github.opencircuit.app.settings.SettingsAction
 import io.github.opencircuit.app.settings.SettingsViewModel
 import io.github.opencircuit.health.HealthPermission
 import io.github.opencircuit.health.HealthShare
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -39,13 +42,60 @@ class SettingsViewModelTest {
     private val flush = MutableStateFlow(HealthFlushState())
     private var writes = 0
 
-    private fun TestScope.settings(switch: HealthSwitch = HealthSwitch(PrefsAppPrefs(values), log = {})) = SettingsViewModel(
+    private fun TestScope.settings(
+        switch: HealthSwitch = HealthSwitch(PrefsAppPrefs(values), log = {}),
+        clockTicks: Flow<Unit> = flowOf(Unit),
+    ) = SettingsViewModel(
         switch = switch,
         health = HealthCardSources(access, flush, writeNow = { writes++ }),
         scope = backgroundScope,
         wallClock = { now },
-        clockTicks = flowOf(Unit),
+        clockTicks = clockTicks,
     )
+
+    /** The minute clock moves "Last written" on; with the switch OFF there is no card, so nothing ticks. */
+    @Test
+    fun theClockTicksOnlyWhileTheSwitchIsOn() = runTest {
+        var listening = 0
+        val ticks = flow {
+            listening++
+            try {
+                emit(Unit)
+                awaitCancellation()
+            } finally {
+                listening--
+            }
+        }
+        val vm = settings(clockTicks = ticks)
+        runCurrent()
+        assertEquals(0, listening, "OFF: no clock")
+
+        vm.onAction(SettingsAction.SetHealthWrite(true))
+        runCurrent()
+        assertEquals(1, listening, "ON: the card's clock")
+
+        vm.onAction(SettingsAction.SetHealthWrite(false))
+        runCurrent()
+        assertEquals(0, listening, "OFF again: stopped")
+    }
+
+    /** An OFF that could not be saved stops writing now, and says it may come back on after a restart. */
+    @Test
+    fun anOffThatCouldNotBeSavedSaysItMayComeBackOn() = runTest {
+        values.putRaw("health.write.enabled.v1", true)
+        val vm = settings()
+        runCurrent()
+        values.failWrites = true
+
+        vm.onAction(SettingsAction.SetHealthWrite(false))
+        runCurrent()
+
+        assertFalse(vm.uiState.value.healthOn, "off for now")
+        assertEquals(
+            "Could not save the setting. Sending is off for now, but may turn back on when the app restarts. Try again.",
+            vm.uiState.value.saveError,
+        )
+    }
 
     @Test
     fun offShowsTheSwitchAndItsLineAndNoCardEvenWithAGrantLeftFromBefore() = runTest {
@@ -57,7 +107,7 @@ class SettingsViewModelTest {
         assertFalse(state.healthOn)
         assertEquals("Off. Your readings stay only in this app. Turn it on to send a copy to Health Connect after each sync.", state.healthLine)
         assertNull(state.healthCard, "no card content while OFF")
-        assertFalse(state.saveFailed)
+        assertNull(state.saveError)
 
         vm.onAction(SettingsAction.WriteHealthNow)
         assertEquals(0, writes, "Write now does nothing while OFF")
@@ -83,6 +133,28 @@ class SettingsViewModelTest {
 
         vm.onAction(SettingsAction.WriteHealthNow)
         assertEquals(1, writes)
+    }
+
+    /**
+     * Turned ON on a launch made while OFF, Health Connect has not been read yet: the card says it is
+     * checking and offers no button — never a Connect that a quick tap would turn into a second
+     * permission screen over a grant that is already there.
+     */
+    @Test
+    fun turningOnBeforeTheAccessIsReadShowsCheckingAndNoButton() = runTest {
+        val vm = settings()
+        vm.onAction(SettingsAction.SetHealthWrite(true))
+        runCurrent()
+
+        val checking = assertNotNull(vm.uiState.value.healthCard)
+        assertEquals("Checking Health Connect…", checking.headline)
+        assertNull(checking.button)
+        assertNull(checking.action)
+        assertNull(checking.secondAction)
+
+        access.value = HealthAccessState(available = true, granted = everything, asked = true)
+        runCurrent()
+        assertEquals("Connected", vm.uiState.value.healthCard?.headline)
     }
 
     @Test
@@ -124,12 +196,12 @@ class SettingsViewModelTest {
 
         assertFalse(vm.uiState.value.healthOn)
         assertNull(vm.uiState.value.healthCard)
-        assertTrue(vm.uiState.value.saveFailed)
+        assertEquals("Could not save the setting, so it stays off. Try again.", vm.uiState.value.saveError)
 
         values.failWrites = false
         vm.onAction(SettingsAction.SetHealthWrite(true))
         runCurrent()
         assertTrue(vm.uiState.value.healthOn)
-        assertFalse(vm.uiState.value.saveFailed, "a later save clears it")
+        assertNull(vm.uiState.value.saveError, "a later save clears it")
     }
 }

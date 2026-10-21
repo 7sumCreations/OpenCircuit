@@ -43,7 +43,8 @@ class AppContainerHistoryWiringTest {
         // The writer's sleep defaults to none: the app must hand it the store's nights, edits and naps.
         assertTrue("sleep = StoreHealthSleep({ database.await() }, wallNow, ZoneId::systemDefault)" in source)
         assertTrue("generation = WriteGeneration(StoreWriteGenerations({ database.await() }, wallNow))" in source)
-        assertTrue("port = healthConnect" in source)
+        // The writer reaches Health Connect through the switched port (refused while the switch is OFF).
+        assertTrue("port = switchedHealthConnect" in source)
         assertEquals(1, Regex("""JetpackHealthConnect\(context\)""").findAll(source).count(), "one Health Connect client")
     }
 

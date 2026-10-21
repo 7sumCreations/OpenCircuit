@@ -2,12 +2,17 @@ package io.github.opencircuit.app
 
 import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.health.HealthAccess
+import io.github.opencircuit.app.health.HealthAccessMemory
+import io.github.opencircuit.app.health.HealthAccessState
 import io.github.opencircuit.app.health.HealthFlush
 import io.github.opencircuit.app.health.HealthSwitch
 import io.github.opencircuit.app.health.StoreHealthAccessMemory
 import io.github.opencircuit.app.health.StoreHealthFailures
 import io.github.opencircuit.app.ring.RingAction
+import io.github.opencircuit.health.FakeHealthConnect
 import io.github.opencircuit.health.FlushResult
+import io.github.opencircuit.health.HealthConnectPort
+import io.github.opencircuit.health.HealthPermission
 import io.github.opencircuit.health.RecordType
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.store.LocalStore
@@ -80,6 +85,90 @@ class HealthSwitchGateTest {
             h.appScope.cancel()
             w.db.close()
         }
+    }
+
+    /**
+     * Turning it OFF stops a write that is already running: the call inside Health Connect at that
+     * moment finishes, and not one call follows it — the rest stays pending under its marks, and
+     * the stop is not a failure (no write error, no failed type).
+     */
+    @Test
+    fun turningOffMidWriteStopsTheRunningWriteAtItsNextCall() = runTest {
+        val values = InMemoryKeyValues().apply { putRaw("health.write.enabled.v1", true) }
+        val switch = HealthSwitch(PrefsAppPrefs(values), log = {})
+        val h = healthWorld(enabled = switch::isOn, activity = true)
+        val w = syncWorld(reuseDb = h.db, makeRing = ringWith(HistoryTestPages.backlog(3)))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            advanceTo(60_000)
+            assertNotNull(w.session.sync.state.value.last?.commit)
+
+            h.gate.close() // the first insert is inside Health Connect and does not answer yet
+            h.flush.request()
+            advanceTo(61_000)
+            assertEquals(1, h.gate.entered.size)
+            val before = h.port.calls.size
+
+            assertTrue(switch.set(false))
+            h.gate.open()
+            advanceTo(62_000)
+
+            assertEquals(emptyList(), h.port.calls.drop(before), "no Health Connect call after OFF")
+            assertFalse(h.flush.state.value.running)
+            assertEquals(null, h.flush.state.value.error, "stopping is not a failure")
+            assertEquals(emptyMap(), StoreHealthFailures({ h.db }, { SYNC_TEST_EPOCH }, log = {}).load(), "no type marked failed")
+        } finally {
+            h.appScope.cancel()
+            w.db.close()
+        }
+    }
+
+    /**
+     * Turning it OFF forgets what was read (a later ON shows "checking", never an old answer), and a
+     * read that was running when it went OFF does not bring its answer back.
+     */
+    @Test
+    fun turningOffForgetsTheAccessAndALateReadDoesNotComeBack() = runTest {
+        var on = true
+        val hc = FakeHealthConnect({ SYNC_TEST_EPOCH }).apply { grantAll() }
+        val held = CompletableDeferred<Unit>()
+        val slow = object : HealthConnectPort by hc {
+            override suspend fun grantedWrites(): Set<HealthPermission> {
+                held.await()
+                return hc.grantedWrites()
+            }
+        }
+        val memory = object : HealthAccessMemory {
+            override suspend fun asked() = true
+            override suspend fun markAsked() = Unit
+            override suspend fun failures(): Map<RecordType, Instant> = emptyMap()
+        }
+        val access = HealthAccess(slow, memory, backgroundScope, log = {}, enabled = { on })
+        access.refresh()
+        runCurrent()
+        held.complete(Unit)
+        runCurrent()
+        assertEquals(true, access.state.value.available)
+
+        val second = CompletableDeferred<Unit>()
+        val slower = object : HealthConnectPort by hc {
+            override suspend fun grantedWrites(): Set<HealthPermission> {
+                second.await()
+                return hc.grantedWrites()
+            }
+        }
+        val again = HealthAccess(slower, memory, backgroundScope, log = {}, enabled = { on })
+        again.refresh()
+        runCurrent() // inside grantedWrites
+        on = false
+        again.forget()
+        access.forget()
+        second.complete(Unit)
+        runCurrent()
+
+        assertEquals(HealthAccessState(), access.state.value, "forgotten")
+        assertEquals(HealthAccessState(), again.state.value, "the late answer was not published")
     }
 
     /** Turning it OFF stops writing: a write queued behind the running one does not start. */

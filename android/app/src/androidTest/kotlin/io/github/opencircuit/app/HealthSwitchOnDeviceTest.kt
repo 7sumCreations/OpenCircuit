@@ -54,16 +54,21 @@ class HealthSwitchOnDeviceTest {
     private val app: OpenCircuitApp
         get() = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as OpenCircuitApp
 
+    /** The app's notice flag before this test: using the switch dismisses the notice, and that must not outlive the test. */
+    private var noticeDismissed: Boolean = false
+
     @Before
     fun offAsOnAFreshInstall() {
         InstrumentationRegistry.getInstrumentation().runOnMainSync { app.container.ringSessions.stopReconnecting() }
         check(app.container.appPrefs.setOnboardingCompleted()) { "could not record that onboarding was done" }
+        noticeDismissed = app.container.appPrefs.healthUpgradeNoticeDismissed
         app.container.healthSwitch.set(false)
     }
 
     @After
     fun backToOff() {
         app.container.healthSwitch.set(false)
+        restoreNoticeFlag(app, noticeDismissed)
     }
 
     @Test
@@ -87,6 +92,19 @@ class HealthSwitchOnDeviceTest {
             compose.onNodeWithTag(SETTINGS_HEALTH_SWITCH_TAG).assertIsOff()
             assertFalse("OFF is saved", app.container.appPrefs.healthWriteEnabled)
         }
+    }
+}
+
+/**
+ * Puts the app's own "notice dismissed" flag back as it was before a test that used the switch
+ * (using it dismisses the notice), so a later check of the notice on this device is not silently
+ * skipped by an earlier test.
+ */
+internal fun restoreNoticeFlag(app: OpenCircuitApp, dismissedBefore: Boolean) {
+    if (dismissedBefore) return
+    // The app's preferences file ("opencircuit") and the notice's key, typed here rather than read from the code.
+    check(app.getSharedPreferences("opencircuit", Context.MODE_PRIVATE).edit().remove("health.upgradeNotice.dismissed.v1").commit()) {
+        "could not restore the notice flag"
     }
 }
 
@@ -147,6 +165,6 @@ class UpgradeNoticeSurvivesRestartTest {
     }
 
     private companion object {
-        const val PREFS = "e12-upgrade-notice-test"
+        const val PREFS = "upgrade-notice-test"
     }
 }

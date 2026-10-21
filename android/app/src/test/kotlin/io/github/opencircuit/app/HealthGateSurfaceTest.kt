@@ -8,29 +8,39 @@ import kotlin.test.assertTrue
 /**
  * The "Send to Health Connect" switch is airtight only if nothing reaches Health Connect around it.
  * The app object graph and the activity never run on the JVM, so their wiring is read from the
- * sources: the one Health Connect client is built once and handed only to the writer and to the
- * access reader; the writer is called only from inside the flush; both the flush and the access
- * reader are built asking the switch; and the activity's resume and after-screen reads go through
- * the access reader (whose every read asks the switch — `HealthSwitchGateTest`).
+ * sources: the one Health Connect client is built once and handed only to the switched port, and
+ * the switched port only to the writer and the access reader; the writer is called only from
+ * inside the flush; both the flush and the access reader are built asking the switch; and the
+ * activity's resume and after-screen reads go through the access reader (whose every read asks
+ * the switch — `HealthSwitchGateTest`).
  */
 class HealthGateSurfaceTest {
 
     private val main = File("src/main/kotlin").walkTopDown().filter { it.isFile && it.extension == "kt" }
         .associate { it.invariantSeparatorsPath.substringAfter("io/github/opencircuit/app/") to it.readText() }
 
-    private fun count(text: String, regex: Regex) = regex.findAll(text).count()
+    /** Matches on code lines only: KDoc and comments may name a symbol without using it. */
+    private fun count(text: String, regex: Regex) = text.lineSequence()
+        .filterNot { it.trimStart().let { line -> line.startsWith("*") || line.startsWith("/*") || line.startsWith("//") } }
+        .sumOf { regex.findAll(it).count() }
 
     @Test
-    fun theOneClientIsBuiltOnceAndHeldOnlyByTheWriterAndTheAccessReader() {
+    fun theOneClientIsReachedOnlyThroughTheSwitchedPortHeldByTheWriterAndTheAccessReader() {
         assertEquals(setOf("AppContainer.kt"), main.filterValues { "JetpackHealthConnect(" in it }.keys)
         assertEquals(setOf("AppContainer.kt"), main.filterValues { "HealthWriter(" in it }.keys)
 
         val container = main.getValue("AppContainer.kt")
-        val uses = Regex("""\bhealthConnect\b""")
-        assertEquals(setOf("AppContainer.kt"), main.filterValues { uses.containsMatchIn(it) }.keys, "no other file names the client")
-        assertEquals(3, count(container, uses), "declared, handed to the writer, handed to the access reader — nothing else")
-        assertTrue("port = healthConnect," in container)
-        assertTrue("HealthAccess(healthConnect," in container)
+        val client = Regex("""\bhealthConnect\b""")
+        assertEquals(setOf("AppContainer.kt"), main.filterValues { client.containsMatchIn(it) }.keys, "no other file names the client")
+        assertEquals(2, count(container, client), "declared, and handed to the switched port — nothing else")
+        assertTrue("SwitchedHealthConnect(healthConnect, healthSwitch::isOn)" in container)
+        assertEquals(1, main.values.sumOf { count(it, Regex("""SwitchedHealthConnect\(""")) } - 1, "one switched port (the class's own declaration aside)")
+
+        val switched = Regex("""\bswitchedHealthConnect\b""")
+        assertEquals(setOf("AppContainer.kt"), main.filterValues { switched.containsMatchIn(it) }.keys)
+        assertEquals(3, count(container, switched), "declared, handed to the writer, handed to the access reader — nothing else")
+        assertTrue("port = switchedHealthConnect," in container)
+        assertTrue("HealthAccess(switchedHealthConnect," in container)
     }
 
     @Test
