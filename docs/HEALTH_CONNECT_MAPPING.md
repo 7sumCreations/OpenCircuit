@@ -83,8 +83,9 @@ The app has no screen for logging these yet; the writer is ready for the epics t
 - **Your deletions.** If you delete OpenCircuit's records in Health Connect, the app does not put
   them back unless that item changes (a night re-staged, a new reading in that hour). It never
   reads Health Connect to check.
-- **Retention.** The app removes raw readings older than 30 days, but keeps any that Health Connect
-  has not received yet.
+- **Retention.** The app keeps every raw reading on the phone for good, written to Health Connect or
+  not (from 0.4.0; earlier builds removed readings older than 30 days once Health Connect had them).
+  The per-kind marks stay: they are what the writer sends from next.
 
 ## Steps, skin temperature and "live only"
 

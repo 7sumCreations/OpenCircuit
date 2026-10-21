@@ -128,10 +128,11 @@ live measurement is using. With it off, the ring stays connected and syncs about
 steps and skin temperature keep being recorded.
 
 **Where is my data?** Only on your phone, in the app's own storage. It is excluded from cloud
-backup and device-to-device transfer. Raw ring readings older than 30 days are removed once
-Health Connect has them; readings it has not received yet (including types you did not allow) are
-kept; nothing
-you entered yourself is.
+backup and device-to-device transfer. Every reading from the ring is kept for good: nothing is
+removed because of its age, whether or not Health Connect has it, and nothing you entered yourself
+is removed either. (Builds before 0.4.0 removed raw readings older than 30 days once Health Connect
+had them; updating deletes nothing.) Connection details › Show all › Storage shows how much space
+the app's data takes and how many readings it holds.
 
 **Why should the RingConn app stay closed while I sync?** Both apps share one place in the ring's
 history, and a ring hands each record over once. If the other app is syncing too, it can take the

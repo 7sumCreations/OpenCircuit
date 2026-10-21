@@ -14,8 +14,8 @@ the phone.
 
 **What is stored.** Schema version 1 has eleven tables:
 
-- the ring's raw samples (heart rate, HRV, SpO₂, temperature, steps and the rest), kept for 30
-  days, and the per-metric sync position, which is written in the same transaction as the samples
+- the ring's raw samples (heart rate, HRV, SpO₂, temperature, steps and the rest), kept for good,
+  and the per-metric sync position, which is written in the same transaction as the samples
   so a sync that fails part-way stores nothing and is simply repeated;
 - daily step totals and their step samples, and daytime skin-temperature readings;
 - sleep summaries and naps, including the edits a person makes to a night or a nap and naps they
@@ -38,12 +38,14 @@ the phone.
   A value that cannot be read loads as empty or unknown, never as a wrong value; an alarm that
   cannot be read is kept as stored until the person saves a new one.
 
-The store deletes only raw ring data on its own: samples, step samples and daytime readings older
-than 30 days, plus a one-time clean-up of raw samples that fail the import checks (heart rates
-outside 30–220 bpm, and times before the ring's clock epoch or more than a day ahead). From 0.3.0
-the 30-day prune keeps any reading or step sample Health Connect has not received yet (past the
-kind's Health Connect mark, or a step sample not yet written), and the repairs run at every app
-launch, off the main thread. Nothing a person entered is pruned. At launch the store also repairs sleep history: once, it moves nights
+The store keeps every ring reading for good: from 0.4.0 nothing is deleted because of its age,
+whether or not Health Connect has received it (0.3.0 and earlier removed samples, step samples and
+daytime readings older than 30 days; updating deletes nothing). The only readings the store deletes
+on its own are those of a one-time clean-up of raw samples that fail the import checks (heart rates
+outside 30–220 bpm, and times before the ring's clock epoch or more than a day ahead); the repairs
+run at every app launch, off the main thread. Nothing a person entered is removed. Connection
+details' Storage row shows the store's size on disk and its rows per table and per kind, so its
+growth can be read on the phone. At launch the store also repairs sleep history: once, it moves nights
 an older build filed under the day they started onto the day they ended — with everything kept
 under the night's key, in one transaction (two nights that would land on one day stop the move and
 change nothing); it fills in the measured-versus-estimated breakdown of unedited nights that lack
