@@ -38,6 +38,7 @@ import io.github.opencircuit.app.sync.SessionHistory
 import io.github.opencircuit.app.today.TodayRepository
 import io.github.opencircuit.app.today.TodaySource
 import io.github.opencircuit.app.sync.StoreHistory
+import io.github.opencircuit.app.sync.SyncLifecycle
 import io.github.opencircuit.app.sync.SyncTriggerSources
 import io.github.opencircuit.app.sync.learningNights
 import io.github.opencircuit.ble.RememberedRing
@@ -54,6 +55,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.time.Instant
 import java.time.ZoneId
 
@@ -167,6 +169,12 @@ class AppContainer(context: Context) {
     /** Android's companion-device manager: the pairing sheet before the first bond, and forgetting. */
     val companionPairing: CompanionPairing = CompanionPairing(AndroidCompanionPort(context), log)
 
+    /** The app's activity is started (on screen); set by the activity, kept through a rotation. */
+    val appInForeground: MutableStateFlow<Boolean> = MutableStateFlow(false)
+
+    /** Today is on screen and resumed; set by the Today screen. Live heart rate after a sync runs only then. */
+    val todayVisible: MutableStateFlow<Boolean> = MutableStateFlow(false)
+
     /**
      * The sessions with the remembered ring: one link per ring, kept for the process (the Android
      * link listens for Bluetooth and bond changes from the moment it is built). A pairing hands its
@@ -177,7 +185,7 @@ class AppContainer(context: Context) {
         rings = rememberedRings,
         companion = companionPairing,
         scope = appScope,
-        newSession = { link, scope -> RingSessionController(link, scope, monotonicMillis, log, history = historyFor(link)) },
+        newSession = { link, scope -> RingSessionController(link, scope, monotonicMillis, log, history = historyFor(link), todayVisible = todayVisible) },
         log = log,
     )
 
@@ -224,7 +232,8 @@ class AppContainer(context: Context) {
                 zone = { ZoneId.systemDefault() },
             ),
             wallClock = { Instant.ofEpochMilli(clock.nowMillis()) },
-            disconnectAfterSync = { appPrefs.disconnectAfterSync },
+            // The switch acts only once the user has left the app; while it is in front the link stays up.
+            disconnectAfterSync = { SyncLifecycle.disconnectAfterSync(appPrefs.disconnectAfterSync, appInForeground.value) },
             // The link-up sync, the cadence while the link is held and the catch-up after the night.
             triggers = SyncTriggerSources(
                 zone = { ZoneId.systemDefault() },

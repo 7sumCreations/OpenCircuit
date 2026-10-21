@@ -19,10 +19,11 @@ class AppContainerHistoryWiringTest {
     fun everySessionIsBuiltWithTheHistoryOverTheAppsOneDatabase() {
         val sessionBuilds = Regex("""RingSessionController\(""").findAll(source).count()
         assertEquals(1, sessionBuilds, "one place builds sessions")
-        assertTrue("RingSessionController(link, scope, monotonicMillis, log, history = historyFor(link))" in source)
+        assertTrue("RingSessionController(link, scope, monotonicMillis, log, history = historyFor(link), todayVisible = todayVisible)" in source)
         assertEquals(1, Regex("""StoreFactory\.open\(context\.applicationContext\)""").findAll(source).count(), "one database")
         assertTrue("database = { database.await() }" in source)
-        assertTrue("disconnectAfterSync = { appPrefs.disconnectAfterSync }" in source)
+        // The switch acts only once the app is not in front (the rule is SyncLifecycle's, tested on its own).
+        assertTrue("disconnectAfterSync = { SyncLifecycle.disconnectAfterSync(appPrefs.disconnectAfterSync, appInForeground.value) }" in source)
     }
 
     @Test

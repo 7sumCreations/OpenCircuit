@@ -110,6 +110,10 @@ class SyncTriggers(
      * Sync now), taking the mark (`RingSessionController.takeUserLinkUp`). Read once per link-up.
      */
     private val takeUserLinkUp: () -> Boolean,
+    /** The running measure is an automatic one (the dashboard's live heart rate): it never holds a sync back. */
+    private val autoMeasuring: () -> Boolean = { false },
+    /** Stops an automatic measure so a sync can start (`LiveMeasureController.yieldAuto`); a user's measure is left alone. */
+    private val yieldAutoMeasure: () -> Boolean = { true },
 ) {
     /** A link-up sync held back by the night, owed once the quiet ends. Touched only by the link's one collection (one block at a time). */
     @Volatile
@@ -190,6 +194,12 @@ class SyncTriggers(
         }
         return NightWindow.resolve(nights, wallClock(), sources.zone()).also { lastWindow.set(it) }
     }
+
+    /**
+     * Whether the night is quiet now: the same window and wake confirmation the automatic syncs
+     * follow. The dashboard starts no automatic live measure while it is.
+     */
+    suspend fun nightQuietNow(): Boolean = nightWindow()?.isQuiet(wallClock(), wakeConfirmedAt.get()) == true
 
     /** One link-up; returns false when it closed the link (the sync-and-disconnect mode holds no idle link). */
     private suspend fun onLinkUp(): Boolean {
@@ -321,10 +331,10 @@ class SyncTriggers(
 
     private data class Cadence(val due: Boolean, val last: Instant?)
 
-    /** Why no automatic sync can start now, or null when one can. */
+    /** Why no automatic sync can start now, or null when one can. An automatic measure stands down for a sync ([start]). */
     private fun busyReason(): AutoSyncSkipReason? = when {
         sync.isSyncing.value -> AutoSyncSkipReason.ALREADY_SYNCING
-        isMeasuring.value -> AutoSyncSkipReason.MEASURING
+        isMeasuring.value && !autoMeasuring() -> AutoSyncSkipReason.MEASURING
         else -> null
     }
 
@@ -335,6 +345,8 @@ class SyncTriggers(
      * since): the trigger is not served.
      */
     private fun start(trigger: AutoSyncTrigger, reason: String): Boolean {
+        // A sync outranks the dashboard's automatic live measure; its drain's end starts it again.
+        yieldAutoMeasure()
         if (sync.syncNow()) {
             ownSync.set(true)
             log("sync-trigger: $reason")

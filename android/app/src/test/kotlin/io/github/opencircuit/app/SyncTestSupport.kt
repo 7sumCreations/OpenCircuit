@@ -2,8 +2,11 @@ package io.github.opencircuit.app
 
 import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.data.PrefsSyncMarks
+import io.github.opencircuit.app.sync.SyncLifecycle
 import io.github.opencircuit.app.sync.SyncTriggerSources
 import io.github.opencircuit.app.sync.learningNights
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import io.github.opencircuit.ringkit.SleepStaging
 import io.github.opencircuit.store.SleepStore
 import java.time.Duration
@@ -166,6 +169,10 @@ internal suspend fun TestScope.syncWorld(
     syncFaults: SyncFaultInjector = SyncFaultInjector.NONE,
     /** What runs after each committed sync, as the app's Health Connect write does; nothing by default. */
     afterCommit: (SyncReport) -> Unit = {},
+    /** Today on screen (resumed), as the app's Today screen sets it; off by default. */
+    todayVisible: StateFlow<Boolean> = MutableStateFlow(false),
+    /** The app in front, as the activity sets it; off by default (the switch then acts at once). */
+    appInForeground: StateFlow<Boolean> = MutableStateFlow(false),
     makeRing: (CoroutineScope, () -> Long) -> RingFake,
 ): SyncWorld {
     // Queries on the test's own scheduler: none is still running on a real thread when the test
@@ -193,7 +200,17 @@ internal suspend fun TestScope.syncWorld(
         backgroundScope,
         monotonicMillis = { testScheduler.currentTime },
         log = { logs += it; logHook.run(it) },
-        history = SessionHistory(store, wallClock = wall, disconnectAfterSync = { prefs.disconnectAfterSync }, triggers = sources, zone = { zone }, faults = syncFaults, afterCommit = afterCommit),
+        history = SessionHistory(
+            store,
+            wallClock = wall,
+            // As the app's AppContainer.historyFor: the switch acts only once the app is not in front.
+            disconnectAfterSync = { SyncLifecycle.disconnectAfterSync(prefs.disconnectAfterSync, appInForeground.value) },
+            triggers = sources,
+            zone = { zone },
+            faults = syncFaults,
+            afterCommit = afterCommit,
+        ),
+        todayVisible = todayVisible,
     )
     val viewModel = RingViewModel(sessionsOf(session), "Ring", backgroundScope, prefs = prefs, wallClock = wall, zone = { zone })
     return SyncWorld(db, ring, store, prefs, session, viewModel, logs, nightsRead, logHook)

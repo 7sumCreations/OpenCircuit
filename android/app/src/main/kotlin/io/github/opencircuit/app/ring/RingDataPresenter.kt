@@ -81,6 +81,10 @@ const val SYNC_NOW = "Sync now"
 /** Steps and skin temperature are not in the ring's history (PROTOCOL.md §5.4). */
 const val STEPS_HELP = "Steps and skin temperature are only recorded while the ring is connected."
 
+/** The switch on: the link stays up while the app is in front (live heart rate on Today) and closes once the user leaves. */
+const val DISCONNECT_WHEN_LEFT_HELP =
+    "The ring stays connected while the app is open and disconnects once you leave it. Steps and skin temperature are only recorded while it is connected."
+
 /**
  * Builds the Ring data card from a [RingDataInput]: the running sync, the sync log, what is stored,
  * the ring's firmware, the switch, the time and the zone; pure, so every state is tested on the JVM.
@@ -137,6 +141,7 @@ object RingDataPresenter {
             syncEnabled = sync != null && !input.measuring,
             syncBlockedBy = if (sync != null && input.measuring) STOP_MEASURING_TO_SYNC else null,
             disconnectAfterSync = disconnectAfterSync,
+            help = if (disconnectAfterSync) DISCONNECT_WHEN_LEFT_HELP else STEPS_HELP,
             storedRange = storedRange,
             nights = nights,
             lastNight = lastNight,
@@ -290,5 +295,5 @@ object RingDataPresenter {
     private const val NOT_SYNCED = "Not synced yet"
     private const val SYNCING = "Syncing…"
     private const val KEEP_OPEN = "Keep the app open until the sync finishes."
-    private const val KEEP_OPEN_THEN_DISCONNECT = "Keep the app open until the sync finishes. It disconnects when your data is saved."
+    private const val KEEP_OPEN_THEN_DISCONNECT = "Keep the app open until the sync finishes. The ring disconnects once you leave the app."
 }

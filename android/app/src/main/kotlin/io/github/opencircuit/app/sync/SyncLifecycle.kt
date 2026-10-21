@@ -23,4 +23,19 @@ object SyncLifecycle {
 
     /** The screen is kept on while a sync runs, so the app stays on top and is not frozen. */
     fun keepScreenOn(syncing: Boolean): Boolean = syncing
+
+    /**
+     * Whether "Disconnect after syncing" closes the link now: only with the switch on AND the app
+     * not on screen. While the app is in front the link stays up (live heart rate on Today); it
+     * closes when the user leaves, after any running sync. A held link also runs the hourly
+     * cadence sync while the app is open.
+     */
+    fun disconnectAfterSync(switchOn: Boolean, inForeground: Boolean): Boolean = switchOn && !inForeground
+
+    /**
+     * The activity stopped (not for a rotation): close an idle held link when the switch says so.
+     * A running sync is not cut here; it pauses, and its own end closes the link.
+     */
+    fun disconnectOnStop(switchOn: Boolean, linkUp: Boolean, syncing: Boolean, changingConfigurations: Boolean): Boolean =
+        switchOn && linkUp && !syncing && !changingConfigurations
 }

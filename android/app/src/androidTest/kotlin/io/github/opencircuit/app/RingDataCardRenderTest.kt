@@ -72,12 +72,12 @@ class RingDataCardRenderTest {
         show(
             RingDataUi(
                 headline = "Syncing…", syncing = true, syncEnabled = false, syncLabel = "Sync in progress",
-                help = "Keep the app open until the sync finishes. It disconnects when your data is saved.",
+                help = "Keep the app open until the sync finishes. The ring disconnects once you leave the app.",
             ),
         )
 
         compose.onNodeWithText("Syncing…").assertIsDisplayed()
-        compose.onNodeWithText("Keep the app open until the sync finishes. It disconnects when your data is saved.").assertIsDisplayed()
+        compose.onNodeWithText("Keep the app open until the sync finishes. The ring disconnects once you leave the app.").assertIsDisplayed()
         compose.onNodeWithText("Sync in progress").assertIsNotEnabled().performClick()
         assertEquals(emptyList<String>(), actions)
     }
@@ -136,7 +136,7 @@ class RingDataCardRenderTest {
 
         compose.onNodeWithText("Sleep channel done · 1,204 records").assertIsDisplayed()
         compose.onNodeWithText("All-day channel 612 records so far").assertIsDisplayed()
-        compose.onNodeWithText("Keep the app open until the sync finishes. It disconnects when your data is saved.").assertIsDisplayed()
+        compose.onNodeWithText("Keep the app open until the sync finishes. The ring disconnects once you leave the app.").assertIsDisplayed()
     }
 
     @Test

@@ -55,6 +55,20 @@ class RingDataCardStateTest {
         RingDataInput(sync = sync, log = log, stored = stored, liveFirmware = liveFirmware, disconnectAfterSync = true, now = now, zone = zone, measuring = measuring),
     )
 
+    // ---- The switch's words: it acts once the user leaves the app ----
+
+    @Test
+    fun theSwitchSaysTheRingDisconnectsOnceTheUserLeavesTheApp() {
+        assertEquals(
+            "The ring stays connected while the app is open and disconnects once you leave it. Steps and skin temperature are only recorded while it is connected.",
+            card().help,
+        )
+        val off = RingDataPresenter.present(RingDataInput(sync = SyncState(), disconnectAfterSync = false, now = now))
+        assertEquals("Steps and skin temperature are only recorded while the ring is connected.", off.help)
+        val syncing = card(sync = SyncState(syncing = true))
+        assertEquals("Keep the app open until the sync finishes. The ring disconnects once you leave the app.", syncing.help)
+    }
+
     // ---- Results ----
 
     @Test

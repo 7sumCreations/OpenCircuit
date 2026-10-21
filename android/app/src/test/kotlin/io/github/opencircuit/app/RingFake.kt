@@ -61,6 +61,14 @@ import kotlinx.coroutines.launch
  *   ring receives it (for "was the page stored first?").
  * - The app's `01 00 00` / `01 01 …` is refused, as the real link does, and recorded.
  *   [reauthenticate] is the link's own re-auth: recorded as `reauth`, never as a write.
+ * - Live measure (PROTOCOL.md §4, §5.1): each mode write `06 01 00` (heart rate) / `06 02 00`
+ *   (SpO₂) / `06 00 00` (idle) is answered `86 00 86` after [modeReplyMillis] and sets the ring's
+ *   live mode. In a live mode each `95 00 00` poll is answered after [pollReplyMillis] with one
+ *   `0x15` frame: in heart-rate mode the next of [liveHeartRateFrames] (a real read, warm-up
+ *   sentinel first; its last frame repeats), in SpO₂ mode the next of [liveSpO2Frames] (cycled).
+ *   With [worn] false the ring is off a finger: heart-rate polls get only the warm-up sentinel
+ *   (it never locks) and SpO₂ polls get nothing. A poll with no live mode gets nothing; a
+ *   teardown leaves the live mode.
  *
  * Every write, acknowledgement, re-auth and connection event is recorded with its virtual time.
  */
@@ -88,6 +96,12 @@ internal class RingFake(
     private val ignoreAllOpens: Boolean = false,
     /** Frames the link reports it never delivered, at every teardown (a collector that fell behind). */
     private val undeliveredOnTeardown: Int = 0,
+    private val modeReplyMillis: Long = 100,
+    private val pollReplyMillis: Long = 100,
+    private val liveHeartRateFrames: List<ByteArray> = TestFrames.realHeartRateRead,
+    private val liveSpO2Frames: List<ByteArray> = TestFrames.realSpO2Read,
+    /** Settable at any time: false takes the ring off the finger (live heart rate never locks). */
+    @Volatile var worn: Boolean = true,
     val fake: FakeRingLink = FakeRingLink(testRing),
 ) : RingLink by fake {
 
@@ -105,6 +119,10 @@ internal class RingFake(
     private var reauthenticated = false
     private var gapIndex = 0
     private var streamJob: Job? = null
+
+    /** The ring's live mode (`0x01` heart rate, `0x02` SpO₂), or null when idle; and the next frame of that mode's read. */
+    private var liveMode: Int? = null
+    private var liveFrameIndex = 0
 
     /** Counts connects that started a connection: a timer of an earlier connection changes nothing. */
     private var connectAttempt = 0
@@ -147,6 +165,12 @@ internal class RingFake(
                     if (!ignoreAllOpens && (!ignoreOpensUntilReauth || reauthenticated)) startChannel(openChannel!!)
                 }
                 hex == "d00000" -> statusReply?.let { reply -> scope.launch { delay(statusReplyMillis); emit(reply, "status reply") } }
+                hex == "060000" || hex == "060100" || hex == "060200" -> {
+                    liveMode = (command[1].toInt() and 0xFF).takeIf { it != 0 }
+                    liveFrameIndex = 0
+                    scope.launch { delay(modeReplyMillis); emit(MODE_ACCEPTED, "mode reply") }
+                }
+                hex == "950000" -> livePollReply()?.let { frame -> scope.launch { delay(pollReplyMillis); emit(frame, "live sample") } }
             }
         }
         return SendResult.Sent
@@ -281,6 +305,7 @@ internal class RingFake(
             streamJob = null
             openChannel = null
             openWaitingForFetch = false
+            liveMode = null
             val waiting = if (waitingOn != null) 1 else 0
             waitingOn = null
             waitingChannel = null
@@ -329,6 +354,17 @@ internal class RingFake(
 
     private fun nextGap(): Long = synchronized(this) { pageGapsMillis[gapIndex++ % pageGapsMillis.size] }
 
+    /** Called with the lock held, on `95 00 00`: the live mode's next frame, or null (no live mode, or SpO₂ off a finger). */
+    private fun livePollReply(): ByteArray? = when (liveMode) {
+        LIVE_HEART_RATE -> if (!worn) {
+            TestFrames.heartRateWarmUp
+        } else {
+            liveHeartRateFrames[minOf(liveFrameIndex++, liveHeartRateFrames.lastIndex)].copyOf()
+        }
+        LIVE_SPO2 -> if (worn) liveSpO2Frames[liveFrameIndex++ % liveSpO2Frames.size].copyOf() else null
+        else -> null
+    }
+
     /** Adds [what] to [events] from outside the ring (the store's "commit returned"), so both share one order. */
     fun note(what: String) = record(what)
 
@@ -346,6 +382,12 @@ internal class RingFake(
          * `EpochSyncTests.swift:58-60` @ b1c2fdd (`50 00 00 12 0c 22 aa e4 0c 22 ac b5`).
          */
         val END_OF_HISTORY: ByteArray = hex("500000120c22aae40c22acb5")
+
+        /** The ring's answer to a mode write it accepts: `86 00 86` (PROTOCOL.md §4). */
+        val MODE_ACCEPTED: ByteArray = hex("860086")
+
+        private const val LIVE_HEART_RATE = 0x01
+        private const val LIVE_SPO2 = 0x02
 
         /** The pages that wait for an acknowledgement, as on the real link: `0x40` (older Gen 2 firmware, ACK `c0`), `0x47`, `0x4c`, `0x4d`. */
         private val PAGE_OPCODES = setOf(0x40, 0x47, 0x4C, 0x4D)

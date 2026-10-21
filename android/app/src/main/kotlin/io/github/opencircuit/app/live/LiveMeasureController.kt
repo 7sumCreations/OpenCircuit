@@ -94,7 +94,27 @@ data class LiveMeasureState(
     val framesNotUsed: Int = 0,
     /** What the ring sent during the running measure, or during the last one; null before the first. */
     val evidence: MeasureEvidence? = null,
+    /** The running measure is an automatic one ([LiveMeasureController.startAuto]), not one the user tapped for. */
+    val auto: Boolean = false,
 )
+
+/** How a measure ended. */
+enum class MeasureEndReason {
+    /** Its budget ran out (with or without a reading). */
+    BUDGET,
+
+    /** The user tapped Stop. */
+    STOPPED,
+
+    /** An automatic measure stood down so a sync could run ([LiveMeasureController.yieldAuto]). */
+    YIELDED,
+
+    /** The link was lost, or the ring or the link refused it. */
+    FAILED,
+}
+
+/** One measure's end: [seq] counts ends, so the same end is never read twice. [locked]: it had a reading. */
+data class MeasureEnd(val seq: Long, val mode: LiveMode, val auto: Boolean, val reason: MeasureEndReason, val locked: Boolean)
 
 /**
  * The on-demand live heart-rate / SpO₂ measure: upstream's quick user read
@@ -159,7 +179,16 @@ class LiveMeasureController(
     /** True from a start until the measure stops, for whatever must stay quiet meanwhile. */
     val isMeasuring: StateFlow<Boolean> = measuringFlow.asStateFlow()
 
-    /** The user tapped Measure for [mode]. Ignored while a history sync runs (the button is disabled then, with the reason). */
+    private val lastEndFlow = MutableStateFlow<MeasureEnd?>(null)
+
+    /** The latest measure's end; null before the first. */
+    val lastEnd: StateFlow<MeasureEnd?> = lastEndFlow.asStateFlow()
+
+    /**
+     * The user tapped Measure for [mode]. Ignored while a history sync runs (the button is disabled
+     * then, with the reason). A tap during an automatic measure takes it over: the automatic one
+     * stops and a fresh measure the user owns starts ([LiveMeasureOwnership.decide]).
+     */
     fun start(mode: LiveMode) = synchronized(lock) {
         if (isSyncing()) return@synchronized
         val current = stateFlow.value
@@ -167,21 +196,40 @@ class LiveMeasureController(
         val action = LiveMeasureOwnership.decide(
             monitoring = measuring,
             userInitiated = true,
-            // Every measure here is one the user started; there is no background measure yet.
-            userMeasuring = measuring,
+            userMeasuring = measuring && !current.auto,
             workoutHolding = false,
             sameMode = current.mode == mode,
         )
         when (action) {
-            is LiveMeasureOwnership.Action.Start, LiveMeasureOwnership.Action.Takeover -> begin(mode)
+            is LiveMeasureOwnership.Action.Start, LiveMeasureOwnership.Action.Takeover -> begin(mode, auto = false)
             LiveMeasureOwnership.Action.Rearm -> if (!current.preparing) reArm(mode)
-            is LiveMeasureOwnership.Action.SwitchMode -> if (current.preparing) begin(mode) else reArm(mode)
+            is LiveMeasureOwnership.Action.SwitchMode -> if (current.preparing) begin(mode, auto = false) else reArm(mode)
             LiveMeasureOwnership.Action.Ignore -> Unit
         }
     }
 
+    /**
+     * An automatic measure of [mode] (the dashboard's live heart rate after a sync). Starts only when
+     * nothing is measured and no history sync runs; never takes a measure over. True when it started.
+     */
+    fun startAuto(mode: LiveMode): Boolean = synchronized(lock) {
+        if (isSyncing() || stateFlow.value.mode != null) return@synchronized false
+        begin(mode, auto = true)
+        true
+    }
+
+    /**
+     * Stops the running measure if it is an automatic one, so a sync can run; a measure the user
+     * started is left alone. True when no measure runs afterwards.
+     */
+    fun yieldAuto(): Boolean = synchronized(lock) {
+        val current = stateFlow.value
+        if (current.mode != null && current.auto) finish(cycle, failure = null, reason = MeasureEndReason.YIELDED)
+        stateFlow.value.mode == null
+    }
+
     /** The user tapped Stop. Not a failure; the row keeps what was read. */
-    fun stop() = synchronized(lock) { finish(cycle, failure = null) }
+    fun stop() = synchronized(lock) { finish(cycle, failure = null, reason = MeasureEndReason.STOPPED) }
 
     /** The connection was torn down or the link left `Authenticated`: the measure stops for good. */
     fun onLinkLost() = synchronized(lock) { finish(cycle, failure = MeasureFailure.RingDisconnected) }
@@ -245,7 +293,9 @@ class LiveMeasureController(
 
     // Everything below runs with `lock` held, except inside the launched coroutines.
 
-    private fun begin(mode: LiveMode) {
+    private fun begin(mode: LiveMode, auto: Boolean) {
+        // A takeover ends the automatic measure first, so its end is seen as such.
+        if (stateFlow.value.mode != null && stateFlow.value.auto) finish(cycle, failure = null, reason = MeasureEndReason.YIELDED)
         cancelJobs()
         val myCycle = ++cycle
         trend.clear()
@@ -256,7 +306,7 @@ class LiveMeasureController(
         awaitedAnswers.clear()
         stateFlow.value = stateFlow.value.copy(
             mode = mode, preparing = true, warmingUp = false, newest = null, settledHeartRate = null,
-            stale = false, session = session.snapshot(), evidence = MeasureEvidence(mode),
+            stale = false, session = session.snapshot(), evidence = MeasureEvidence(mode), auto = auto,
         ).withRow(mode) { it.copy(failure = null) }
         measuringFlow.value = true
         runJob = scope.launch { enterAndPoll(myCycle, mode, resetFirst = false) }
@@ -383,11 +433,11 @@ class LiveMeasureController(
             LiveMode.SPO2 -> current.newest != null
             null -> return
         }
-        finish(myCycle, failure = if (locked) null else MeasureFailure.NoReading(current.evidence ?: MeasureEvidence(current.mode)))
+        finish(myCycle, failure = if (locked) null else MeasureFailure.NoReading(current.evidence ?: MeasureEvidence(current.mode)), reason = MeasureEndReason.BUDGET)
     }
 
-    /** Ends cycle [myCycle] if it is still the running one: jobs cancelled, the row updated. */
-    private fun finish(myCycle: Long, failure: MeasureFailure?) {
+    /** Ends cycle [myCycle] if it is still the running one: jobs cancelled, the row updated, the end published ([lastEnd]). */
+    private fun finish(myCycle: Long, failure: MeasureFailure?, reason: MeasureEndReason = MeasureEndReason.FAILED) {
         val current = stateFlow.value
         val mode = current.mode ?: return
         if (myCycle != cycle) return
@@ -410,6 +460,7 @@ class LiveMeasureController(
             evidence = current.evidence,
         ).withRow(mode) { MeasureResult(lastValue = reading ?: it.lastValue, failure = failure) }
         measuringFlow.value = false
+        lastEndFlow.value = MeasureEnd((lastEndFlow.value?.seq ?: 0L) + 1, mode, current.auto, reason, locked = reading != null)
     }
 
     private fun restartStaleTimer() {

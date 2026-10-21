@@ -33,6 +33,27 @@ class LifecycleGlueSourceTest {
     }
 
     @Test
+    fun theActivityTellsTheAppWhenItIsInFrontAndClosesAHeldLinkWhenTheUserLeaves() {
+        val start = body("onStart")
+        val stop = body("onStop")
+        assertTrue("container.appInForeground.value = true" in start)
+        assertTrue("if (!isChangingConfigurations) container.appInForeground.value = false" in stop, "a rotation is not leaving")
+        assertTrue("container.ringSessions.current.value?.onAppLeft(container.appPrefs.disconnectAfterSync, isChangingConfigurations)" in stop)
+        // Out of front before the sync's pause: the paused sync's end then closes the link.
+        assertTrue(stop.indexOf("appInForeground.value = false") < stop.indexOf("onAppStopped("))
+        assertEquals(2, Regex("""appInForeground\.value = """).findAll(activity).count(), "set at start and stop, nowhere else")
+    }
+
+    @Test
+    fun todayIsVisibleExactlyFromItsResumeToItsPause() {
+        val today = activity.substringAfter("Destination.Today -> {").substringBefore("Destination.Ring ->")
+        assertTrue("LifecycleResumeEffect(Unit) {" in today, "only the Today branch sets it")
+        assertTrue("container.todayVisible.value = true" in today)
+        assertTrue("onPauseOrDispose { container.todayVisible.value = false }" in today)
+        assertEquals(2, Regex("""todayVisible\.value = """).findAll(activity).count(), "set on resume, cleared on pause or leaving, nowhere else")
+    }
+
+    @Test
     fun theRingScreenKeepsTheScreenOnWhileASyncRuns() {
         assertTrue("val keepOn = SyncLifecycle.keepScreenOn(state.ringData.syncing)" in ringScreen)
         assertTrue("view.keepScreenOn = keepOn" in ringScreen)

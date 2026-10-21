@@ -1,11 +1,13 @@
 package io.github.opencircuit.app.session
 
+import io.github.opencircuit.app.live.AutoLive
 import io.github.opencircuit.app.live.LiveMeasureController
 import io.github.opencircuit.app.live.LiveReadings
 import io.github.opencircuit.app.ring.DeviceStatusModel
 import io.github.opencircuit.app.sync.HistoryDrainController
 import io.github.opencircuit.app.sync.HistoryPages
 import io.github.opencircuit.app.sync.SessionHistory
+import io.github.opencircuit.app.sync.SyncLifecycle
 import io.github.opencircuit.app.sync.SyncRecords
 import io.github.opencircuit.app.sync.SyncTriggers
 import io.github.opencircuit.ble.LinkState
@@ -56,6 +58,8 @@ class RingSessionController(
     log: (String) -> Unit,
     /** Where the ring's history is kept; without one every page is refused and stays on the ring. */
     history: SessionHistory = SessionHistory.NONE,
+    /** Today is on screen (resumed): only then does a sync's end start live heart rate ([autoLive]). */
+    todayVisible: StateFlow<Boolean> = MutableStateFlow(false),
 ) {
     /** Routes every frame; register a handler here to receive an opcode. */
     val dispatcher = FrameDispatcher(log)
@@ -125,8 +129,20 @@ class RingSessionController(
             log = log,
             disconnect = link::disconnect,
             takeUserLinkUp = ::takeUserLinkUp,
+            autoMeasuring = { liveMeasure.state.value.let { it.mode != null && it.auto } },
+            yieldAutoMeasure = liveMeasure::yieldAuto,
         )
     }
+
+    /** Live heart rate on Today after each sync's end, never in the night; stands down for any sync. */
+    val autoLive = AutoLive(
+        measure = liveMeasure,
+        sync = sync.state,
+        todayVisible = todayVisible,
+        nightQuiet = { triggers?.nightQuietNow() == true },
+        scope = scope,
+        log = log,
+    )
 
     /** The idle `d0 00 00` keepalive and the status refresh after a measure; paused for a whole sync. */
     val keepalive = KeepaliveTicker(
@@ -188,6 +204,7 @@ class RingSessionController(
         scope.launch { syncRecords.load() }
         keepalive.start()
         triggers?.start()
+        autoLive.start()
         scope.launch {
             link.teardowns.collect { teardown ->
                 teardownsFlow.update {
@@ -207,6 +224,18 @@ class RingSessionController(
                 if (it != LinkState.Authenticated) liveMeasure.onLinkLost()
             }
         }
+    }
+
+    /**
+     * The user left the app ([SyncLifecycle.disconnectOnStop]): with "Disconnect after syncing"
+     * [switchOn], an idle held link closes — a running measure is stopped first, as the user's own
+     * Disconnect does. A running sync is left to its pause; its end closes the link.
+     */
+    fun onAppLeft(switchOn: Boolean, changingConfigurations: Boolean) {
+        val linkUp = link.state.value == LinkState.Authenticated
+        if (!SyncLifecycle.disconnectOnStop(switchOn, linkUp, sync.isSyncing.value, changingConfigurations)) return
+        liveMeasure.stop()
+        link.disconnect()
     }
 
     /**

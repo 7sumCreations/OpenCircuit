@@ -40,4 +40,21 @@ class SyncLifecycleTest {
         assertEquals(true, SyncLifecycle.keepScreenOn(syncing = true))
         assertEquals(false, SyncLifecycle.keepScreenOn(syncing = false))
     }
+
+    @Test
+    fun disconnectAfterSyncingActsOnlyOnceTheAppIsNotInFront() {
+        assertEquals(true, SyncLifecycle.disconnectAfterSync(switchOn = true, inForeground = false))
+        assertEquals(false, SyncLifecycle.disconnectAfterSync(switchOn = true, inForeground = true), "in front the link stays up for live heart rate")
+        assertEquals(false, SyncLifecycle.disconnectAfterSync(switchOn = false, inForeground = false))
+        assertEquals(false, SyncLifecycle.disconnectAfterSync(switchOn = false, inForeground = true))
+    }
+
+    @Test
+    fun leavingTheAppClosesAnIdleHeldLinkOnlyWithTheSwitchOn() {
+        assertEquals(true, SyncLifecycle.disconnectOnStop(switchOn = true, linkUp = true, syncing = false, changingConfigurations = false))
+        assertEquals(false, SyncLifecycle.disconnectOnStop(switchOn = false, linkUp = true, syncing = false, changingConfigurations = false), "switch off: the link is held")
+        assertEquals(false, SyncLifecycle.disconnectOnStop(switchOn = true, linkUp = false, syncing = false, changingConfigurations = false), "no link to close")
+        assertEquals(false, SyncLifecycle.disconnectOnStop(switchOn = true, linkUp = true, syncing = true, changingConfigurations = false), "a running sync pauses; its own end closes the link")
+        assertEquals(false, SyncLifecycle.disconnectOnStop(switchOn = true, linkUp = true, syncing = false, changingConfigurations = true), "a rotation is not leaving")
+    }
 }

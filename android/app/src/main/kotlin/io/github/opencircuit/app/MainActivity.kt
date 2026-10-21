@@ -22,6 +22,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -154,6 +155,11 @@ class MainActivity : ComponentActivity() {
                     AppShell(current = destination, onSelect = { destination = it }) { inner ->
                         when (destination) {
                             Destination.Today -> {
+                                // Live heart rate after a sync runs only while Today is resumed (AutoLive).
+                                LifecycleResumeEffect(Unit) {
+                                    container.todayVisible.value = true
+                                    onPauseOrDispose { container.todayVisible.value = false }
+                                }
                                 val state by todayViewModel.uiState.collectAsStateWithLifecycle()
                                 TodayScreen(state = state, onAction = { if (it == TodayAction.OpenRing) destination = Destination.Ring }, modifier = inner)
                             }
@@ -181,12 +187,17 @@ class MainActivity : ComponentActivity() {
     // before onboarding ends there is none.
     override fun onStart() {
         super.onStart()
+        container.appInForeground.value = true
         container.adapterStates.start()
         container.ringSessions.current.value?.sync?.onAppStarted()
     }
 
+    // Out of front first, so a sync this stop pauses closes the link at its end when the switch says
+    // so; then an idle held link closes too ("Disconnect after syncing" acts only once the user left).
     override fun onStop() {
+        if (!isChangingConfigurations) container.appInForeground.value = false
         container.ringSessions.current.value?.sync?.onAppStopped(isChangingConfigurations)
+        container.ringSessions.current.value?.onAppLeft(container.appPrefs.disconnectAfterSync, isChangingConfigurations)
         container.adapterStates.stop()
         super.onStop()
     }
