@@ -14,6 +14,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.opencircuit.app.details.ConnectionDetailsCard
 import io.github.opencircuit.app.live.LiveMode
@@ -74,7 +76,8 @@ fun RingScreen(
     }
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { TopAppBar(title = { Text(state.title) }) },
+        // The screen's title is its heading, as on Today and Settings: TalkBack can jump to it.
+        topBar = { TopAppBar(title = { Text(state.title, modifier = Modifier.semantics { heading() }) }) },
     ) { padding ->
         Column(
             modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
