@@ -45,6 +45,7 @@ import io.github.opencircuit.app.settings.SettingsScreen
 import io.github.opencircuit.app.today.TodayAction
 import io.github.opencircuit.app.today.TodayScreen
 import io.github.opencircuit.app.today.TodayViewModel
+import io.github.opencircuit.app.today.todayCommands
 import io.github.opencircuit.app.today.todaySession
 import io.github.opencircuit.app.ui.AppShell
 import io.github.opencircuit.app.ui.OpenCircuitTheme
@@ -104,6 +105,7 @@ class MainActivity : ComponentActivity() {
                     scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
                     wallClock = { java.time.Instant.ofEpochMilli(container.clock.nowMillis()) },
                     log = container.log,
+                    commands = todayCommands(container.ringSessions),
                 )
             }
         }
@@ -161,7 +163,11 @@ class MainActivity : ComponentActivity() {
                                     onPauseOrDispose { container.todayVisible.value = false }
                                 }
                                 val state by todayViewModel.uiState.collectAsStateWithLifecycle()
-                                TodayScreen(state = state, onAction = { if (it == TodayAction.OpenRing) destination = Destination.Ring }, modifier = inner)
+                                TodayScreen(
+                                    state = state,
+                                    onAction = { if (it == TodayAction.OpenRing) destination = Destination.Ring else todayViewModel.onAction(it) },
+                                    modifier = inner,
+                                )
                             }
                             Destination.Ring -> {
                                 val state by ringViewModel.uiState.collectAsStateWithLifecycle()

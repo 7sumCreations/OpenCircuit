@@ -112,7 +112,9 @@ class TodayViewModelTest {
 
         session.value = session.value.copy(syncing = true)
         runCurrent()
-        assertEquals("Syncing…", vm.uiState.value.lastSynced)
+        // The strip says a sync runs; "Last synced" stays on screen beside it.
+        assertEquals("Syncing…", vm.uiState.value.strip?.text)
+        assertEquals("Last synced 2 h ago", vm.uiState.value.lastSynced)
 
         session.value = session.value.copy(syncing = false, log = session.value.log + entry(epoch.plusMillis(testScheduler.currentTime)))
         runCurrent()
@@ -168,5 +170,21 @@ class TodayViewModelTest {
         val vm = open(source)
         assertTrue(vm.uiState.value.loading)
         assertNull(vm.uiState.value.heartRate.value)
+    }
+
+    @Test
+    fun todaysOwnActionsReachTheSessionAndNavigationDoesNot() = runTest {
+        val calls = mutableListOf<String>()
+        val commands = object : io.github.opencircuit.app.today.TodayCommands {
+            override fun refresh() { calls += "refresh" }
+            override fun measureSpO2() { calls += "spo2" }
+            override fun stopMeasure() { calls += "stop" }
+        }
+        val vm = TodayViewModel(ScriptedSource(TodayStored()), scope = backgroundScope, wallClock = { epoch }, zone = { utc }, commands = commands)
+        vm.onAction(io.github.opencircuit.app.today.TodayAction.Refresh)
+        vm.onAction(io.github.opencircuit.app.today.TodayAction.MeasureSpO2)
+        vm.onAction(io.github.opencircuit.app.today.TodayAction.StopMeasure)
+        vm.onAction(io.github.opencircuit.app.today.TodayAction.OpenRing)
+        assertEquals(listOf("refresh", "spo2", "stop"), calls)
     }
 }

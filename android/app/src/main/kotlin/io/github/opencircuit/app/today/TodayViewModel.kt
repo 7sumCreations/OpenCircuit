@@ -40,10 +40,22 @@ class TodayViewModel(
     /** Re-reads [wallClock]: ages move on while nothing else changes. */
     clockTicks: Flow<Unit> = everyMinute(),
     private val log: (String) -> Unit = {},
+    /** What Today's own actions do to the ring session. */
+    private val commands: TodayCommands = TodayCommands.NONE,
 ) : ViewModel(scope) {
 
     /** The Today screen's state. */
     val uiState: StateFlow<TodayUiState>
+
+    /** Today's own actions (pull to refresh, the hero's Measure / Stop, the overdue chip's Sync now); navigation is the host's. */
+    fun onAction(action: TodayAction) {
+        when (action) {
+            TodayAction.Refresh -> commands.refresh()
+            TodayAction.MeasureSpO2 -> commands.measureSpO2()
+            TodayAction.StopMeasure -> commands.stopMeasure()
+            TodayAction.OpenRing -> Unit
+        }
+    }
 
     init {
         val stored: Flow<TodayStored?> = (source?.revisions() ?: flowOf(0L))
@@ -76,8 +88,16 @@ fun todaySession(sessions: SessionHost?): Flow<TodaySession> =
         if (session == null) {
             flowOf(TodaySession())
         } else {
-            combine(session.state, session.syncRecords.entries, session.sync.state) { link, entries, sync ->
-                TodaySession(link = link, ringName = session.link.ring.name, log = entries, syncing = sync.syncing)
+            combine(session.state, session.syncRecords.entries, session.sync.state, session.liveMeasure.state, session.link.info) { link, entries, sync, live, info ->
+                TodaySession(
+                    link = link,
+                    ringName = session.link.ring.name,
+                    log = entries,
+                    syncing = sync.syncing,
+                    channels = sync.channels,
+                    liveFirmware = info.firmware.version.takeIf(String::isNotEmpty),
+                    live = live,
+                )
             }
         }
     }
