@@ -3,7 +3,11 @@ package io.github.opencircuit.app
 import io.github.opencircuit.app.live.AutoLive
 import io.github.opencircuit.app.live.LiveMode
 import io.github.opencircuit.app.ring.RingAction
+import io.github.opencircuit.app.sync.AutoSyncSkip
+import io.github.opencircuit.app.sync.AutoSyncSkipReason
+import io.github.opencircuit.app.sync.AutoSyncTrigger
 import io.github.opencircuit.app.sync.SyncOutcome
+import io.github.opencircuit.app.sync.SyncTriggers
 import io.github.opencircuit.ringkit.Command
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
@@ -25,6 +29,9 @@ import java.time.Instant
  * its rule is removed from [AutoLive] or the controller.
  */
 class AutoLiveTest {
+
+    /** Outside the unlearned night (21:30–10:00 UTC): the automatic syncs and live heart rate run. */
+    private val AFTERNOON = Instant.parse("2026-10-08T14:00:00Z")
 
     private val heartRateMode = "060100"
     private val spo2Mode = "060200"
@@ -260,63 +267,122 @@ class AutoLiveTest {
         }
     }
 
+    /**
+     * The link drops and comes back inside the link-up throttle: no sync is due (the last complete
+     * one is under 300 s old), so the throttled link-up arms live heart rate on its own.
+     */
     @Test
-    fun aNewConnectionWithoutItsOwnSyncStartsNothingWhenTodayComesBack() = runTest {
+    fun aReconnectInsideTheThrottleStartsLiveHeartRateWhenTodayComesBack() = runTest {
         val visible = MutableStateFlow(true)
-        val w = build(world(visible = visible))
+        val w = build(world(visible = visible, triggers = true, wallStart = AFTERNOON))
         try {
-            advanceTo(1_000)
-            w.viewModel.onAction(RingAction.SyncNow)
-            runCurrent()
-            val end = untilSyncEnds(w)
+            val end = untilSyncEnds(w, before = null)
+            assertEquals(SyncOutcome.COMPLETE, w.session.sync.state.value.last!!.outcome)
             advanceTo(end + 10_000)
             visible.value = false
             runCurrent()
-            // The link drops and comes back; this connection has had no sync yet.
             w.session.link.disconnect()
             runCurrent()
             assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value)
             w.session.connect()
-            val until = testScheduler.currentTime + 120_000
-            while (w.session.state.value != io.github.opencircuit.ble.LinkState.Authenticated) {
-                check(testScheduler.currentTime < until) { "the link did not come back" }
-                advanceTimeBy(100)
-                runCurrent()
-            }
+            untilAuthenticated(w)
             val up = testScheduler.currentTime
+            assertTrue(up - end < SyncTriggers.THROTTLE.toMillis(), "the reconnect is inside the throttle")
+            assertEquals(AutoSyncSkipReason.THROTTLED, w.session.triggers!!.skips.value.last().reason, "no sync was due at this link-up")
             visible.value = true
             runCurrent()
-            advanceTo(up + 20_000)
-            assertEquals(emptyList(), w.timesOf(heartRateMode, end + 10_001), "no live heart rate before this connection's own sync")
+            advanceTo(up + 1_000)
+            val mode = w.timesOf(heartRateMode, up).firstOrNull()
+            assertNotNull(mode, "Today came back on a throttled reconnect: live heart rate starts")
+            assertTrue(mode - up <= 300, "heart-rate mode written ${mode - up} ms after Today came back")
+            assertTrue(w.session.liveMeasure.state.value.auto)
         } finally {
             w.db.close()
         }
     }
 
+    /**
+     * The user leaves (the switch closes the link after the sync) and returns inside the throttle:
+     * the link comes back with nothing due, and live heart rate starts on Today without a second
+     * sync and without waiting for the hourly one.
+     */
     @Test
-    fun aSyncThatClosedTheLinkDoesNotArmTheNextConnection() = runTest {
-        // Switch ON (its default) and the app not in front: the sync disconnects, then publishes its report.
-        val visible = MutableStateFlow(false)
-        val w = build(world(visible = visible, foreground = MutableStateFlow(false)))
+    fun returningInsideTheThrottleStartsLiveHeartRateOnTheReconnectedLink() = runTest {
+        val foreground = MutableStateFlow(true)
+        val w = build(world(foreground = foreground, triggers = true, wallStart = AFTERNOON))
         try {
-            advanceTo(1_000)
-            w.viewModel.onAction(RingAction.SyncNow)
+            val end = untilSyncEnds(w, before = null)
+            advanceTo(end + 10_000)
+            foreground.value = false
+            w.session.onAppLeft(switchOn = true, changingConfigurations = false)
             runCurrent()
-            val end = untilSyncEnds(w)
-            assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value)
-            w.session.connect()
-            val until = testScheduler.currentTime + 120_000
-            while (w.session.state.value != io.github.opencircuit.ble.LinkState.Authenticated) {
-                check(testScheduler.currentTime < until) { "the link did not come back" }
-                advanceTimeBy(100)
-                runCurrent()
-            }
-            visible.value = true
-            runCurrent()
-            advanceTo(testScheduler.currentTime + 20_000)
-            assertEquals(emptyList(), w.timesOf(heartRateMode, end), "this connection has had no sync")
+            assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value, "the switch closed the link")
+            foreground.value = true
+            w.session.onAppReturned()
+            untilAuthenticated(w)
+            val up = testScheduler.currentTime
+            advanceTo(up + 15_000)
+            val live = w.session.liveMeasure.state.value
+            assertEquals(LiveMode.HEART_RATE, live.mode, "back inside the throttle: live heart rate on the reconnected link")
+            assertTrue(live.auto)
+            assertEquals(1, w.ring.events.count { it.what == "commit returned" }, "no second sync ran")
         } finally {
             w.db.close()
+        }
+    }
+
+    /**
+     * Only a throttled link-up on a held, authenticated link arms live heart rate: a link-up held
+     * back for any other reason, a throttled one that closed the link, and a throttled cadence start
+     * nothing. Driven straight through the skips an [AutoLive] follows, with the night never quiet,
+     * so nothing else could hold the measure back.
+     */
+    @Test
+    fun aLinkUpSkippedForAnyOtherReasonStartsNothing() = runTest {
+        val w = build(world())
+        val skips = MutableStateFlow<List<AutoSyncSkip>>(emptyList())
+        try {
+            w.session.connect()
+            untilAuthenticated(w)
+            val probe = AutoLive(
+                measure = w.session.liveMeasure,
+                sync = w.session.sync.state,
+                todayVisible = MutableStateFlow(true),
+                nightQuiet = { false },
+                scope = backgroundScope,
+                log = {},
+                linkState = w.session.state,
+                linkUpSkips = skips,
+            )
+            probe.start()
+            runCurrent()
+            val from = testScheduler.currentTime
+            fun skip(trigger: AutoSyncTrigger, reason: AutoSyncSkipReason, disconnected: Boolean = false) {
+                skips.value = skips.value + AutoSyncSkip(SYNC_TEST_EPOCH.plusMillis(testScheduler.currentTime), trigger, reason, disconnected)
+                runCurrent()
+                advanceTimeBy(1_000)
+                runCurrent()
+            }
+            skip(AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.NIGHT_QUIET)
+            skip(AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.MEASURING)
+            skip(AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.ALREADY_SYNCING)
+            skip(AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED, disconnected = true)
+            skip(AutoSyncTrigger.CADENCE, AutoSyncSkipReason.THROTTLED)
+            assertEquals(emptyList(), w.timesOf(heartRateMode, from), "no skip but a throttled link-up on a held link arms it")
+            // The same probe does start on the one that arms: the cases above were not blind.
+            skip(AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED)
+            assertTrue(w.timesOf(heartRateMode, from).isNotEmpty(), "a throttled link-up on a held link starts live heart rate")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    private fun TestScope.untilAuthenticated(w: SyncWorld) {
+        val until = testScheduler.currentTime + 120_000
+        while (w.session.state.value != io.github.opencircuit.ble.LinkState.Authenticated) {
+            check(testScheduler.currentTime < until) { "the link did not come back" }
+            advanceTimeBy(100)
+            runCurrent()
         }
     }
 

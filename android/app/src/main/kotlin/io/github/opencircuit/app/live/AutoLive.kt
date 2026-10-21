@@ -1,5 +1,8 @@
 package io.github.opencircuit.app.live
 
+import io.github.opencircuit.app.sync.AutoSyncSkip
+import io.github.opencircuit.app.sync.AutoSyncSkipReason
+import io.github.opencircuit.app.sync.AutoSyncTrigger
 import io.github.opencircuit.app.sync.SyncReport
 import io.github.opencircuit.app.sync.SyncState
 import io.github.opencircuit.ble.LinkState
@@ -29,6 +32,11 @@ import java.time.Duration
  *   null) — the one `SyncState` update that ends a sync normally. An error or cancellation ends a
  *   sync with no new report and starts nothing. The trigger is the drain's END, so the link-up sync
  *   always runs first and live heart rate never holds it back.
+ * - **Or a link-up with nothing due.** A link-up whose sync was skipped only because the last
+ *   complete sync finished under the link-up throttle ago ([linkUpSkips]: `LINK_UP` + `THROTTLED`,
+ *   the link kept) arms it the same way: a sync is due nowhere, so "sync first" is already met.
+ *   Any other skip (the night, a sync or a measure running, a throttled link-up that closed the
+ *   link) arms nothing.
  * - **Only while Today is on screen** ([todayVisible]): a sync that ends while it is not starts
  *   nothing yet; Today leaving the screen stops the automatic measure (a measure the user started
  *   is left alone). Today coming back on screen starts it again — on the held, authenticated link
@@ -59,6 +67,8 @@ class AutoLive(
     private val skinTemperatureC: () -> Double? = { null },
     /** The link: Today coming back starts live heart rate only on a held, authenticated one; a drop disarms it. */
     private val linkState: StateFlow<LinkState> = MutableStateFlow(LinkState.Authenticated),
+    /** The automatic syncs' skips, oldest first (`SyncTriggers.skips`): a link-up throttled on a held link arms it. */
+    private val linkUpSkips: StateFlow<List<AutoSyncSkip>> = MutableStateFlow(emptyList()),
 ) {
     private sealed interface Event {
         data class SyncEnded(val report: SyncReport) : Event
@@ -67,6 +77,8 @@ class AutoLive(
         /** The back-off numbered [id] ran out; one cancelled since (a newer [id]) is stale and ignored. */
         data class BackoffOver(val id: Long) : Event
         data object LinkLost : Event
+        /** A link-up held its sync back only because the last complete one is under the throttle: nothing is due. */
+        data object LinkUpThrottled : Event
     }
 
     private val backoffOver = Channel<Event>(Channel.CONFLATED)
@@ -91,7 +103,14 @@ class AutoLive(
         val ends: Flow<Event> = measure.lastEnd.drop(1).filterNotNull().map { Event.Ended(it) }
         val linkLost: Flow<Event> = linkState.map { it == LinkState.Authenticated }.distinctUntilChanged()
             .filter { !it }.map { Event.LinkLost }
-        scope.launch { merge(syncEnds, visibility, ends, linkLost, backoffOver.receiveAsFlow()).collect(::handle) }
+        // A skip kept before this start is not a new link-up; a repeated skip is kept as a new entry.
+        var seenSkip = linkUpSkips.value.lastOrNull()
+        val throttled: Flow<Event> = linkUpSkips.map { it.lastOrNull() }.filterNotNull().map { skip ->
+            if (skip === seenSkip) null else skip.also { seenSkip = it }
+        }.filterNotNull()
+            .filter { it.trigger == AutoSyncTrigger.LINK_UP && it.reason == AutoSyncSkipReason.THROTTLED && !it.disconnected }
+            .map { Event.LinkUpThrottled }
+        scope.launch { merge(syncEnds, visibility, ends, linkLost, throttled, backoffOver.receiveAsFlow()).collect(::handle) }
     }
 
     private suspend fun handle(event: Event) {
@@ -109,20 +128,29 @@ class AutoLive(
                 active = false
                 cancelBackoff()
             }
+            Event.LinkUpThrottled -> arm("a link-up with no sync due")
         }
     }
 
     private suspend fun onSyncEnded(report: SyncReport) {
         // A paused sync is not finished: its resume's end decides.
         if (report.commit == null || report.paused) return
-        // A sync that closed the link (or lost it) arms nothing: the next connection waits for its own sync.
+        arm("a sync ended")
+    }
+
+    /**
+     * This connection is caught up — its sync committed, or its link-up found the last complete
+     * sync under the throttle — so live heart rate may run on it.
+     */
+    private suspend fun arm(why: String) {
+        // A sync that closed the link (or lost it) arms nothing: the next connection waits for its own link-up.
         if (linkState.value != LinkState.Authenticated) return
         armed = true
         // A fresh sync starts afresh, seen or not: no back-off carried over from before it.
         noLock = 0
         cancelBackoff()
         if (!todayVisible.value) {
-            log("auto-live: a sync ended while Today was not on screen; live heart rate waits for Today")
+            log("auto-live: $why while Today was not on screen; live heart rate waits for Today")
             return
         }
         active = true

@@ -139,7 +139,7 @@ class RingSessionController(
         )
     }
 
-    /** Live heart rate on Today after each sync's end, never in the night; stands down for any sync. */
+    /** Live heart rate on Today after each sync's end (or a link-up with no sync due), never in the night; stands down for any sync. */
     val autoLive = AutoLive(
         measure = liveMeasure,
         sync = sync.state,
@@ -148,6 +148,7 @@ class RingSessionController(
         scope = scope,
         log = log,
         linkState = link.state,
+        linkUpSkips = triggers?.skips ?: MutableStateFlow(emptyList()),
     )
 
     /** The idle `d0 00 00` keepalive and the status refresh after a measure; paused for a whole sync. */
