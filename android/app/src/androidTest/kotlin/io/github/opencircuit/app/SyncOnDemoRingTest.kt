@@ -10,7 +10,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.opencircuit.ble.LinkState
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
@@ -30,8 +32,9 @@ import org.junit.runner.RunWith
  *
  * With no complete sync recorded for the ring, the link coming up at launch syncs by itself: the
  * card goes to "Last synced just now" with the records stored, three nights and last night, and
- * the ring is disconnected afterwards (the switch is on). Sync now then syncs again whatever the
- * throttle says: it reconnects, drains (nothing new) and disconnects.
+ * the link is held afterwards: the switch is on, but it acts only once the user leaves the app.
+ * Sync now then syncs again whatever the throttle says (nothing new), and leaving the app closes
+ * the link.
  * While a sync runs, both Measure buttons are off and say to wait for it. The app opens on Today
  * and the launch's sync starts from there; the test reads the Ring tab.
  */
@@ -66,16 +69,25 @@ class SyncOnDemoRingTest {
         compose.onNodeWithText("Stored on this phone").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Nights").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Last night").performScrollTo().assertIsDisplayed()
-        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isEmpty() }
+        // The switch is on, but the app is in front: the link is held (it closes once the user leaves).
+        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isNotEmpty() }
 
         compose.onNodeWithText("Sync now").performScrollTo().performClick()
-        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isNotEmpty() }
-        compose.waitUntil(timeoutMillis = 30_000) { compose.onAllNodes(linkConnected()).fetchSemanticsNodes().isEmpty() }
-        // The link goes down inside the sync (after its commit); the card reads "Syncing…" until the
-        // sync's log entry is kept and its report published, a moment later.
-        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Syncing…").fetchSemanticsNodes().isEmpty() }
+        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText("Syncing…").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(timeoutMillis = 30_000) { compose.onAllNodesWithText("Syncing…").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithText("Last synced just now").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Up to date").performScrollTo().assertIsDisplayed()
+        compose.onAllNodes(linkConnected()).assertCountEquals(1)
+
+        // Leaving the app closes the held link.
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as OpenCircuitApp
+        compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        val until = System.currentTimeMillis() + 10_000
+        while (app.container.ringSessions.current.value?.state?.value == LinkState.Authenticated) {
+            check(System.currentTimeMillis() < until) { "the link stayed up after the app was left" }
+            Thread.sleep(100)
+        }
+        compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
     }
 
     @Test
