@@ -377,6 +377,37 @@ class AutoLiveTest {
         }
     }
 
+    /**
+     * The skips list is a state: a throttled link-up and another skip kept before the collector
+     * looks arrive as one update. The throttled one still arms live heart rate.
+     */
+    @Test
+    fun aThrottledLinkUpFollowedAtOnceByAnotherSkipStillArms() = runTest {
+        val w = build(world())
+        val skips = MutableStateFlow<List<AutoSyncSkip>>(emptyList())
+        try {
+            w.session.connect()
+            untilAuthenticated(w)
+            AutoLive(
+                measure = w.session.liveMeasure, sync = w.session.sync.state, todayVisible = MutableStateFlow(true),
+                nightQuiet = { false }, scope = backgroundScope, log = {}, linkState = w.session.state, linkUpSkips = skips,
+            ).start()
+            runCurrent()
+            val from = testScheduler.currentTime
+            val at = SYNC_TEST_EPOCH.plusMillis(from)
+            skips.value = listOf(
+                AutoSyncSkip(at, AutoSyncTrigger.LINK_UP, AutoSyncSkipReason.THROTTLED),
+                AutoSyncSkip(at, AutoSyncTrigger.CADENCE, AutoSyncSkipReason.MEASURING),
+            )
+            runCurrent()
+            advanceTimeBy(1_000)
+            runCurrent()
+            assertTrue(w.timesOf(heartRateMode, from).isNotEmpty(), "the throttled link-up under a later skip arms live heart rate")
+        } finally {
+            w.db.close()
+        }
+    }
+
     private fun TestScope.untilAuthenticated(w: SyncWorld) {
         val until = testScheduler.currentTime + 120_000
         while (w.session.state.value != io.github.opencircuit.ble.LinkState.Authenticated) {

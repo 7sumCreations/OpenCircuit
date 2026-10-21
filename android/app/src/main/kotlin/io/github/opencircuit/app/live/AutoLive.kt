@@ -104,12 +104,14 @@ class AutoLive(
         val linkLost: Flow<Event> = linkState.map { it == LinkState.Authenticated }.distinctUntilChanged()
             .filter { !it }.map { Event.LinkLost }
         // A skip kept before this start is not a new link-up; a repeated skip is kept as a new entry.
-        var seenSkip = linkUpSkips.value.lastOrNull()
-        val throttled: Flow<Event> = linkUpSkips.map { it.lastOrNull() }.filterNotNull().map { skip ->
-            if (skip === seenSkip) null else skip.also { seenSkip = it }
-        }.filterNotNull()
-            .filter { it.trigger == AutoSyncTrigger.LINK_UP && it.reason == AutoSyncSkipReason.THROTTLED && !it.disconnected }
-            .map { Event.LinkUpThrottled }
+        // The list is a state, so several skips can land in one update: every entry not seen before
+        // is looked at, not only the newest (a later skip must not hide a throttled link-up).
+        var seenSkips = linkUpSkips.value
+        val throttled: Flow<Event> = linkUpSkips.map { kept ->
+            val fresh = kept.filter { entry -> seenSkips.none { it === entry } }
+            seenSkips = kept
+            fresh.any { it.trigger == AutoSyncTrigger.LINK_UP && it.reason == AutoSyncSkipReason.THROTTLED && !it.disconnected }
+        }.filter { it }.map { Event.LinkUpThrottled }
         scope.launch { merge(syncEnds, visibility, ends, linkLost, throttled, backoffOver.receiveAsFlow()).collect(::handle) }
     }
 
