@@ -49,7 +49,8 @@ class LifecycleGlueSourceTest {
         val today = activity.substringAfter("Destination.Today -> {").substringBefore("Destination.Ring ->")
         assertTrue("LifecycleResumeEffect(Unit) {" in today, "only the Today branch sets it")
         assertTrue("container.todayVisible.value = true" in today)
-        assertTrue("onPauseOrDispose { container.todayVisible.value = false }" in today)
+        // A rotation is not leaving Today: the running live measure is kept through it.
+        assertTrue("onPauseOrDispose { if (!isChangingConfigurations) container.todayVisible.value = false }" in today)
         assertEquals(2, Regex("""todayVisible\.value = """).findAll(activity).count(), "set on resume, cleared on pause or leaving, nowhere else")
     }
 

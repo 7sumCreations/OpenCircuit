@@ -158,9 +158,10 @@ class MainActivity : ComponentActivity() {
                         when (destination) {
                             Destination.Today -> {
                                 // Live heart rate after a sync runs only while Today is resumed (AutoLive).
+                                // A rotation is not leaving Today: the live measure runs on through it.
                                 LifecycleResumeEffect(Unit) {
                                     container.todayVisible.value = true
-                                    onPauseOrDispose { container.todayVisible.value = false }
+                                    onPauseOrDispose { if (!isChangingConfigurations) container.todayVisible.value = false }
                                 }
                                 val state by todayViewModel.uiState.collectAsStateWithLifecycle()
                                 TodayScreen(
