@@ -43,6 +43,13 @@ class LiveStepsOnDemoRingTest {
             check(app.container.appPrefs.setOnboardingCompleted()) { "could not record that onboarding was done" }
             check(app.container.rememberedRings.save(DemoRingLink.RING)) { "could not remember the demo ring" }
             check(app.container.appPrefs.setDisconnectAfterSync(false)) { "could not turn the switch off" }
+            // Writing to Health Connect is OFF until the user turns it on (Settings); this test is about the writing.
+            check(app.container.healthSwitch.set(true)) { "could not turn Send to Health Connect on" }
+        }
+
+        override fun after() {
+            // Back to the default for the tests that follow in this process.
+            app.container.healthSwitch.set(false)
         }
     }
 

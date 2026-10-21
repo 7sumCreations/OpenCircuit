@@ -66,7 +66,7 @@ object OnboardingPages {
             "Welcome to OpenCircuit",
             listOf(
                 "OpenCircuit reads your RingConn ring (Gen 2, Gen 2 Air, Gen 3) over Bluetooth — heart rate, HRV, SpO₂, sleep, skin temperature and more.",
-                "It's local-first: your data stays on your phone and is written only to Health Connect. Nothing is sent to any server.",
+                "It's local-first: every reading stays on your phone. Nothing is sent to any server, and nothing goes to Health Connect unless you turn that on in Settings.",
                 "No account, no subscription, no cloud.",
             ),
         ),
@@ -83,7 +83,7 @@ object OnboardingPages {
             "Permissions",
             listOf(
                 "Nearby devices (Bluetooth) — to find and connect to your ring. OpenCircuit never uses it for location.",
-                "Health Connect — to write your metrics there, when you tap Connect Health Connect on the Ring screen. You choose exactly what to share.",
+                "Health Connect — only if you want a copy of your metrics there: turn on Send to Health Connect in Settings, then tap Connect Health Connect. You choose exactly what to share. It stays off until you do.",
                 "You'll be asked the first time you tap Scan & connect. Android may also ask you to confirm pairing with the ring.",
             ),
         ),

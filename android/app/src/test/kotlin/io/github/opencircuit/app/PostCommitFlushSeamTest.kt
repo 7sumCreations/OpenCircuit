@@ -1,6 +1,8 @@
 package io.github.opencircuit.app
 
+import io.github.opencircuit.app.data.PrefsAppPrefs
 import io.github.opencircuit.app.health.HealthFlush
+import io.github.opencircuit.app.health.HealthSwitch
 import io.github.opencircuit.app.ring.RingAction
 import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.health.FlushResult
@@ -56,6 +58,39 @@ class PostCommitFlushSeamTest {
         } finally {
             h.appScope.cancel()
             w.db.close()
+        }
+    }
+
+    /**
+     * The seam with Settings' "Send to Health Connect" switch, as the app reads it from its saved
+     * preference: ON, a committed sync's data reaches Health Connect; OFF (nothing saved, the
+     * default), the commit still asks and the request ends at the flush's gate — not one call.
+     */
+    @Test
+    fun withTheSwitchOnACommittedSyncIsWrittenAndWithItOffNothingIsCalled() = runTest {
+        for (on in listOf(true, false)) {
+            val values = InMemoryKeyValues().apply { if (on) putRaw("health.write.enabled.v1", true) }
+            val switch = HealthSwitch(PrefsAppPrefs(values), log = {})
+            val h = healthWorld(enabled = switch::isOn)
+            var requests = 0
+            val w = syncWorld(reuseDb = h.db, afterCommit = { requests++; h.flush.request() }, makeRing = ringWith(HistoryTestPages.backlog(3)))
+            try {
+                advanceTo(testScheduler.currentTime + 1_000)
+                w.viewModel.onAction(RingAction.SyncNow)
+                advanceTo(testScheduler.currentTime + 60_000)
+
+                assertEquals(1, requests, "switch ${if (on) "ON" else "OFF"}: the commit asked once")
+                if (on) {
+                    assertTrue(h.hc.records(RecordType.HEART_RATE).isNotEmpty(), "ON: the synced heart rate was written")
+                    assertEquals(emptyList(), LocalStore(h.db).pendingHealthSamples(MetricKind.HEART_RATE))
+                } else {
+                    assertEquals(emptyList(), h.port.calls, "OFF: no Health Connect call of any kind")
+                    assertTrue(LocalStore(h.db).pendingHealthSamples(MetricKind.HEART_RATE).isNotEmpty(), "OFF: kept pending for later")
+                }
+            } finally {
+                h.appScope.cancel()
+                w.db.close()
+            }
         }
     }
 
