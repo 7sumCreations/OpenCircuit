@@ -115,7 +115,8 @@ class HealthCardGrantStatesTest {
             else -> error("hcCardExpect=$expect")
         }
 
-        val access = HealthAccess(hc, AskedOnce, scope) {}
+        // The switch ON: this test reads what the platform grants.
+        val access = HealthAccess(hc, AskedOnce, scope, log = {}, enabled = { true })
         access.refresh().join()
         assertEquals(platform, access.state.value.granted)
         val ui = HealthCardPresenter.present(HealthCardInput(access.state.value, HealthFlushState(), Instant.now()))

@@ -20,6 +20,7 @@ import io.github.opencircuit.app.details.StorageSource
 import io.github.opencircuit.app.details.storeFileBytes
 import io.github.opencircuit.app.health.HealthAccess
 import io.github.opencircuit.app.health.HealthFlush
+import io.github.opencircuit.app.health.HealthSwitch
 import io.github.opencircuit.app.health.StoreHealthAccessMemory
 import io.github.opencircuit.app.health.StoreHealthActivity
 import io.github.opencircuit.app.health.StoreHealthFailures
@@ -122,7 +123,19 @@ class AppContainer(context: Context) {
     /** The phone's wall clock as an instant. */
     private val wallNow: () -> Instant = { Instant.ofEpochMilli(clock.nowMillis()) }
 
-    /** Health Connect on this phone (the platform's, Android 14 and later); the one client of the app. */
+    /**
+     * Settings' "Send to Health Connect" switch, OFF unless the user turned it on. Every Health
+     * Connect call goes through [healthFlush] or [healthAccess], and both ask it first. Turning it
+     * ON reads Health Connect's access again (the card then shows what is already granted).
+     */
+    val healthSwitch: HealthSwitch = HealthSwitch(appPrefs, log, onChanged = { on -> if (on) healthAccess.refresh() })
+
+    /**
+     * Health Connect on this phone (the platform's, Android 14 and later); the one client of the
+     * app, reached only through [healthWriter] (behind [healthFlush]) and [healthAccess]. Building it
+     * calls nothing: its client is made on first use. (Public for the instrumented tests, which
+     * grant and read back through it; no app code calls it directly.)
+     */
     val healthConnect: JetpackHealthConnect = JetpackHealthConnect(context)
 
     /** The Health Connect write-failure map in the store, shared by every write and the card. */
@@ -160,11 +173,15 @@ class AppContainer(context: Context) {
      * write waits for the launch repairs: the night move re-keys the nights a write keeps its marks
      * under.
      */
-    val healthFlush: HealthFlush = HealthFlush({ launchRepairs.join(); healthWriter.flush() }, appScope, log)
+    val healthFlush: HealthFlush = HealthFlush({ launchRepairs.join(); healthWriter.flush() }, appScope, log, enabled = healthSwitch::isOn)
 
-    /** Whether Health Connect is there and which WRITE permissions are granted; read now, on each resume and after the permission screen. */
+    /**
+     * Whether Health Connect is there and which WRITE permissions are granted; read now, on each
+     * resume, after the permission screen and when the switch turns ON — never while it is OFF.
+     */
     val healthAccess: HealthAccess =
-        HealthAccess(healthConnect, StoreHealthAccessMemory({ database.await() }, wallNow, healthFailures), appScope, log).also { it.refresh() }
+        HealthAccess(healthConnect, StoreHealthAccessMemory({ database.await() }, wallNow, healthFailures), appScope, log, enabled = healthSwitch::isOn)
+            .also { it.refresh() }
 
     /** Android's companion-device manager: the pairing sheet before the first bond, and forgetting. */
     val companionPairing: CompanionPairing = CompanionPairing(AndroidCompanionPort(context), log)

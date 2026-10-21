@@ -119,7 +119,7 @@ class PostCommitFlushSeamTest {
             release.await()
             finished = true
             FlushResult(Instant.EPOCH)
-        }, appScope, log = {})
+        }, appScope, log = {}, enabled = { true })
         val session = CoroutineScope(Job() + StandardTestDispatcher(testScheduler))
         session.launch { flush.request() }
         runCurrent()
@@ -146,7 +146,7 @@ class PostCommitFlushSeamTest {
             if (n == 1) release.await()
             events += "end $n"
             FlushResult(Instant.EPOCH, written = mapOf(RecordType.HEART_RATE to n))
-        }, appScope, log = {})
+        }, appScope, log = {}, enabled = { true })
 
         flush.request() // the commit trigger
         runCurrent()
@@ -172,7 +172,7 @@ class PostCommitFlushSeamTest {
         val flush = HealthFlush({
             if (fail) throw IllegalStateException("the stored write generation cannot be read")
             FlushResult(Instant.EPOCH)
-        }, appScope, log = { logs += it })
+        }, appScope, log = { logs += it }, enabled = { true })
 
         flush.request()
         runCurrent()

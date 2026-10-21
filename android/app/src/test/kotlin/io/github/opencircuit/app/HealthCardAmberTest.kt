@@ -155,7 +155,7 @@ class HealthCardAmberTest {
     fun theAccessReadsTheFeatureTheShownFlagAndTheStoredFailures() = runTest {
         val hc = FakeHealthConnect({ now }).apply { grantAll() }
         val memory = Memory(failures = mapOf(RecordType.SLEEP_SESSION to now))
-        val access = HealthAccess(hc, memory, backgroundScope, log = {})
+        val access = HealthAccess(hc, memory, backgroundScope, log = {}, enabled = { true })
 
         access.refresh()
         runCurrent()
@@ -172,7 +172,7 @@ class HealthCardAmberTest {
     fun theAnsweredPermissionScreenIsRememberedAndTheGrantsReadAgain() = runTest {
         val hc = FakeHealthConnect({ now })
         val memory = Memory()
-        val access = HealthAccess(hc, memory, backgroundScope, log = {})
+        val access = HealthAccess(hc, memory, backgroundScope, log = {}, enabled = { true })
         access.refresh()
         runCurrent()
         assertFalse(access.state.value.asked)
@@ -205,7 +205,7 @@ class HealthCardAmberTest {
             override suspend fun markAsked() { asked = true }
             override suspend fun failures(): Map<RecordType, Instant> = emptyMap()
         }
-        val access = HealthAccess(hc, memory, backgroundScope, log = {})
+        val access = HealthAccess(hc, memory, backgroundScope, log = {}, enabled = { true })
 
         access.refresh()
         runCurrent()

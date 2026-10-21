@@ -64,6 +64,8 @@ class HealthAccess(
     private val memory: HealthAccessMemory,
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
+    /** Settings' "Send to Health Connect" switch ([HealthSwitch.isOn]); while it is false Health Connect is not read. */
+    private val enabled: () -> Boolean,
 ) {
     private val stateFlow = MutableStateFlow(HealthAccessState())
 
@@ -94,7 +96,9 @@ class HealthAccess(
         read()
     }
 
+    // Every read — at launch, on resume, after the permission screen — asks the switch first: OFF reads nothing.
     private suspend fun read() = reading.withLock {
+        if (!enabled()) return@withLock
         try {
             val available = port.sdkStatus() == HealthSdkStatus.AVAILABLE
             stateFlow.value = HealthAccessState(

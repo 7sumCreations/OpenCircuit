@@ -108,7 +108,7 @@ class HealthCardStateTest {
     fun theAccessIsReadFromHealthConnectAndAFailedReadKeepsWhatWasKnown() = runTest {
         val hc = FakeHealthConnect({ now })
         val logs = mutableListOf<String>()
-        val access = HealthAccess(hc, NoMemory, backgroundScope, log = { logs += it })
+        val access = HealthAccess(hc, NoMemory, backgroundScope, log = { logs += it }, enabled = { true })
         assertEquals(HealthAccessState(available = null, granted = emptySet()), access.state.value)
 
         access.refresh()
@@ -129,7 +129,7 @@ class HealthCardStateTest {
             override suspend fun grantedWrites(): Set<HealthPermission> = throw IllegalStateException("binder died")
         }
         hc.status = HealthSdkStatus.AVAILABLE
-        val failing = HealthAccess(broken, NoMemory, backgroundScope, log = { logs += it })
+        val failing = HealthAccess(broken, NoMemory, backgroundScope, log = { logs += it }, enabled = { true })
         failing.refresh()
         runCurrent()
         assertEquals(HealthAccessState(available = null, granted = emptySet()), failing.state.value)

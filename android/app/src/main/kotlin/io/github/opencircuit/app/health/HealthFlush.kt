@@ -35,6 +35,8 @@ class HealthFlush(
     private val flush: suspend () -> FlushResult,
     private val scope: CoroutineScope,
     private val log: (String) -> Unit,
+    /** Settings' "Send to Health Connect" switch ([HealthSwitch.isOn]); while it is false nothing is written. */
+    private val enabled: () -> Boolean,
 ) {
     private val requested = AtomicBoolean(false)
     private val running = AtomicBoolean(false)
@@ -43,14 +45,19 @@ class HealthFlush(
     /** Running, the last result, the last error. */
     val state: StateFlow<HealthFlushState> = stateFlow.asStateFlow()
 
-    /** Asks for a write; returns at once. */
+    /**
+     * Asks for a write; returns at once. With the switch OFF nothing happens and nothing is kept for
+     * later: every caller (the post-commit seam, Write now, the re-queue below) is gated here.
+     */
     fun request() {
+        if (!enabled()) return
         requested.set(true)
         if (!running.compareAndSet(false, true)) return
         stateFlow.update { it.copy(running = true) }
         scope.launch {
             try {
-                while (requested.getAndSet(false)) runOnce()
+                // Re-checked before each pass: a write queued behind the running one does not start once turned OFF.
+                while (enabled() && requested.getAndSet(false)) runOnce()
             } finally {
                 // Released on every exit: a write that threw or was cancelled never blocks the next request.
                 stateFlow.update { it.copy(running = false) }
