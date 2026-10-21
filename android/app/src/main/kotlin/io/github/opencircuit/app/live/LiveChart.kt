@@ -17,19 +17,10 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.luminance
+import io.github.opencircuit.app.ui.LocalTones
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-
-/**
- * Rising readings are drawn in green, falling ones in red (upstream's momentum colour). Upstream's
- * pastel pair is for a dark surface; on a light one the darker pair keeps the line at 3:1 or more.
- */
-private val RisingOnDark = Color(0xFF6DD58C)
-private val FallingOnDark = Color(0xFFFFB4AB)
-private val RisingOnLight = Color(0xFF1B6D36)
-private val FallingOnLight = Color(0xFFB3261E)
 
 /**
  * What a screen reader hears for the chart: how many readings, the newest, and the trend of the
@@ -59,11 +50,13 @@ fun liveChartDescription(points: List<LivePoint>): String {
  */
 @Composable
 fun LiveChart(points: List<LivePoint>, windowMillis: Long, pulse: Boolean, modifier: Modifier = Modifier) {
-    val onDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    // Rising green, falling red (upstream's momentum colour), from the mode's palette: the dark
+    // mode's pastel pair, the light mode's darker pair — each 3:1 or more on its surfaces.
+    val tones = LocalTones.current
     val accent = when {
         points.size < 2 -> MaterialTheme.colorScheme.primary
-        points.last().value > points[points.size - 2].value -> if (onDark) RisingOnDark else RisingOnLight
-        points.last().value < points[points.size - 2].value -> if (onDark) FallingOnDark else FallingOnLight
+        points.last().value > points[points.size - 2].value -> Color(tones.rising)
+        points.last().value < points[points.size - 2].value -> Color(tones.falling)
         else -> MaterialTheme.colorScheme.primary
     }
     // The animated value is read in the draw lambda, not here: the pulse redraws the chart each
