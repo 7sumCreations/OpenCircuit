@@ -149,6 +149,7 @@ class RingSessionController(
         log = log,
         linkState = link.state,
         linkUpSkips = triggers?.skips ?: MutableStateFlow(emptyList()),
+        onCharger = { deviceStatus.state.value.onCharger },
     )
 
     /** The idle `d0 00 00` keepalive and the status refresh after a measure; paused for a whole sync. */

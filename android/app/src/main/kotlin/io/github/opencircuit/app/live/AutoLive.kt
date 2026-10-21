@@ -30,8 +30,12 @@ import java.time.Duration
  *
  * - **Trigger: a sync's end.** A NEW finished sync whose commit returned ([SyncReport.commit] not
  *   null) — the one `SyncState` update that ends a sync normally. An error or cancellation ends a
- *   sync with no new report and starts nothing. The trigger is the drain's END, so the link-up sync
- *   always runs first and live heart rate never holds it back.
+ *   sync with no new report and arms nothing. The trigger is the drain's END, so the link-up sync
+ *   always runs first and live heart rate never holds it back. A sync that took an already-armed
+ *   live heart rate over hands it back at its end however it ended (a failed commit, an error):
+ *   this connection was caught up before it, and the next sync retries what it missed.
+ * - **Never on the charger** ([onCharger]): a ring on its charger is not on a finger (the user's
+ *   Measure refuses too); while it sits there the start is tried again every [BACKOFF_BASE].
  * - **Or a link-up with nothing due.** A link-up whose sync was skipped only because the last
  *   complete sync finished under the link-up throttle ago ([linkUpSkips]: `LINK_UP` + `THROTTLED`,
  *   the link kept) arms it the same way: a sync is due nowhere, so "sync first" is already met.
@@ -69,9 +73,13 @@ class AutoLive(
     private val linkState: StateFlow<LinkState> = MutableStateFlow(LinkState.Authenticated),
     /** The automatic syncs' skips, oldest first (`SyncTriggers.skips`): a link-up throttled on a held link arms it. */
     private val linkUpSkips: StateFlow<List<AutoSyncSkip>> = MutableStateFlow(emptyList()),
+    /** The ring's latest descriptor says it sits on its charger (`DeviceStatusState.onCharger`). */
+    private val onCharger: () -> Boolean = { false },
 ) {
     private sealed interface Event {
         data class SyncEnded(val report: SyncReport) : Event
+        /** A sync stopped running, with a report or without one (an unexpected error publishes none). */
+        data object SyncStopped : Event
         data class Visible(val visible: Boolean) : Event
         data class Ended(val end: MeasureEnd) : Event
         /** The back-off numbered [id] ran out; one cancelled since (a newer [id]) is stale and ignored. */
@@ -99,6 +107,7 @@ class AutoLive(
             // A new report only: the same one seen again (any other change of the state) is not a new end.
             if (report === seen) null else report.also { seen = it }
         }.filterNotNull().map { Event.SyncEnded(it) }
+        val syncStops: Flow<Event> = sync.map { it.syncing }.distinctUntilChanged().drop(1).filter { !it }.map { Event.SyncStopped }
         val visibility: Flow<Event> = todayVisible.drop(1).map { Event.Visible(it) }
         val ends: Flow<Event> = measure.lastEnd.drop(1).filterNotNull().map { Event.Ended(it) }
         val linkLost: Flow<Event> = linkState.map { it == LinkState.Authenticated }.distinctUntilChanged()
@@ -112,12 +121,15 @@ class AutoLive(
             seenSkips = kept
             fresh.any { it.trigger == AutoSyncTrigger.LINK_UP && it.reason == AutoSyncSkipReason.THROTTLED && !it.disconnected }
         }.filter { it }.map { Event.LinkUpThrottled }
-        scope.launch { merge(syncEnds, visibility, ends, linkLost, throttled, backoffOver.receiveAsFlow()).collect(::handle) }
+        scope.launch { merge(syncEnds, syncStops, visibility, ends, linkLost, throttled, backoffOver.receiveAsFlow()).collect(::handle) }
     }
 
     private suspend fun handle(event: Event) {
         when (event) {
             is Event.SyncEnded -> onSyncEnded(event.report)
+            // Already armed and wanted: the sync that made it stand down hands it back, committed or not
+            // (a committed end also arms it afresh; whichever comes first starts it, the other finds it running).
+            Event.SyncStopped -> if (armed && active && !measure.isMeasuring.value) tryStart()
             is Event.Visible -> if (event.visible) onShown() else onHidden()
             is Event.Ended -> onEnded(event.end)
             is Event.BackoffOver -> if (event.id == backoffId) {
@@ -207,6 +219,11 @@ class AutoLive(
         }
         val wait = AutoMeasureGate.interval(BACKOFF_BASE, BACKOFF_CAP, noLock, temperature)
         log("auto-live: no lock $noLock times; the ring seems off a finger, next try in ${wait.seconds} s")
+        retryAfter(wait)
+    }
+
+    /** Tries [tryStart] again after [wait] (the back-off); one cancelled since is stale and ignored. */
+    private fun retryAfter(wait: Duration) {
         val id = ++backoffId
         backoff = scope.launch {
             delay(wait.toMillis())
@@ -220,6 +237,14 @@ class AutoLive(
         if (linkState.value != LinkState.Authenticated) return
         // A user's measure runs: its end brings heart rate back.
         if (measure.isMeasuring.value) return
+        if (onCharger()) {
+            // Not on a finger; checked again after a heart-rate budget's wait, without touching the ring.
+            if (backoff?.isActive != true) {
+                log("auto-live: the ring is on its charger; next try in ${BACKOFF_BASE.seconds} s")
+                retryAfter(BACKOFF_BASE)
+            }
+            return
+        }
         if (nightQuiet()) {
             stop("the night is quiet")
             return

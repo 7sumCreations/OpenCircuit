@@ -44,24 +44,38 @@ class AutoLiveTest {
         failCommit: Boolean = false,
         worn: Boolean = true,
         wallStart: Instant = SYNC_TEST_EPOCH,
-    ) = WorldArgs(visible, foreground, triggers, failCommit, worn, wallStart)
+        /** Whether the commit fails, asked at each commit; [failCommit] for every one by default. */
+        failing: () -> Boolean = { failCommit },
+        /** The ring sits on its charger: every descriptor it sends says so. */
+        charging: Boolean = false,
+    ) = WorldArgs(visible, foreground, triggers, failing, worn, wallStart, charging)
 
     private data class WorldArgs(
         val visible: MutableStateFlow<Boolean>,
         val foreground: MutableStateFlow<Boolean>,
         val triggers: Boolean,
-        val failCommit: Boolean,
+        val failCommit: () -> Boolean,
         val worn: Boolean,
         val wallStart: Instant,
+        val charging: Boolean,
     )
 
     private suspend fun TestScope.build(args: WorldArgs): SyncWorld = syncWorld(
         triggers = args.triggers,
         wallStart = args.wallStart,
-        insideChunk = { if (args.failCommit) error("the commit fails") },
+        insideChunk = { if (args.failCommit()) error("the commit fails") },
         todayVisible = args.visible,
         appInForeground = args.foreground,
-    ) { scope, now -> RingFake(scope, now, mapOf(Command.SYNC_CHANNEL_SLEEP to HistoryTestPages.backlog(3))).also { it.worn = args.worn } }
+    ) { scope, now ->
+        val descriptor = if (args.charging) TestFrames.chargingDescriptor else TestFrames.wornDescriptor
+        RingFake(
+            scope,
+            now,
+            mapOf(Command.SYNC_CHANNEL_SLEEP to HistoryTestPages.backlog(3)),
+            postAuthReply = descriptor,
+            statusReply = descriptor,
+        ).also { it.worn = args.worn }
+    }
 
     /** Moves virtual time on until the sync publishes a new report; returns the virtual time it did. */
     private fun TestScope.untilSyncEnds(w: SyncWorld, before: Any? = w.session.sync.state.value.last, limitMillis: Long = 300_000): Long {
@@ -109,6 +123,24 @@ class AutoLiveTest {
             runCurrent()
             val end = untilSyncEnds(w)
             assertNull(w.session.sync.state.value.last!!.commit)
+            advanceTo(end + 20_000)
+            assertEquals(emptyList(), w.timesOf(heartRateMode))
+        } finally {
+            w.db.close()
+        }
+    }
+
+    /** A ring on its charger is not on a finger: as the user's Measure, the automatic heart rate does not start. */
+    @Test
+    fun aSyncEndingWithTheRingOnItsChargerStartsNothing() = runTest {
+        val w = build(world(charging = true))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            assertEquals(SyncOutcome.COMPLETE, w.session.sync.state.value.last!!.outcome)
+            assertTrue(w.session.deviceStatus.state.value.onCharger, "the ring said it is on its charger")
             advanceTo(end + 20_000)
             assertEquals(emptyList(), w.timesOf(heartRateMode))
         } finally {
@@ -599,6 +631,37 @@ class AutoLiveTest {
             advanceTo(second + 15_000)
             assertEquals(LiveMode.HEART_RATE, w.session.liveMeasure.state.value.mode, "live again after the second sync")
             assertTrue(w.timesOf(heartRateMode, second - 50).isNotEmpty())
+        } finally {
+            w.db.close()
+        }
+    }
+
+    /**
+     * Live heart rate runs, a pull to refresh makes it stand down, and that sync's commit fails: the
+     * link is still held and this connection already had a committed sync, so heart rate comes back
+     * at the failed sync's end — it does not stay off while Today stays on screen.
+     */
+    @Test
+    fun aSyncThatTookLiveHeartRateOverAndFailedToCommitHandsItBack() = runTest {
+        var failNow = false
+        val w = build(world(failing = { failNow }))
+        try {
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val first = untilSyncEnds(w)
+            advanceTo(first + 10_000)
+            assertEquals(LiveMode.HEART_RATE, w.session.liveMeasure.state.value.mode)
+            // The ring has new history for the second sync, and its commit fails.
+            w.ring.record(Command.SYNC_CHANNEL_SLEEP, HistoryTestPages.backlog(3))
+            failNow = true
+            assertTrue(w.session.syncNow(), "the sync starts once the automatic measure stood down")
+            runCurrent()
+            val second = untilSyncEnds(w)
+            assertNull(w.session.sync.state.value.last!!.commit, "the second sync's commit failed")
+            advanceTo(second + 15_000)
+            assertEquals(LiveMode.HEART_RATE, w.session.liveMeasure.state.value.mode, "live again after the failed sync")
+            assertTrue(w.session.liveMeasure.state.value.auto)
         } finally {
             w.db.close()
         }

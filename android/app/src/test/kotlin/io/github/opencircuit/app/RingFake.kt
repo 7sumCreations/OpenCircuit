@@ -148,6 +148,9 @@ internal class RingFake(
     /** The pages the ring still holds on [channel], oldest first (copies). */
     fun stillHeld(channel: Int): List<ByteArray> = synchronized(this) { held[channel].orEmpty().map { it.copyOf() } }
 
+    /** The ring recorded more history on [channel] (a channel it was built with): the next sync drains [pages] too. */
+    fun record(channel: Int, pages: List<ByteArray>) = synchronized(this) { held.getValue(channel).addAll(pages.map { it.copyOf() }) }
+
     init {
         fake.setInfo(LinkInfo(bonded = true, attMtu = 247, historySafe = true))
     }
