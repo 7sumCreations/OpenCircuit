@@ -1,6 +1,5 @@
 package io.github.opencircuit.app
 
-import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -39,12 +38,7 @@ class LiveStepsOnDemoRingTest {
     @get:Rule(order = 0)
     val connectedDemoRing = object : ExternalResource() {
         override fun before() {
-            for (p in listOf(HealthPermission.STEPS, HealthPermission.DISTANCE)) {
-                val out = InstrumentationRegistry.getInstrumentation().uiAutomation
-                    .executeShellCommand("pm grant ${app.packageName} ${p.permission}")
-                // Read the command's output to its end: closing at once returns before the grant is made.
-                ParcelFileDescriptor.AutoCloseInputStream(out).use { it.readBytes() }
-            }
+            runBlocking { grantHealthWrites(app.container.healthConnect, app.packageName, listOf(HealthPermission.STEPS, HealthPermission.DISTANCE)) }
             InstrumentationRegistry.getInstrumentation().runOnMainSync { app.container.ringSessions.stopReconnecting() }
             check(app.container.appPrefs.setOnboardingCompleted()) { "could not record that onboarding was done" }
             check(app.container.rememberedRings.save(DemoRingLink.RING)) { "could not remember the demo ring" }

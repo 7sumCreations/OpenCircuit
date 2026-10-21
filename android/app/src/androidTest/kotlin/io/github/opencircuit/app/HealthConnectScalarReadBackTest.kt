@@ -1,7 +1,6 @@
 package io.github.opencircuit.app
 
 import android.content.Context
-import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.health.HealthFailureStore
@@ -23,9 +22,7 @@ import io.github.opencircuit.health.WriteGeneration
 import io.github.opencircuit.health.WriteGenerationStore
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -80,16 +77,9 @@ class HealthConnectScalarReadBackTest {
     )
 
     @Before
-    fun grant() {
-        for (p in permissions) {
-            val out = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("pm grant ${context.packageName} ${p.permission}")
-            // Read the command's output to its end: closing at once returns before the grant is made.
-            ParcelFileDescriptor.AutoCloseInputStream(out).use { it.readBytes() }
-        }
-        runBlocking {
-            withTimeout(10_000) { while (!hc.grantedWrites().containsAll(permissions)) delay(100) }
-            deleteOwn()
-        }
+    fun grant() = runBlocking {
+        grantHealthWrites(hc, context.packageName, permissions)
+        deleteOwn()
     }
 
     @After

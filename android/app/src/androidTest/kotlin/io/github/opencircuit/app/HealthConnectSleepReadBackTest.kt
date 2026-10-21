@@ -1,7 +1,6 @@
 package io.github.opencircuit.app
 
 import android.content.Context
-import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.health.HealthFailureStore
@@ -29,9 +28,7 @@ import io.github.opencircuit.ringkit.QuantitySample
 import io.github.opencircuit.ringkit.SleepProvenance
 import io.github.opencircuit.ringkit.SleepSegment
 import io.github.opencircuit.ringkit.SleepStage
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -74,14 +71,9 @@ class HealthConnectSleepReadBackTest {
     )
 
     @Before
-    fun grant() {
-        val out = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("pm grant ${context.packageName} ${HealthPermission.SLEEP.permission}")
-        // Read the command's output to its end: closing at once returns before the grant is made.
-        ParcelFileDescriptor.AutoCloseInputStream(out).use { it.readBytes() }
-        runBlocking {
-            withTimeout(10_000) { while (HealthPermission.SLEEP !in hc.grantedWrites()) delay(100) }
-            hc.deleteByClientIds(RecordType.SLEEP_SESSION, ids)
-        }
+    fun grant() = runBlocking {
+        grantHealthWrites(hc, context.packageName, listOf(HealthPermission.SLEEP))
+        hc.deleteByClientIds(RecordType.SLEEP_SESSION, ids)
     }
 
     @After

@@ -1,7 +1,6 @@
 package io.github.opencircuit.app
 
 import android.content.Context
-import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.health.ActiveCaloriesBurned
@@ -31,9 +30,7 @@ import io.github.opencircuit.health.SleepSession
 import io.github.opencircuit.health.SleepStage
 import io.github.opencircuit.health.SleepStageType
 import io.github.opencircuit.health.Steps
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -90,16 +87,9 @@ class HealthConnectWriteTwiceTest {
     )
 
     @Before
-    fun grant() {
-        for (p in HealthPermission.entries) {
-            val out = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("pm grant ${context.packageName} ${p.permission}")
-            // Read the command's output to its end: closing at once returns before the grant is made.
-            ParcelFileDescriptor.AutoCloseInputStream(out).use { it.readBytes() }
-        }
-        runBlocking {
-            withTimeout(10_000) { while (!hc.grantedWrites().containsAll(HealthPermission.entries)) delay(100) }
-            deleteOwn()
-        }
+    fun grant() = runBlocking {
+        grantHealthWrites(hc, context.packageName, HealthPermission.entries)
+        deleteOwn()
     }
 
     @After

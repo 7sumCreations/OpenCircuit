@@ -1,7 +1,6 @@
 package io.github.opencircuit.app
 
 import android.content.Context
-import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.health.HealthFailureStore
@@ -22,9 +21,7 @@ import io.github.opencircuit.health.WriteGeneration
 import io.github.opencircuit.health.WriteGenerationStore
 import io.github.opencircuit.ringkit.MetricKind
 import io.github.opencircuit.ringkit.QuantitySample
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -56,17 +53,9 @@ class HealthConnectReadBackTest {
     private val id = RecordIds.heartRateHour(hourStart)
 
     @Before
-    fun grant() {
-        // Read the command's output to its end: closing at once returns before the grant is made.
-        val out = InstrumentationRegistry.getInstrumentation().uiAutomation
-            .executeShellCommand("pm grant ${context.packageName} ${HealthPermission.HEART_RATE.permission}")
-        ParcelFileDescriptor.AutoCloseInputStream(out).use { it.readBytes() }
-        runBlocking {
-            withTimeout(10_000) {
-                while (HealthPermission.HEART_RATE !in hc.grantedWrites()) delay(100)
-            }
-            hc.deleteByClientIds(RecordType.HEART_RATE, listOf(id))
-        }
+    fun grant() = runBlocking {
+        grantHealthWrites(hc, context.packageName, listOf(HealthPermission.HEART_RATE))
+        hc.deleteByClientIds(RecordType.HEART_RATE, listOf(id))
     }
 
     @After

@@ -1,7 +1,6 @@
 package io.github.opencircuit.app
 
 import android.content.Context
-import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.health.ActiveCaloriesBurned
@@ -16,9 +15,7 @@ import io.github.opencircuit.health.RecordingMethod
 import io.github.opencircuit.health.RestingHeartRate
 import io.github.opencircuit.health.RingDevice
 import io.github.opencircuit.health.Steps
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -34,7 +31,7 @@ import java.time.temporal.ChronoUnit
  * records): proves the Jetpack adapter's mapping of each record (a count, metres, kilocalories,
  * kilocalories per day, whole beats per minute, the ids, the ring) on the platform, which the JVM
  * tests cannot. Only this test's records are touched, by id, and they are deleted at the end. The
- * permissions are granted from the shell (a grant does not end the app's process; a revoke would).
+ * permissions are granted from the shell ([grantHealthWrites]).
  */
 @RunWith(AndroidJUnit4::class)
 class HealthConnectActivityReadBackTest {
@@ -62,16 +59,10 @@ class HealthConnectActivityReadBackTest {
     )
 
     @Before
-    fun grant() {
-        for (p in permissions) {
-            val out = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("pm grant ${context.packageName} ${p.permission}")
-            // Read the command's output to its end: closing at once returns before the grant is made.
-            ParcelFileDescriptor.AutoCloseInputStream(out).use { it.readBytes() }
-        }
-        runBlocking {
-            withTimeout(10_000) { while (!hc.grantedWrites().containsAll(permissions)) delay(100) }
-            deleteOwn()
-        }
+    fun grant() = runBlocking {
+        // Waits on Health Connect's own check, not the app-side grant list (see grantHealthWrites).
+        grantHealthWrites(hc, context.packageName, permissions)
+        deleteOwn()
     }
 
     @After

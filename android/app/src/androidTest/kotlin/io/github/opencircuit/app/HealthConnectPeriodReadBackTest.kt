@@ -1,7 +1,6 @@
 package io.github.opencircuit.app
 
 import android.content.Context
-import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.opencircuit.health.HealthPermission
@@ -13,9 +12,7 @@ import io.github.opencircuit.health.PeriodRecords
 import io.github.opencircuit.health.PeriodToWrite
 import io.github.opencircuit.health.RecordType
 import io.github.opencircuit.health.RecordingMethod
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -49,15 +46,9 @@ class HealthConnectPeriodReadBackTest {
     )
 
     @Before
-    fun grant() {
-        val out = InstrumentationRegistry.getInstrumentation().uiAutomation
-            .executeShellCommand("pm grant ${context.packageName} ${HealthPermission.MENSTRUATION.permission}")
-        // Read the command's output to its end: closing at once returns before the grant is made.
-        ParcelFileDescriptor.AutoCloseInputStream(out).use { it.readBytes() }
-        runBlocking {
-            withTimeout(10_000) { while (HealthPermission.MENSTRUATION !in hc.grantedWrites()) delay(100) }
-            deleteOwn()
-        }
+    fun grant() = runBlocking {
+        grantHealthWrites(hc, context.packageName, listOf(HealthPermission.MENSTRUATION))
+        deleteOwn()
     }
 
     @After
