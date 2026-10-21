@@ -24,6 +24,8 @@ class AppContainerHistoryWiringTest {
         assertTrue("database = { database.await() }" in source)
         // The switch acts only once the app is not in front (the rule is SyncLifecycle's, tested on its own).
         assertTrue("disconnectAfterSync = { SyncLifecycle.disconnectAfterSync(appPrefs.disconnectAfterSync, appInForeground.value) }" in source)
+        // The night catch-up follows the switch itself, in front or not.
+        assertTrue("disconnectSwitch = { appPrefs.disconnectAfterSync }" in source)
     }
 
     @Test

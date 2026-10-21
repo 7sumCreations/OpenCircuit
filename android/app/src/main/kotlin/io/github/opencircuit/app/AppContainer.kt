@@ -234,6 +234,8 @@ class AppContainer(context: Context) {
             wallClock = { Instant.ofEpochMilli(clock.nowMillis()) },
             // The switch acts only once the user has left the app; while it is in front the link stays up.
             disconnectAfterSync = { SyncLifecycle.disconnectAfterSync(appPrefs.disconnectAfterSync, appInForeground.value) },
+            // The switch itself: a night catch-up it made owed still connects once the app is opened.
+            disconnectSwitch = { appPrefs.disconnectAfterSync },
             // The link-up sync, the cadence while the link is held and the catch-up after the night.
             triggers = SyncTriggerSources(
                 zone = { ZoneId.systemDefault() },

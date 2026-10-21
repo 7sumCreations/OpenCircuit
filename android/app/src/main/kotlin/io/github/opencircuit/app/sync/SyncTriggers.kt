@@ -114,6 +114,8 @@ class SyncTriggers(
     private val autoMeasuring: () -> Boolean = { false },
     /** Stops an automatic measure so a sync can start (`LiveMeasureController.yieldAuto`); a user's measure is left alone. */
     private val yieldAutoMeasure: () -> Boolean = { true },
+    /** The "Disconnect after syncing" switch itself, in front or not: an owed catch-up off the link follows it. */
+    private val disconnectSwitch: () -> Boolean = disconnectAfterSync,
 ) {
     /** A link-up sync held back by the night, owed once the quiet ends. Touched only by the link's one collection (one block at a time). */
     @Volatile
@@ -259,7 +261,9 @@ class SyncTriggers(
      * the held link's own evaluation runs the catch-up.
      */
     private suspend fun catchUpOffLink() {
-        while (catchUpOwed && disconnectAfterSync()) {
+        // The switch itself, not whether the app is in front: opening the app before the night ends
+        // must not drop a catch-up the switch's close made it owe (nothing else would start it).
+        while (catchUpOwed && disconnectSwitch()) {
             val now = wallClock()
             val busy = busyReason()
             if (busy != null) {

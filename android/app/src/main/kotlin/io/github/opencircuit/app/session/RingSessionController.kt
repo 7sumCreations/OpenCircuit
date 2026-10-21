@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -61,6 +62,9 @@ class RingSessionController(
     /** Today is on screen (resumed): only then does a sync's end start live heart rate ([autoLive]). */
     todayVisible: StateFlow<Boolean> = MutableStateFlow(false),
 ) {
+    /** The switch on and the app not in front, now ([SessionHistory.disconnectAfterSync]). */
+    private val disconnectAfterSync: () -> Boolean = history.disconnectAfterSync
+
     /** Routes every frame; register a handler here to receive an opcode. */
     val dispatcher = FrameDispatcher(log)
 
@@ -131,6 +135,7 @@ class RingSessionController(
             takeUserLinkUp = ::takeUserLinkUp,
             autoMeasuring = { liveMeasure.state.value.let { it.mode != null && it.auto } },
             yieldAutoMeasure = liveMeasure::yieldAuto,
+            disconnectSwitch = history.disconnectSwitch,
         )
     }
 
@@ -230,10 +235,21 @@ class RingSessionController(
     /**
      * The user left the app ([SyncLifecycle.disconnectOnStop]): with "Disconnect after syncing"
      * [switchOn], an idle held link closes — a running measure is stopped first, as the user's own
-     * Disconnect does. A running sync is left to its pause; its end closes the link.
+     * Disconnect does. A running sync is left to its pause; its end closes the link. A sync that had
+     * already decided to keep the link (its commit returned while the app was in front) does not
+     * close it, so once that sync ends the link closes here — if the user is still away then.
      */
     fun onAppLeft(switchOn: Boolean, changingConfigurations: Boolean) {
         val linkUp = link.state.value == LinkState.Authenticated
+        if (switchOn && !changingConfigurations && sync.isSyncing.value) {
+            scope.launch {
+                sync.isSyncing.first { !it }
+                if (disconnectAfterSync() && link.state.value == LinkState.Authenticated && !sync.isSyncing.value) {
+                    liveMeasure.stop()
+                    link.disconnect()
+                }
+            }
+        }
         if (!SyncLifecycle.disconnectOnStop(switchOn, linkUp, sync.isSyncing.value, changingConfigurations)) return
         liveMeasure.stop()
         link.disconnect()

@@ -15,7 +15,10 @@ class SessionHistory(
     val store: HistoryStore,
     /** The phone's wall clock: the sync cursor and the stored times. */
     val wallClock: () -> Instant,
-    /** The "Disconnect after syncing" switch, read when a sync's commit has returned. */
+    /**
+     * Whether a sync's end closes the link: "Disconnect after syncing" ON and the app not in front
+     * ([SyncLifecycle.disconnectAfterSync]); read when a sync's commit has returned.
+     */
     val disconnectAfterSync: () -> Boolean,
     /** What the automatic syncs read ([SyncTriggers]); null: the session syncs only when asked. */
     val triggers: SyncTriggerSources? = null,
@@ -27,6 +30,11 @@ class SessionHistory(
     val afterCommit: (SyncReport) -> Unit = {},
     /** Where the readings measured live are kept (steps, skin temperature, a measure's result); nothing by default. */
     val live: LiveReadingStore = LiveReadingStore.NONE,
+    /**
+     * The "Disconnect after syncing" switch itself, whether or not the app is in front: a night
+     * catch-up owed by a link the switch closed connects on its own whatever the app's state.
+     */
+    val disconnectSwitch: () -> Boolean = disconnectAfterSync,
 ) {
     companion object {
         /**

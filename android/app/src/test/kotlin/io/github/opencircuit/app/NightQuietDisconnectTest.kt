@@ -8,6 +8,7 @@ import io.github.opencircuit.app.sync.AutoSyncTrigger
 import io.github.opencircuit.app.sync.SyncOutcome
 import io.github.opencircuit.app.sync.SyncTriggers
 import io.github.opencircuit.ble.LinkState
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import java.time.Instant
@@ -34,11 +35,32 @@ class NightQuietDisconnectTest {
     /** Virtual milliseconds at local [hh]:[mm] on the morning of 2026-10-08 (EDT, UTC−4). */
     private fun local(hh: Int, mm: Int = 0): Long = ((hh - 2) * 60L + mm) * 60_000L
 
-    private suspend fun TestScope.night(): SyncWorld {
+    private suspend fun TestScope.night(foreground: MutableStateFlow<Boolean> = MutableStateFlow(false)): SyncWorld {
         val kv = InMemoryKeyValues()
         // A complete sync twelve hours ago: the throttle plays no part, the night does.
         PrefsSyncMarks(kv, TEST_RING_ID).setLastCompleteSync(twoAm.minusSeconds(12 * 3600))
-        return syncWorld(triggers = true, keyValues = kv, zone = newYork, wallStart = twoAm, makeRing = ringWith(HistoryTestPages.backlog(3)))
+        return syncWorld(
+            triggers = true, keyValues = kv, zone = newYork, wallStart = twoAm, appInForeground = foreground,
+            makeRing = ringWith(HistoryTestPages.backlog(3)),
+        )
+    }
+
+    /** The user opens the app before the night ends: the owed catch-up still connects at the night's end. */
+    @Test
+    fun theCatchUpStillRunsWhenTheAppIsOpenedBeforeTheNightEnds() = runTest {
+        val foreground = MutableStateFlow(false)
+        val w = night(foreground)
+        try {
+            advanceTo(60_000)
+            assertEquals(LinkState.Idle, w.session.state.value, "closed at its link-up")
+            advanceTo(local(9))
+            foreground.value = true
+            advanceTo(local(10) + 3_000)
+            assertEquals(2, w.connects().size, "the owed catch-up connects at the window's end")
+            assertEquals(1, w.sleepOpens().size, "and syncs")
+        } finally {
+            w.db.close()
+        }
     }
 
     private fun SyncWorld.disconnects(): List<Long> = ring.events.filter { it.what == "disconnect" }.map { it.atMillis }

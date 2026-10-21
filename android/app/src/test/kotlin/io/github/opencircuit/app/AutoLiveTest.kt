@@ -553,6 +553,33 @@ class AutoLiveTest {
     }
 
     @Test
+    fun leavingTheAppAfterTheSyncDecidedToKeepTheLinkStillClosesItAtTheSyncsEnd() = runTest {
+        val visible = MutableStateFlow(true)
+        val foreground = MutableStateFlow(true)
+        val w = build(world(visible = visible, foreground = foreground, wallStart = Instant.parse("2026-10-08T14:00:00Z")))
+        try {
+            // Home pressed while the sync writes its log: its commit returned and it already kept the
+            // link (the app was in front), but it has not ended yet.
+            w.store.duringLogAppend = {
+                if (foreground.value) {
+                    visible.value = false
+                    foreground.value = false
+                    w.session.sync.onAppStopped(changingConfigurations = false)
+                    w.session.onAppLeft(switchOn = w.prefs.disconnectAfterSync, changingConfigurations = false)
+                }
+            }
+            advanceTo(1_000)
+            w.viewModel.onAction(RingAction.SyncNow)
+            runCurrent()
+            val end = untilSyncEnds(w)
+            advanceTo(end + 10_000)
+            assertEquals(io.github.opencircuit.ble.LinkState.Idle, w.session.state.value, "the switch closes the link once the user left")
+        } finally {
+            w.db.close()
+        }
+    }
+
+    @Test
     fun withTheAppNotInFrontTheSwitchClosesTheLinkAfterTheSync() = runTest {
         val w = build(world(visible = MutableStateFlow(false), foreground = MutableStateFlow(false), wallStart = Instant.parse("2026-10-08T14:00:00Z")))
         try {

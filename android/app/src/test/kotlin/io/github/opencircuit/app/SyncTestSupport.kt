@@ -83,7 +83,11 @@ internal class RecordingStore(private val real: HistoryStore, private val note: 
 
     override suspend fun syncLog(): List<SyncLogEntry> = real.syncLog()
 
+    /** Runs inside each sync-log write: after the sync's disconnect decision, before it is published as ended. */
+    var duringLogAppend: suspend () -> Unit = {}
+
     override suspend fun appendSyncLog(entry: SyncLogEntry, now: Instant) {
+        duringLogAppend()
         if (failLogAppends) throw IllegalStateException("disk full")
         real.appendSyncLog(entry, now)
     }
@@ -205,6 +209,7 @@ internal suspend fun TestScope.syncWorld(
             wallClock = wall,
             // As the app's AppContainer.historyFor: the switch acts only once the app is not in front.
             disconnectAfterSync = { SyncLifecycle.disconnectAfterSync(prefs.disconnectAfterSync, appInForeground.value) },
+            disconnectSwitch = { prefs.disconnectAfterSync },
             triggers = sources,
             zone = { zone },
             faults = syncFaults,
