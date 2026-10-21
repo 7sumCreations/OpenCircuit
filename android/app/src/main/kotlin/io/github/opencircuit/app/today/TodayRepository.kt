@@ -29,7 +29,11 @@ interface TodaySource {
     /** Revision 0 at once, then a higher one after each settled burst of committed writes to the readings. */
     fun revisions(): Flow<Long>
 
-    /** What is stored for [day] in [zone]; read off the main thread. */
+    /**
+     * What Today shows for [day] in [zone], read off the main thread. The hero's readings are the
+     * NEWEST stored, whatever their day: the screen prints when each was taken ("as of Mon 19 Oct ·
+     * 2 days ago"), so an old reading never reads as today's. The day bounds the per-day reads.
+     */
     suspend fun load(day: LocalDate, zone: ZoneId): TodayStored
 }
 
