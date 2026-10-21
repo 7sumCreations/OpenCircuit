@@ -16,6 +16,7 @@ import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.ScanDiagnostic
 import io.github.opencircuit.ringkit.HistoryDrainPlan.TeardownReason
 import io.github.opencircuit.store.SyncLogEntry
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.ZoneId
@@ -47,6 +48,8 @@ data class DetailsSources(
     val pairingOutcome: StateFlow<PairingOutcome?> = MutableStateFlow(null),
     /** `(scanner as? ScanDiagnostics)?.lastMatch`, or null when the scanner keeps none. */
     val scanMatch: StateFlow<ScanDiagnostic?>? = null,
+    /** The store's size and counts, read again as readings are written ([StorageSource]); null: no store. */
+    val storage: Flow<StorageReport>? = null,
 )
 
 /** One moment's inputs to the card. Null means the surface is absent ("not available"). */
@@ -69,8 +72,10 @@ data class DetailsInput(
     val syncLog: List<SyncLogEntry>? = null,
     /** The automatic syncs that did not run this session, oldest first; null when the session runs none. */
     val autoSyncSkips: List<AutoSyncSkip>? = null,
-    /** The phone's time zone, for the skips' times. */
+    /** The phone's time zone, for the skips' times and the stored days. */
     val zone: ZoneId = ZoneOffset.UTC,
+    /** The store's size and counts; null before the first read or with no store. */
+    val storage: StorageReport? = null,
 )
 
 /**
@@ -145,6 +150,7 @@ object ConnectionDetailsPresenter {
             DetailRow("Last sync continuity", input.syncLog?.let(SyncLogLines::continuity) ?: NOT_AVAILABLE),
             DetailRow("Ring capacity", input.syncLog?.let(SyncLogLines::capacity) ?: NOT_AVAILABLE),
             DetailRow("Auto-sync skipped", input.autoSyncSkips?.let { autoSyncSkips(it, input.zone) } ?: NOT_AVAILABLE),
+            DetailRow("Storage", input.storage?.let { StorageLine.value(it, input.zone) } ?: NOT_AVAILABLE),
         )
     }
 

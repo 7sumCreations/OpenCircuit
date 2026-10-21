@@ -55,6 +55,15 @@ internal interface DailyDao {
     @Insert
     suspend fun insertDaytimeTemp(reading: StoredDaytimeTempEntity)
 
+    @Query("SELECT COUNT(*) FROM stored_daily")
+    suspend fun countDailies(): Long
+
+    @Query("SELECT COUNT(*) FROM stored_step_sample")
+    suspend fun countStepSamples(): Long
+
+    @Query("SELECT COUNT(*) FROM stored_daytime_temp")
+    suspend fun countDaytimeTemps(): Long
+
     /** Readings with `from <= time < to`, oldest first (upstream `daytimeTemperaturesDescriptor`). */
     @Query("SELECT * FROM stored_daytime_temp WHERE time >= :from AND time < :to ORDER BY time, id")
     suspend fun daytimeTemps(from: Instant, to: Instant): List<StoredDaytimeTempEntity>

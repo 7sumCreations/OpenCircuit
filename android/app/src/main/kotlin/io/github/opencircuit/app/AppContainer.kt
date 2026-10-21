@@ -16,6 +16,8 @@ import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.data.RememberedRingStore
 import io.github.opencircuit.app.data.SharedPreferencesKeyValues
 import io.github.opencircuit.app.details.DetailsSources
+import io.github.opencircuit.app.details.StorageSource
+import io.github.opencircuit.app.details.storeFileBytes
 import io.github.opencircuit.app.health.HealthAccess
 import io.github.opencircuit.app.health.HealthFlush
 import io.github.opencircuit.app.health.StoreHealthAccessMemory
@@ -42,6 +44,7 @@ import io.github.opencircuit.ble.RememberedRing
 import io.github.opencircuit.ble.RingLink
 import io.github.opencircuit.ble.RingScanner
 import io.github.opencircuit.ble.ScanDiagnostics
+import io.github.opencircuit.store.STORE_DATABASE_NAME
 import io.github.opencircuit.store.StoreDatabase
 import io.github.opencircuit.store.StoreFactory
 import io.github.opencircuit.store.open
@@ -192,9 +195,17 @@ class AppContainer(context: Context) {
     /** Hands each Scan & connect the one scanner. */
     val ringScannerFactory: RingScannerFactory = RingScannerFactory { ringScanner }
 
-    /** What Connection details reads beyond the session: the pairing sheet's outcome, the scanner's last match. */
+    /**
+     * What Connection details reads beyond the session: the pairing sheet's outcome, the scanner's
+     * last match, and the store's size and counts (the Storage line) over the app's one database.
+     */
     val detailsSources: DetailsSources by lazy {
-        DetailsSources(pairingOutcome = companionPairing.lastOutcome, scanMatch = (ringScanner as? ScanDiagnostics)?.lastMatch)
+        val databaseFile = context.applicationContext.getDatabasePath(STORE_DATABASE_NAME)
+        DetailsSources(
+            pairingOutcome = companionPairing.lastOutcome,
+            scanMatch = (ringScanner as? ScanDiagnostics)?.lastMatch,
+            storage = StorageSource({ database.await() }, fileBytes = { storeFileBytes(databaseFile) }).reports(),
+        )
     }
 
     /** The Ring screen's title; debug builds say when the ring is the demo. */

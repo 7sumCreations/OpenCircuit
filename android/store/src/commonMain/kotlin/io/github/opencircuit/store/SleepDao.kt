@@ -77,6 +77,12 @@ internal interface SleepDao {
     @Query("SELECT * FROM stored_nap ORDER BY start, id")
     suspend fun allNaps(): List<StoredNapEntity>
 
+    @Query("SELECT COUNT(*) FROM stored_sleep_summary")
+    suspend fun countAllSummaries(): Long
+
+    @Query("SELECT COUNT(*) FROM stored_nap")
+    suspend fun countNaps(): Long
+
     /** Naps with `from <= start < to`, the earliest start first. */
     @Query("SELECT * FROM stored_nap WHERE start >= :from AND start < :to ORDER BY start, id")
     suspend fun napsStarting(from: Instant, to: Instant): List<StoredNapEntity>

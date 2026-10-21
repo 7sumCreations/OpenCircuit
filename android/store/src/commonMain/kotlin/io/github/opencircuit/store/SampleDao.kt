@@ -90,6 +90,22 @@ internal interface SampleDao {
     @Query("DELETE FROM stored_cursor WHERE kind_raw = :kindRaw")
     suspend fun deleteCursor(kindRaw: String)
 
+    /** How many samples are stored, of every kind. */
+    @Query("SELECT COUNT(*) FROM stored_sample")
+    suspend fun countSamples(): Long
+
+    /** How many samples of each kind are stored; a kind with none is absent. */
+    @Query("SELECT kind_raw, COUNT(*) AS n FROM stored_sample GROUP BY kind_raw ORDER BY kind_raw")
+    suspend fun countSamplesByKind(): List<KindCount>
+
+    /** The earliest stored sample's start, of any kind; null for an empty table. */
+    @Query("SELECT MIN(start) FROM stored_sample")
+    suspend fun firstSampleStart(): Instant?
+
+    /** The latest stored sample's start, of any kind; null for an empty table. */
+    @Query("SELECT MAX(start) FROM stored_sample")
+    suspend fun lastSampleStart(): Instant?
+
     /** How many samples of one kind are stored exactly at [start] (the live insert's dedupe). */
     @Query("SELECT COUNT(*) FROM stored_sample WHERE kind_raw = :kindRaw AND start = :start")
     suspend fun countAt(kindRaw: String, start: Instant): Int

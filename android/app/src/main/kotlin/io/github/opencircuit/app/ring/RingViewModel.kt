@@ -12,6 +12,7 @@ import io.github.opencircuit.app.details.ConnectionDetailsPresenter
 import io.github.opencircuit.app.details.ConnectionDetailsUi
 import io.github.opencircuit.app.details.DetailsInput
 import io.github.opencircuit.app.details.DetailsSources
+import io.github.opencircuit.app.details.StorageReport
 import io.github.opencircuit.app.health.HealthAccessState
 import io.github.opencircuit.app.health.HealthCardInput
 import io.github.opencircuit.app.health.HealthCardPresenter
@@ -43,6 +44,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import java.time.Instant
 import java.time.ZoneId
@@ -157,9 +159,11 @@ class RingViewModel(
             }
         }
         val scanKept = details.scanMatch != null
+        // The Storage line starts "not available" and follows the store from its first read on.
+        val storage: Flow<StorageReport?> = details.storage?.onStart<StorageReport?> { emit(null) } ?: flowOf(null)
         val detailsInput: Flow<DetailsInput> =
-            combine(sessionDetails, details.pairingOutcome, details.scanMatch ?: flowOf(null)) { input, pairing, scan ->
-                input.copy(pairing = pairing, scan = scan, scanKept = scanKept)
+            combine(sessionDetails, details.pairingOutcome, details.scanMatch ?: flowOf(null), storage) { input, pairing, scan, stored ->
+                input.copy(pairing = pairing, scan = scan, scanKept = scanKept, storage = stored)
             }
 
         val linkParts: Flow<LinkParts> = current.flatMapLatest { session ->

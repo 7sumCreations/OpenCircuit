@@ -20,6 +20,7 @@ import io.github.opencircuit.app.details.ConnectionDetailsPresenter
 import io.github.opencircuit.app.details.ConnectionDetailsUi
 import io.github.opencircuit.app.details.DIAGNOSTICS_HINT
 import io.github.opencircuit.app.details.DetailsInput
+import io.github.opencircuit.app.details.StorageReport
 import io.github.opencircuit.app.session.ConnectionTimings
 import io.github.opencircuit.app.session.DispatchCounts
 import io.github.opencircuit.app.session.SessionTeardowns
@@ -34,6 +35,7 @@ import io.github.opencircuit.ringkit.SyncMeasurement.CapacityKind
 import io.github.opencircuit.ringkit.SyncMeasurement.CapacityVerdict
 import io.github.opencircuit.ringkit.SyncMeasurement.Continuity
 import io.github.opencircuit.ringkit.SyncMeasurement.ContinuityKind
+import io.github.opencircuit.store.StoreFootprint
 import io.github.opencircuit.store.SyncLogChannel
 import io.github.opencircuit.store.SyncLogEntry
 import java.time.Duration
@@ -142,6 +144,27 @@ class ConnectionDetailsRenderTest {
         compose.onNodeWithText("Copy").performScrollTo().performClick()
 
         assertEquals(1, copies)
+    }
+
+    @Test
+    fun showAllGivesTheStorageLine() {
+        val footprint = StoreFootprint(
+            rowsPerTable = linkedMapOf(
+                "stored_sample" to 43_200L, "stored_daily" to 30L, "stored_step_sample" to 2_880L,
+                "stored_daytime_temp" to 1_440L, "stored_sleep_summary" to 30L, "stored_nap" to 0L,
+            ),
+            samplesPerKind = linkedMapOf("heartRate" to 17_280L),
+            firstSample = Instant.parse("2026-09-21T00:00:00Z"),
+            lastSample = Instant.parse("2026-10-20T23:00:00Z"),
+        )
+        show(details(DetailsInput(storage = StorageReport(fileBytes = 3_670_016L, footprint = footprint))))
+
+        compose.onNodeWithText("Show all").performClick()
+        compose.onNodeWithText("Storage").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(
+            "3.5 MB on disk (database + log) · days 21 Sep 2026 – 20 Oct 2026 · samples 43,200 (heartRate 17,280) · " +
+                "day totals 30 · step deltas 2,880 · daytime temperatures 1,440 · nights 30 · naps 0",
+        ).performScrollTo().assertIsDisplayed()
     }
 
     @Test
