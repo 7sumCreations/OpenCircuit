@@ -101,6 +101,18 @@ sealed interface TodayAction {
 
     /** The detail's 14 / 30 toggle. */
     data class DetailRange(val days: Int) : TodayAction
+
+    /** Edit order on ("Edit order") or off ("Done"). */
+    data class EditOrder(val on: Boolean) : TodayAction
+
+    /** Move a section one place up (−1) or down (+1). */
+    data class MoveSection(val section: DashboardSection, val by: Int) : TodayAction
+
+    /** Move a tile one place up (−1) or down (+1). */
+    data class MoveTile(val metric: TodayTile.Metric, val by: Int) : TodayAction
+
+    /** Back to the default order of sections and tiles. */
+    data object ResetOrder : TodayAction
 }
 
 /** The tag of Today's hero card. */
@@ -183,16 +195,114 @@ private fun DayPage(
         wide("strip") { SyncStrip(state) }
         state.overdue?.let { overdue -> wide("overdue") { OverdueChip(overdue, onAction) } }
         if (ours && isToday) wide("synthesis") { SynthesisLine(state, animate) }
-        wide("readiness") { ReadinessCard(state.readiness.takeIf { ours }, readinessSweep, animate) }
-        if (!ours || state.tiles.isEmpty()) {
-            items(TodayTile.Metric.entries.size, key = { "placeholder.$it" }) { TilePlaceholder(fontScale) }
-        } else {
-            items(state.tiles, key = { it.metric.name }) { MetricTile(it, fontScale, animate, onAction) }
+        if (!state.loading) wide("orderBar") { OrderBar(state.editingOrder, onAction) }
+        if (state.editingOrder) {
+            editOrder(state, onAction)
+            return@LazyVerticalGrid
         }
-        wide("calories") { CaloriesCard(state.calories.takeIf { ours }) }
-        wide("goals") { GoalsCard(state.goals.takeIf { ours }) }
+        for (section in state.sections) when (section) {
+            DashboardSection.READINESS -> wide("readiness") { ReadinessCard(state.readiness.takeIf { ours }, readinessSweep, animate) }
+            DashboardSection.METRICS -> if (!ours || state.tiles.isEmpty()) {
+                items(TodayTile.Metric.entries.size, key = { "placeholder.$it" }) { TilePlaceholder(fontScale) }
+            } else {
+                items(state.tiles, key = { it.metric.name }) { MetricTile(it, fontScale, animate, onAction) }
+            }
+            DashboardSection.CALORIES -> wide("calories") { CaloriesCard(state.calories.takeIf { ours }) }
+            DashboardSection.GOALS -> wide("goals") { GoalsCard(state.goals.takeIf { ours }) }
+        }
     }
 }
+
+/** "Edit order" (or "Done" while it is on) at the end of a row above the sections. */
+@Composable
+private fun OrderBar(editing: Boolean, onAction: (TodayAction) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (editing) "Move sections and tiles with the arrows" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = { onAction(TodayAction.EditOrder(!editing)) }, modifier = Modifier.testTag(TODAY_EDIT_ORDER_TAG)) {
+            Text(if (editing) "Done" else "Edit order")
+        }
+    }
+}
+
+/**
+ * Edit order: each section, and under the tiles' section each tile, as a row with Move up and Move
+ * down buttons (a single tap each — no drag needed), the first's up and the last's down disabled;
+ * then "Reset to default order".
+ */
+private fun LazyGridScope.editOrder(state: TodayUiState, onAction: (TodayAction) -> Unit) {
+    state.sections.forEachIndexed { i, section ->
+        val name = sectionName(section)
+        wide("edit.section.${section.rawValue}") {
+            OrderRow(
+                name, indent = false, tag = todayOrderRowTag(section.rawValue),
+                canUp = i > 0, canDown = i < state.sections.size - 1,
+                onUp = { onAction(TodayAction.MoveSection(section, -1)) }, onDown = { onAction(TodayAction.MoveSection(section, +1)) },
+            )
+        }
+        if (section == DashboardSection.METRICS) {
+            state.tileOrder.forEachIndexed { j, metric ->
+                val title = state.tiles.firstOrNull { it.metric == metric }?.title ?: metric.name
+                wide("edit.tile.${metric.name}") {
+                    OrderRow(
+                        title, indent = true, tag = todayOrderRowTag(metric.name.lowercase(Locale.ROOT)),
+                        canUp = j > 0, canDown = j < state.tileOrder.size - 1,
+                        onUp = { onAction(TodayAction.MoveTile(metric, -1)) }, onDown = { onAction(TodayAction.MoveTile(metric, +1)) },
+                    )
+                }
+            }
+        }
+    }
+    wide("edit.reset") {
+        TextButton(onClick = { onAction(TodayAction.ResetOrder) }) { Text("Reset to default order") }
+    }
+}
+
+/** One row of Edit order: the name, then Move up and Move down (48 dp each, labelled with the name). */
+@Composable
+private fun OrderRow(name: String, indent: Boolean, tag: String, canUp: Boolean, canDown: Boolean, onUp: () -> Unit, onDown: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(start = if (indent) 24.dp else 0.dp).testTag(tag),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
+    ) {
+        Row(Modifier.padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(name, style = if (indent) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            OrderButton("↑", "Move $name up", canUp, onUp)
+            OrderButton("↓", "Move $name down", canDown, onDown)
+        }
+    }
+}
+
+@Composable
+private fun OrderButton(arrow: String, label: String, enabled: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(48.dp).semantics { contentDescription = label },
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Text(arrow, style = MaterialTheme.typography.titleMedium, modifier = Modifier.clearAndSetSemantics { })
+    }
+}
+
+/** A section's name in Edit order. */
+private fun sectionName(section: DashboardSection): String = when (section) {
+    DashboardSection.READINESS -> "Readiness"
+    DashboardSection.METRICS -> "Your numbers (tiles)"
+    DashboardSection.CALORIES -> "Calories"
+    DashboardSection.GOALS -> "Goals"
+}
+
+/** The Edit order / Done button. */
+const val TODAY_EDIT_ORDER_TAG = "today.editOrder"
+
+/** One row of Edit order, by its section id ("goals") or tile id ("heart_rate"). */
+fun todayOrderRowTag(id: String): String = "today.order.$id"
 
 /**
  * The day's Calories card: the total, a bar split into resting and active with its legend, and

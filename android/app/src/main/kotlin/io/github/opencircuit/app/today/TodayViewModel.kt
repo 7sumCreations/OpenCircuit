@@ -2,6 +2,7 @@ package io.github.opencircuit.app.today
 
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import io.github.opencircuit.app.data.AppPrefs
 import io.github.opencircuit.app.ring.everyMinute
 import io.github.opencircuit.app.session.SessionHost
 import kotlinx.coroutines.CancellationException
@@ -10,6 +11,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
@@ -50,6 +52,8 @@ class TodayViewModel(
     private val commands: TodayCommands = TodayCommands.NONE,
     /** Where the picked day lives, so it survives the activity being recreated and the process being killed. */
     private val saved: SavedStateHandle = SavedStateHandle(),
+    /** Where Today's section and tile orders are saved; null keeps the default order, unsaved. */
+    private val prefs: AppPrefs? = null,
 ) : ViewModel(scope) {
 
     /** The Today screen's state. */
@@ -57,6 +61,14 @@ class TodayViewModel(
 
     /** Dates marked because data landed on them while another day was open; a visit clears its mark. */
     private val marks = MutableStateFlow<Set<LocalDate>>(emptySet())
+
+    /** The saved order of sections and tiles, read here, synchronously, so the first state already has it. */
+    private val order = MutableStateFlow(
+        TodayOrder(DashboardSectionOrder.decode(prefs?.todaySectionOrder.orEmpty()), TileOrder.decode(prefs?.todayTileOrder)),
+    )
+
+    /** Edit order is on. */
+    private val editing = MutableStateFlow(false)
 
     /** Today's own actions (pull to refresh, the hero's Measure / Stop, the overdue chip's Sync now, the day browser); tabs are the host's. */
     fun onAction(action: TodayAction) {
@@ -70,7 +82,27 @@ class TodayViewModel(
             is TodayAction.OpenDetail -> saved[DETAIL] = action.metric.name
             TodayAction.CloseDetail -> saved[DETAIL] = null
             is TodayAction.DetailRange -> if (action.days in TileDetailPresenter.RANGES) saved[DETAIL_DAYS] = action.days
+            is TodayAction.EditOrder -> editing.value = action.on
+            is TodayAction.MoveSection -> reorder { it.copy(sections = moved(it.sections, action.section, action.by)) }
+            is TodayAction.MoveTile -> reorder { it.copy(tiles = TileOrder.moved(it.tiles, action.metric, action.by)) }
+            TodayAction.ResetOrder -> reorder { TodayOrder(DashboardSectionOrder.decode(""), TileOrder.decode(null)) }
         }
+    }
+
+    /** [section] moved one place ([by] −1 up, +1 down) through upstream's move rule; past either end, unchanged. */
+    private fun moved(sections: List<DashboardSection>, section: DashboardSection, by: Int): List<DashboardSection> {
+        val from = sections.indexOf(section)
+        if (from < 0 || from + by !in sections.indices) return sections
+        // Upstream's destination counts positions before the move: one down is two past the start.
+        return DashboardSectionOrder.reordered(sections, sections, from, if (by < 0) from + by else from + by + 1)
+    }
+
+    /** Applies [change] and saves both orders at once; a failed save keeps the new order for this run and says so in the log. */
+    private fun reorder(change: (TodayOrder) -> TodayOrder) {
+        val next = order.updateAndGet(change)
+        val p = prefs ?: return
+        val saved = p.setTodaySectionOrder(DashboardSectionOrder.encode(next.sections)) and p.setTodayTileOrder(TileOrder.encode(next.tiles))
+        if (!saved) log("Today could not save its order")
     }
 
     private fun today(): LocalDate = LocalDate.ofInstant(wallClock(), zone())
@@ -126,7 +158,10 @@ class TodayViewModel(
         val loads = stored.shareIn(scope, SharingStarted.Eagerly, replay = 1)
         val parts = session.shareIn(scope, SharingStarted.Eagerly, replay = 1)
         val facts = parts.map(DashboardFacts::of).distinctUntilChanged()
-        val dashboard = combine(loads, facts, ticks) { s, f, _ -> TodayPresenter.dashboard(s, f, wallClock(), zone()) }
+        // The tiles are put in the saved order here, once per rebuild: a live frame never re-sorts them.
+        val dashboard = combine(loads, facts, ticks, order.map { it.tiles }.distinctUntilChanged()) { s, f, _, tileOrder ->
+            TodayPresenter.dashboard(s, f, wallClock(), zone()).let { d -> d.copy(tiles = d.tiles.sortedBy { tileOrder.indexOf(it.metric) }) }
+        }
         // The detail is built from a load for its day and at least its window; until one lands it waits, never shows another day's.
         val detailUi = combine(loads, detail, shown, ticks) { s, open, day, _ ->
             open?.let { (metric, days) ->
@@ -135,11 +170,21 @@ class TodayViewModel(
                     .copy(loading = !ready)
             }
         }
-        val browsing = combine(picked, marks, detailUi) { p, m, d -> Triple(p, m, d) }
-        uiState = combine(loads, parts, dashboard, ticks, browsing) { s, parts, built, _, (p, m, d) ->
-            TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built, picked = p, marked = m)).copy(detail = d)
-        }.stateIn(scope, SharingStarted.Eagerly, TodayUiState())
+        val browsing = combine(picked, marks, detailUi, order, editing) { p, m, d, o, e -> Browsing(p, m, d, o, e) }
+        uiState = combine(loads, parts, dashboard, ticks, browsing) { s, parts, built, _, b ->
+            ordered(TodayPresenter.present(TodayInput(s, parts, wallClock(), zone(), built, picked = b.picked, marked = b.marked)).copy(detail = b.detail), b.order, b.editing)
+        }.stateIn(scope, SharingStarted.Eagerly, ordered(TodayUiState(), order.value, editing = false))
     }
+
+    /** What the user chose on Today besides the stored data: the picked day, the marks, the open detail, the order and Edit order. */
+    private data class Browsing(val picked: LocalDate?, val marked: Set<LocalDate>, val detail: TileDetailUi?, val order: TodayOrder, val editing: Boolean)
+
+    /** [state] with the saved order and Edit order (its tiles are already in that order: the dashboard sorted them). */
+    private fun ordered(state: TodayUiState, order: TodayOrder, editing: Boolean): TodayUiState = state.copy(
+        sections = order.sections,
+        tileOrder = order.tiles,
+        editingOrder = editing,
+    )
 
     private companion object {
         /** The picked past day's epoch day in the saved state; null on Today. */
@@ -152,6 +197,9 @@ class TodayViewModel(
         const val DETAIL_DAYS = "today.detailDays"
     }
 }
+
+/** Today's order: its sections and its tiles, each a full list. */
+data class TodayOrder(val sections: List<DashboardSection>, val tiles: List<TodayTile.Metric>)
 
 /** What Today shows of the ring session: the current session's link, name, sync log and running sync. */
 @OptIn(ExperimentalCoroutinesApi::class)

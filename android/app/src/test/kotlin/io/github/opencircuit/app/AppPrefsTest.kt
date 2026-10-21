@@ -4,6 +4,7 @@ import io.github.opencircuit.app.data.PrefsAppPrefs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -68,9 +69,31 @@ class AppPrefsTest {
         assertFalse(prefs.permissionAsked)
     }
 
+    /** Today's two saved orders: unset at first, kept across a relaunch under their own keys, a non-string read as unset. */
+    @Test
+    fun todaysOrdersAreKeptAcrossARelaunchAndADamagedOneReadsAsUnset() {
+        assertNull(prefs.todaySectionOrder)
+        assertNull(prefs.todayTileOrder)
+
+        assertTrue(prefs.setTodaySectionOrder("goals,readiness"))
+        assertTrue(prefs.setTodayTileOrder("steps,hrv"))
+
+        assertEquals("goals,readiness", PrefsAppPrefs(values).todaySectionOrder)
+        assertEquals("steps,hrv", PrefsAppPrefs(values).todayTileOrder)
+        assertEquals("goals,readiness", values.raw(SECTION_ORDER))
+        assertEquals("steps,hrv", values.raw(TILE_ORDER))
+
+        values.putRaw(SECTION_ORDER, 7)
+        values.putRaw(TILE_ORDER, true)
+        assertNull(prefs.todaySectionOrder)
+        assertNull(prefs.todayTileOrder)
+    }
+
     private companion object {
         /** The keys, typed here rather than read from the code. */
         const val ONBOARDING = "onboarding.completed.v1"
         const val ASKED = "bt.permission.asked.v1"
+        const val SECTION_ORDER = "today.sectionOrder.v1"
+        const val TILE_ORDER = "today.tileOrder.v1"
     }
 }

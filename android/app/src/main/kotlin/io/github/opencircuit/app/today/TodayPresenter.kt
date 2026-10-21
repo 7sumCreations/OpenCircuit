@@ -86,6 +86,12 @@ data class TodayUiState(
     val calories: CaloriesUi? = null,
     /** [day]'s four goal rings; null before the first load. */
     val goals: GoalsUi? = null,
+    /** The order of Today's sections, as saved (read before the first frame). */
+    val sections: List<DashboardSection> = DashboardSection.entries.toList(),
+    /** The order of the tiles, as saved; [tiles] are in it. */
+    val tileOrder: List<TodayTile.Metric> = TodayTile.Metric.entries.toList(),
+    /** Edit order is on: the page lists sections and tiles with move buttons instead of the cards. */
+    val editingOrder: Boolean = false,
 )
 
 /** What the ring session contributes to Today: its link, name, sync log, the running sync, the ring's firmware and the live measure. */

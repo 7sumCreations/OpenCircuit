@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
                     log = container.log,
                     commands = todayCommands(container.ringSessions),
                     saved = createSavedStateHandle(),
+                    prefs = container.appPrefs,
                 )
             }
         }
