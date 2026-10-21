@@ -57,7 +57,10 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -108,43 +111,77 @@ const val TODAY_STRIP_TAG = "today.strip"
 const val TODAY_OVERDUE_TAG = "today.overdue"
 
 /**
- * The Today screen: the hero (heart rate — stored, then live after a sync — and SpO₂ with its
- * Measure button), the sync strip while a sync runs, "Last synced" always, and the overdue chip.
+ * The Today screen: the day's heading with a "Today" chip and the date picker, the date strip with
+ * previous / next, and a page per stored day — swipe between them. Today's page has the hero (heart
+ * rate — stored, then live after a sync — and SpO₂ with its Measure button); a past day's has that
+ * day's heart-rate range. Every page has the sync strip, "Last synced" and the overdue chip, the
+ * readiness card and the tiles (a tap opens the tile's trend, which replaces the page until back).
  * Pull down to sync now; the indicator lets go at once and the strip shows the progress. Takes its
  * whole state as a value, so it renders the same from the app or from a hand-built state in a test.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TodayScreen(state: TodayUiState, onAction: (TodayAction) -> Unit, modifier: Modifier = Modifier, animate: Boolean = false) {
+    state.detail?.let {
+        TileDetailScreen(it, state, onAction, modifier, animate)
+        return
+    }
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { TopAppBar(title = { Text("Today", modifier = Modifier.semantics { heading() }) }) },
+        topBar = { DayTopBar(state.browser, onAction) },
     ) { padding ->
-        // Released at once: the strip, in the layout, shows the sync.
-        PullToRefreshBox(isRefreshing = false, onRefresh = { onAction(TodayAction.Refresh) }, modifier = Modifier.padding(padding)) {
-            // Tiles two to a row on a phone; at a large font each needs more room, so one to a row.
-            val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
-            // The arc's fill lives here, not in the grid item: scrolling the card away and back
-            // must not empty it and fill it again.
-            val readinessSweep = remember { Animatable(0f) }
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(TILE_MIN_WIDTH * fontScale),
-                modifier = Modifier.fillMaxSize().testTag(TODAY_LIST_TAG),
-                contentPadding = PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                wide("hero") { Hero(state, onAction, animate) }
-                wide("strip") { SyncStrip(state) }
-                state.overdue?.let { overdue -> wide("overdue") { OverdueChip(overdue, onAction) } }
-                wide("synthesis") { SynthesisLine(state, animate) }
-                wide("readiness") { ReadinessCard(state.readiness, readinessSweep, animate) }
-                if (state.tiles.isEmpty()) {
-                    items(TodayTile.Metric.entries.size, key = { "placeholder.$it" }) { TilePlaceholder(fontScale) }
+        Column(Modifier.padding(padding)) {
+            state.browser.days?.let { days -> DayStrip(state.browser, days, onAction) }
+            // Released at once: the strip, in the layout, shows the sync.
+            PullToRefreshBox(isRefreshing = false, onRefresh = { onAction(TodayAction.Refresh) }) {
+                // The arc's fill lives here, not in a page or grid item: scrolling or paging away and
+                // back must not empty it and fill it again.
+                val readinessSweep = remember { Animatable(0f) }
+                val days = state.browser.days
+                val selected = state.browser.selected
+                if (days == null || selected == null) {
+                    DayPage(state, null, onAction, readinessSweep, animate)
                 } else {
-                    items(state.tiles, key = { it.metric.name }) { MetricTile(it, fontScale, animate) }
+                    DayPager(days, selected, onAction, animate) { day -> DayPage(state, day, onAction, readinessSweep, animate) }
                 }
             }
+        }
+    }
+}
+
+/**
+ * One day's page. The values on screen are [state]'s only when they are for [day] (null: whatever
+ * the state holds); a page whose load has not landed yet shows same-size placeholders, never another
+ * day's values as its own.
+ */
+@Composable
+private fun DayPage(
+    state: TodayUiState,
+    day: LocalDate?,
+    onAction: (TodayAction) -> Unit,
+    readinessSweep: Animatable<Float, AnimationVector1D>,
+    animate: Boolean,
+) {
+    // Tiles two to a row on a phone; at a large font each needs more room, so one to a row.
+    val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+    val ours = day == null || state.day == day
+    val isToday = day == null || day == state.browser.days?.last
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(TILE_MIN_WIDTH * fontScale),
+        modifier = Modifier.fillMaxSize().testTag(TODAY_LIST_TAG),
+        contentPadding = PaddingValues(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (isToday) wide("hero") { Hero(state, onAction, animate) } else wide("pastDay") { PastDayCard(state.pastDay.takeIf { ours }, animate) }
+        wide("strip") { SyncStrip(state) }
+        state.overdue?.let { overdue -> wide("overdue") { OverdueChip(overdue, onAction) } }
+        if (ours && isToday) wide("synthesis") { SynthesisLine(state, animate) }
+        wide("readiness") { ReadinessCard(state.readiness.takeIf { ours }, readinessSweep, animate) }
+        if (!ours || state.tiles.isEmpty()) {
+            items(TodayTile.Metric.entries.size, key = { "placeholder.$it" }) { TilePlaceholder(fontScale) }
+        } else {
+            items(state.tiles, key = { it.metric.name }) { MetricTile(it, fontScale, animate, onAction) }
         }
     }
 }
@@ -164,11 +201,11 @@ private fun Hero(state: TodayUiState, onAction: (TodayAction) -> Unit, animate: 
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 Column(Modifier.weight(1f)) {
                     if (state.heartRateLive) LiveDot(animate)
-                    Reading(state.heartRate, live = state.heartRateLive)
+                    HeroReading(state.heartRate, live = state.heartRateLive)
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Reading(state.spo2, live = state.spo2Measure.stops)
-                    MeasureButton(state.spo2Measure, onAction)
+                    HeroReading(state.spo2, live = state.spo2Measure.stops)
+                    HeroMeasureButton(state.spo2Measure, onAction)
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -181,7 +218,7 @@ private fun Hero(state: TodayUiState, onAction: (TodayAction) -> Unit, animate: 
 
 /** One reading, one node for a screen reader: its label, number, unit, when it was taken and its live state, in that order. */
 @Composable
-private fun Reading(reading: ReadingUi, modifier: Modifier = Modifier, live: Boolean = false) {
+internal fun HeroReading(reading: ReadingUi, modifier: Modifier = Modifier, live: Boolean = false) {
     Column(
         modifier.semantics(mergeDescendants = true) {
             // A live number changes every 2 s: announced politely, never interrupting.
@@ -204,7 +241,7 @@ private fun Reading(reading: ReadingUi, modifier: Modifier = Modifier, live: Boo
 
 /** Measure (off with its reason shown under it) or Stop. */
 @Composable
-private fun MeasureButton(button: MeasureButtonUi, onAction: (TodayAction) -> Unit) {
+internal fun HeroMeasureButton(button: MeasureButtonUi, onAction: (TodayAction) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (button.stops) {
             OutlinedButton(onClick = { onAction(TodayAction.StopMeasure) }) { Text(button.label) }
@@ -292,7 +329,7 @@ private fun LiveDot(animate: Boolean) {
     Canvas(Modifier.size(10.dp).clearAndSetSemantics { }) { drawCircle(heart.copy(alpha = alpha)) }
 }
 
-/** Today's date and the one-sentence read of it; the sentence fades to its new words in place. */
+/** The one-sentence read of today; it fades to its new words in place. */
 @Composable
 private fun SynthesisLine(state: TodayUiState, animate: Boolean) {
     val sentence = state.synthesis ?: return
@@ -300,7 +337,7 @@ private fun SynthesisLine(state: TodayUiState, animate: Boolean) {
         Modifier.fillMaxWidth().testTag(TODAY_SYNTHESIS_TAG).semantics(mergeDescendants = true) { },
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(state.dateLine, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // The date is the screen's heading now (the day browser's), so it is not said twice.
         AnimatedContent(sentence, transitionSpec = { fadeIn(Motion.effects<Float>(animate)) togetherWith fadeOut(Motion.effects<Float>(animate)) }, label = "synthesis") {
             Text(it, style = MaterialTheme.typography.titleMedium)
         }
@@ -368,14 +405,20 @@ private fun ReadinessCard(readiness: ReadinessUi?, sweep: Animatable<Float, Anim
 /**
  * One metric's tile — its name and freshness, the value (fading to a new value in place), the
  * verdict with a neutral arrow, the sparkline over the usual band, and the usual range — read out
- * as the one sentence of [TileUi.description].
+ * as the one sentence of [TileUi.description]. A tap opens its trend.
  */
 @Composable
-private fun MetricTile(tile: TileUi, fontScale: Float, animate: Boolean) {
+private fun MetricTile(tile: TileUi, fontScale: Float, animate: Boolean, onAction: (TodayAction) -> Unit) {
     val tones = LocalTones.current
+    val open = { onAction(TodayAction.OpenDetail(tile.metric)) }
     Card(
+        onClick = open,
         modifier = Modifier.fillMaxWidth().height(TILE_HEIGHT * fontScale).testTag(todayTileTag(tile.metric))
-            .clearAndSetSemantics { contentDescription = tile.description },
+            .clearAndSetSemantics {
+                contentDescription = tile.description
+                role = Role.Button
+                onClick(label = "Open trend") { open(); true }
+            },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
     ) {

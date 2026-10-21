@@ -3,7 +3,13 @@ package io.github.opencircuit.app
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import io.github.opencircuit.app.today.TODAY_DETAIL_TAG
+import io.github.opencircuit.app.today.TodayTile
+import io.github.opencircuit.app.today.todayTileTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -90,6 +96,25 @@ class TodayTracerOnDemoRingTest {
         compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
         compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithText(STORED_BPM.toInt().toString()).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Ring · Demo ring").assertDoesNotExist()
+    }
+
+    @Test
+    fun aTilesTrendSurvivesRecreationAndBackClosesItBeforeLeavingToday() {
+        val tile = todayTileTag(TodayTile.Metric.HEART_RATE)
+        compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithTag(tile).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag(tile).performScrollTo().performClick()
+        compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithTag(TODAY_DETAIL_TAG).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("30 days").performClick()
+
+        // Rotation, a theme change or a process restore: the open trend and its range come back.
+        compose.activityRule.scenario.recreate()
+        compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithTag(TODAY_DETAIL_TAG).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("30 days").assertIsSelected()
+
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(timeoutMillis = 5_000) { compose.onAllNodesWithTag(TODAY_DETAIL_TAG).fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithTag(tabTag(Destination.Today)).assertIsSelected()
+        compose.onNodeWithTag(tile).assertExists()
     }
 
     private companion object {

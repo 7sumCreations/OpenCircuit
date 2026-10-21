@@ -92,6 +92,17 @@ object DayBrowser {
         return DayCellUi(if (day == today) TODAY else NARROW.format(day), day.dayOfMonth.toString(), spoken)
     }
 
+    /** The date picker's value for [day]: midnight UTC of that date, as Material's picker counts days. */
+    fun pickerMillis(day: LocalDate): Long = day.toEpochDay() * MILLIS_PER_DAY
+
+    /** The date the picker's [utcMillis] names (any time within that UTC day). */
+    fun pickerDay(utcMillis: Long): LocalDate = LocalDate.ofEpochDay(Math.floorDiv(utcMillis, MILLIS_PER_DAY))
+
+    /** The picker offers only the stored days. */
+    fun pickable(utcMillis: Long, days: BrowsableDays): Boolean = pickerDay(utcMillis) in days
+
+    private const val MILLIS_PER_DAY = 86_400_000L
+
     /** "1 day ago", "2 days ago"; "in 1 day" for a picked day after today (never offered, but never mis-said). */
     private fun agoWords(days: Long): String = when {
         days == 1L -> "1 day ago"

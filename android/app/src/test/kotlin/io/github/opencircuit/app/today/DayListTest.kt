@@ -85,6 +85,26 @@ class DayListTest {
     }
 
     @Test
+    fun theDatePickerOffersOnlyTheStoredDaysWhateverTheZone() {
+        // Material's picker names a date by midnight UTC of it, whatever the phone's zone.
+        val days = BrowsableDays(LocalDate.of(2026, 10, 19), LocalDate.of(2026, 10, 21))
+        assertEquals(Instant.parse("2026-10-19T00:00:00Z").toEpochMilli(), DayBrowser.pickerMillis(LocalDate.of(2026, 10, 19)))
+        assertEquals(LocalDate.of(2026, 10, 19), DayBrowser.pickerDay(Instant.parse("2026-10-19T23:59:59Z").toEpochMilli()))
+        assertTrue(DayBrowser.pickable(DayBrowser.pickerMillis(LocalDate.of(2026, 10, 19)), days), "the first stored day")
+        assertTrue(DayBrowser.pickable(DayBrowser.pickerMillis(LocalDate.of(2026, 10, 21)), days), "today")
+        assertFalse(DayBrowser.pickable(DayBrowser.pickerMillis(LocalDate.of(2026, 10, 18)), days), "before the first")
+        assertFalse(DayBrowser.pickable(DayBrowser.pickerMillis(LocalDate.of(2026, 10, 22)), days), "after today")
+        assertEquals(LocalDate.of(1969, 12, 31), DayBrowser.pickerDay(-1), "before 1970 rounds down, not toward zero")
+    }
+
+    @Test
+    fun theStripSaysEachDayAndItsMark() {
+        val today = LocalDate.of(2026, 10, 21)
+        assertEquals(DayCellUi("Today", "21", "Wednesday 21 October, today"), DayBrowser.cell(today, today, marked = false))
+        assertEquals(DayCellUi("M", "19", "Monday 19 October, new data just arrived"), DayBrowser.cell(today.minusDays(2), today, marked = true))
+    }
+
+    @Test
     fun yearsOfDaysAreCountedNotListed() {
         val days = BrowsableDays.of(Instant.parse("2023-10-21T12:00:00Z"), Instant.parse("2026-10-21T12:00:00Z"), utc)
         assertEquals(1_097, days.size)

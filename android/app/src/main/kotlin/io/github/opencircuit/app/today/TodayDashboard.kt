@@ -173,7 +173,8 @@ object TodayDashboard {
         usual = tile.rangeText,
         extra = tile.extra,
         chart = TrendGeometry.of(tile.values, tile.trend?.usualRange),
-        description = tile.accessibilityLabel(now, zone),
+        // A tap opens the tile's trend: said, as the tile's last words.
+        description = tile.accessibilityLabel(now, zone) + ". Opens trend.",
     )
 
     /** The readiness card for the night keyed on [dayStart], and what it reports to the synthesis line. */

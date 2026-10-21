@@ -166,6 +166,8 @@ class MainActivity : ComponentActivity() {
                                     onPauseOrDispose { if (!isChangingConfigurations) container.todayVisible.value = false }
                                 }
                                 val state by todayViewModel.uiState.collectAsStateWithLifecycle()
+                                // Composed after the tabs' handler, so back closes an open trend first.
+                                BackHandler(enabled = state.detail != null) { todayViewModel.onAction(TodayAction.CloseDetail) }
                                 TodayScreen(
                                     state = state,
                                     onAction = { if (it == TodayAction.OpenRing) destination = Destination.Ring else todayViewModel.onAction(it) },
