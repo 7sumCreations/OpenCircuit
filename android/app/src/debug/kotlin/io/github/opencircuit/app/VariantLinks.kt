@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import io.github.opencircuit.app.data.RingAddress
 import io.github.opencircuit.app.debug.SyncCutArming
 import io.github.opencircuit.app.debug.SyncCutControls
+import io.github.opencircuit.app.debug.TestWallClock
 import io.github.opencircuit.app.demo.DemoRingLink
 import io.github.opencircuit.app.demo.DemoRingScanner
 import io.github.opencircuit.app.sync.SyncFaultInjector
@@ -20,7 +21,10 @@ import kotlinx.coroutines.CoroutineScope
 internal object VariantLinks {
     /** The demo link for the demo ring (its periodic descriptors run in [scope]); null for any other ring. */
     fun demoLinkFor(ring: RememberedRing, scope: CoroutineScope): RingLink? =
-        if (RingAddress.same(ring.address, DemoRingLink.RING.address)) DemoRingLink(scope) else null
+        if (RingAddress.same(ring.address, DemoRingLink.RING.address)) DemoRingLink(scope, wallClock = TestWallClock::nowMillis) else null
+
+    /** The system clock unless an instrumented test set a time ([TestWallClock]); read on every call. */
+    val wallClock: Clock = Clock { TestWallClock.nowMillis() }
 
     /** Builds a scanner that finds and selects the demo ring, as one ring nearby would. */
     val demoScanner: (() -> RingScanner)? = { DemoRingScanner(DemoRingLink.RING) }

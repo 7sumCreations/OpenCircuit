@@ -82,8 +82,8 @@ fun interface RingLinkFactory {
  */
 class AppContainer(context: Context) {
 
-    /** The phone's clock. */
-    val clock: Clock = Clock { System.currentTimeMillis() }
+    /** The phone's clock: the system clock (the debug build lets an instrumented test set a time). */
+    val clock: Clock = VariantLinks.wallClock
 
     /** Milliseconds since boot, counting sleep; never jumps when the user changes the clock. */
     val monotonicMillis: () -> Long = { SystemClock.elapsedRealtime() }

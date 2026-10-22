@@ -13,6 +13,9 @@ internal object VariantLinks {
     @Suppress("UNUSED_PARAMETER")
     fun demoLinkFor(ring: RememberedRing, scope: CoroutineScope): RingLink? = null
 
+    /** The system clock, directly: release has no settable clock. */
+    val wallClock: Clock = Clock { System.currentTimeMillis() }
+
     /** No demo scanner in release: scans use the phone's Bluetooth. */
     val demoScanner: (() -> RingScanner)? = null
 
