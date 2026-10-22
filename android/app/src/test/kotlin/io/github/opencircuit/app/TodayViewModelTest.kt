@@ -63,6 +63,7 @@ class TodayViewModelTest {
             scope = backgroundScope,
             wallClock = { epoch.plusMillis(testScheduler.currentTime) },
             zone = { utc },
+            saved = androidx.lifecycle.SavedStateHandle(),
         )
         runCurrent()
         return vm
@@ -180,7 +181,7 @@ class TodayViewModelTest {
             override fun measureSpO2() { calls += "spo2" }
             override fun stopMeasure() { calls += "stop" }
         }
-        val vm = TodayViewModel(ScriptedSource(TodayStored()), scope = backgroundScope, wallClock = { epoch }, zone = { utc }, commands = commands)
+        val vm = TodayViewModel(ScriptedSource(TodayStored()), scope = backgroundScope, wallClock = { epoch }, zone = { utc }, commands = commands, saved = androidx.lifecycle.SavedStateHandle())
         vm.onAction(io.github.opencircuit.app.today.TodayAction.Refresh)
         vm.onAction(io.github.opencircuit.app.today.TodayAction.MeasureSpO2)
         vm.onAction(io.github.opencircuit.app.today.TodayAction.StopMeasure)

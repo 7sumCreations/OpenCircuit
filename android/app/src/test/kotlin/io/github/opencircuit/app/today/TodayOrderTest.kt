@@ -43,6 +43,7 @@ class TodayOrderTest {
         scope = backgroundScope,
         wallClock = { epoch.plusMillis(testScheduler.currentTime) },
         zone = { zone },
+        saved = androidx.lifecycle.SavedStateHandle(),
         prefs = PrefsAppPrefs(values),
     )
 

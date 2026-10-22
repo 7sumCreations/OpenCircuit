@@ -148,6 +148,7 @@ class UpgradeNoticeTest {
             wallClock = { epoch },
             zone = { ZoneOffset.UTC },
             clockTicks = flowOf(Unit),
+            saved = androidx.lifecycle.SavedStateHandle(),
             healthNotice = n,
         )
         val vm = today()
@@ -160,7 +161,7 @@ class UpgradeNoticeTest {
 
         values.putRaw("health.upgradeNotice.dismissed.v1", false)
         val n2 = HealthUpgradeNotice(PrefsAppPrefs(values), { true }, backgroundScope, log = {})
-        val vm2 = TodayViewModel(source = null, scope = backgroundScope, wallClock = { epoch }, zone = { ZoneOffset.UTC }, clockTicks = flowOf(Unit), healthNotice = n2)
+        val vm2 = TodayViewModel(source = null, scope = backgroundScope, wallClock = { epoch }, zone = { ZoneOffset.UTC }, clockTicks = flowOf(Unit), saved = androidx.lifecycle.SavedStateHandle(), healthNotice = n2)
         runCurrent()
         assertTrue(vm2.uiState.value.healthNotice)
         vm2.onAction(TodayAction.OpenSettings)
@@ -169,7 +170,7 @@ class UpgradeNoticeTest {
         assertTrue(PrefsAppPrefs(values).healthUpgradeNoticeDismissed)
 
         // Without a notice (every earlier test's Today) there is none.
-        val bare = TodayViewModel(source = null, scope = backgroundScope, wallClock = { epoch }, zone = { ZoneOffset.UTC }, clockTicks = flowOf(Unit))
+        val bare = TodayViewModel(source = null, scope = backgroundScope, wallClock = { epoch }, zone = { ZoneOffset.UTC }, clockTicks = flowOf(Unit), saved = androidx.lifecycle.SavedStateHandle())
         runCurrent()
         assertFalse(bare.uiState.value.healthNotice)
     }

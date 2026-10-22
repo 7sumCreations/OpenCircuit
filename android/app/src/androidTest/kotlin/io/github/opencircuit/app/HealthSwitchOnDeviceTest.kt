@@ -128,7 +128,7 @@ class UpgradeNoticeSurvivesRestartTest {
     private fun today(): TodayViewModel {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).also { scopes += it }
         val notice = HealthUpgradeNotice(prefs(), usedBefore = { true }, scope, log = {})
-        return TodayViewModel(source = null, scope = scope, zone = { ZoneId.of("UTC") }, clockTicks = flowOf(Unit), healthNotice = notice)
+        return TodayViewModel(source = null, scope = scope, zone = { ZoneId.of("UTC") }, clockTicks = flowOf(Unit), saved = androidx.lifecycle.SavedStateHandle(), healthNotice = notice)
     }
 
     @Before

@@ -52,7 +52,7 @@ class TodayViewModel(
     /** What Today's own actions do to the ring session. */
     private val commands: TodayCommands = TodayCommands.NONE,
     /** Where the picked day lives, so it survives the activity being recreated and the process being killed. */
-    private val saved: SavedStateHandle = SavedStateHandle(),
+    private val saved: SavedStateHandle,
     /** Where Today's section and tile orders are saved; null keeps the default order, unsaved. */
     private val prefs: AppPrefs? = null,
     /** The one-time "Health Connect export is now off" notice; null: none (tests that are not about it). */
